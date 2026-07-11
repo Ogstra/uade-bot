@@ -86,6 +86,31 @@ const DIA_HIDDEN_INPUT_IDS = {
 };
 
 /**
+ * Resolves a human-provided turno label (e.g. "mañana", "MAÑANA") to the
+ * `<option>` `value` attribute the live `#ContentPlaceHolder1_cboTurno`
+ * select actually expects (opaque numeric ids like "10152" — confirmed
+ * live 2026-07-11 via a read-only diagnostic: FiltrosSchema.turno is a
+ * free-form label, but Playwright's `selectOption(string)` matches by
+ * `value`, not visible text, so passing the label straight through never
+ * matched any option). Case/accent-insensitive exact match against the
+ * option's trimmed text — `localeCompare` with `sensitivity: 'base'`
+ * treats "mañana" and "MAÑANA" as equal without needing manual
+ * normalization.
+ *
+ * @param {{ value: string, text: string }[]} options
+ * @param {string} turnoLabel
+ * @returns {string} the matching option's `value`
+ */
+export function resolveTurnoOptionValue(options, turnoLabel) {
+  const match = options.find((opt) => opt.text.localeCompare(turnoLabel, 'es', { sensitivity: 'base' }) === 0);
+  if (!match) {
+    const available = options.map((opt) => opt.text).join(', ');
+    throw new Error(`turno "${turnoLabel}" not found among available options: ${available}`);
+  }
+  return match.value;
+}
+
+/**
  * Drives an active UADE search page against the given filtros, from the
  * ofrecimiento radio through clicking the día checkboxes — everything
  * except the final "Buscar" click, which the caller triggers separately
@@ -111,7 +136,11 @@ async function driveSearchForm(page, filtros) {
   await cerrarButton.click();
   await cerrarButton.waitFor({ state: 'hidden' });
 
-  await page.locator(SELECTORS.turnoSelect).selectOption(filtros.turno);
+  const turnoOptions = await page
+    .locator(`${SELECTORS.turnoSelect} option`)
+    .evaluateAll((opts) => opts.map((o) => ({ value: o.value, text: o.textContent.trim() })));
+  const turnoValue = resolveTurnoOptionValue(turnoOptions, filtros.turno);
+  await page.locator(SELECTORS.turnoSelect).selectOption(turnoValue);
 
   for (const dia of filtros.dias) {
     await page.locator(DIA_CHECKBOX_IDS[dia]).check();
@@ -149,10 +178,16 @@ async function readReflectedFormState(page, expectedMateriaCodigo) {
   const ofrecimiento =
     Object.entries(OFRECIMIENTO_VALUES).find(([, value]) => value === checkedRadioValue)?.[0] ?? null;
 
+  // Read back the selected option's visible TEXT, not its `value` — the
+  // live select's values are opaque numeric ids (e.g. "10152"), while
+  // `filtros.turno` is the human label ("mañana") `resolveTurnoOptionValue`
+  // resolved from at submit time. Comparing values here would never match
+  // the submitted label (see resolveTurnoOptionValue's docstring).
   let turno = null;
   const turnoSelect = page.locator(SELECTORS.turnoSelect);
   if ((await turnoSelect.count()) > 0) {
-    turno = await turnoSelect.first().inputValue();
+    turno = await turnoSelect.locator('option:checked').first().textContent();
+    turno = turno?.trim() ?? null;
   }
 
   // Materia checkboxes have no data-materia-codigo attribute and no stable
@@ -213,7 +248,10 @@ export function verifyPostbackMatchesQuery(reflectedState, filtros) {
     return false;
   }
 
-  if (reflectedState.turno !== filtros.turno) {
+  // Case/accent-insensitive: reflectedState.turno is the live select's
+  // visible option text (e.g. "MAÑANA"), filtros.turno is the human-typed
+  // label (e.g. "mañana") — see resolveTurnoOptionValue's docstring.
+  if (reflectedState.turno == null || reflectedState.turno.localeCompare(filtros.turno, 'es', { sensitivity: 'base' }) !== 0) {
     return false;
   }
 

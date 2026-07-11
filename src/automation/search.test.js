@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyPostbackMatchesQuery } from './search.js';
+import { verifyPostbackMatchesQuery, resolveTurnoOptionValue } from './search.js';
 
 const baseFiltros = {
   materiaCodigo: '3.1.050',
@@ -67,4 +67,36 @@ test('verifyPostbackMatchesQuery returns false when reflected dias are a subset 
 
 test('verifyPostbackMatchesQuery returns false for a null/missing reflected state (error fragment, not a valid empty result)', () => {
   assert.equal(verifyPostbackMatchesQuery(null, baseFiltros), false);
+});
+
+test('verifyPostbackMatchesQuery treats turno case/accent-insensitively (live select reflects uppercase, filtros carries the human-typed label)', () => {
+  const reflectedState = {
+    materiaCodigo: '3.4.219',
+    ofrecimiento: 'curricular',
+    turno: 'MAÑANA',
+    dias: ['MI'],
+  };
+
+  const filtros = { ...baseFiltros, materiaCodigo: '3.4.219', turno: 'mañana', dias: ['MI'] };
+
+  assert.equal(verifyPostbackMatchesQuery(reflectedState, filtros), true);
+});
+
+test('resolveTurnoOptionValue finds the option value by case/accent-insensitive label match (live values are opaque numeric ids)', () => {
+  const options = [
+    { value: '-1', text: '' },
+    { value: '10152', text: 'MAÑANA' },
+    { value: '10153', text: 'TARDE' },
+    { value: '10154', text: 'NOCHE' },
+  ];
+
+  assert.equal(resolveTurnoOptionValue(options, 'mañana'), '10152');
+  assert.equal(resolveTurnoOptionValue(options, 'MAÑANA'), '10152');
+  assert.equal(resolveTurnoOptionValue(options, 'tarde'), '10153');
+});
+
+test('resolveTurnoOptionValue throws with the available options listed when no label matches', () => {
+  const options = [{ value: '10152', text: 'MAÑANA' }];
+
+  assert.throws(() => resolveTurnoOptionValue(options, 'inexistente'), /turno "inexistente" not found among available options: MAÑANA/);
 });
