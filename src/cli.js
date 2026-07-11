@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import { FiltrosSchema } from './schemas.js';
 import { loadEnv } from './config/env.js';
-import { withUadeContext } from './automation/browser.js';
+import { getBrowser, withUadeContext } from './automation/browser.js';
 import { runSearch } from './automation/search.js';
 import { parseResults, filterVacancies } from './automation/parse-results.js';
 import { classifySearchResult } from './automation/classify.js';
@@ -73,4 +73,14 @@ main()
   .catch((err) => {
     logger.error({ event: 'cli_failed', message: err.message }, 'CLI run failed');
     process.exitCode = 1;
+  })
+  .finally(async () => {
+    // getBrowser() is a shared singleton kept alive across this whole
+    // process — withUadeContext only closes its BrowserContext, not the
+    // underlying Browser connection. Without this, the process hangs
+    // indefinitely after printing its result (or an error), even with
+    // process.exitCode set, because the event loop never empties. Bit both
+    // a standalone diagnostic script and a test file during this phase's
+    // live debugging; fixed here for the actual shipped CLI entry point.
+    await (await getBrowser()).close();
   });
