@@ -15,6 +15,11 @@ const EnvSchema = z.object({
   // developer running tests never accidentally commits a DB file that may
   // contain ciphertext.
   DATABASE_PATH: z.string().min(1, 'DATABASE_PATH').default('./data/uade-bot.db'),
+  // The single master key every user's per-account encryption key is
+  // derived from (D-13). Required, 32 bytes hex-encoded — generate with
+  // `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+  // Never logged; on failure only the variable name is named, never its value.
+  CREDENTIALS_MASTER_KEY: z.string().regex(/^[0-9a-f]{64}$/i, 'CREDENTIALS_MASTER_KEY'),
 });
 
 /**
@@ -25,7 +30,7 @@ const EnvSchema = z.object({
  * variable name(s) — never the attempted value, to avoid leaking a partial
  * credential into a stack trace or console output.
  *
- * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string, DATABASE_PATH: string }}
+ * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string }}
  */
 export function loadEnv() {
   loadDotenv();
