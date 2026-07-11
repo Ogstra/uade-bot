@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyPostbackMatchesQuery, resolveTurnoOptionValue } from './search.js';
+import { verifyPostbackMatchesQuery, resolveTurnoOptionValue, isStaleStartUrlSignal } from './search.js';
 
 const baseFiltros = {
   materiaCodigo: '3.1.050',
@@ -99,4 +99,13 @@ test('resolveTurnoOptionValue throws with the available options listed when no l
   const options = [{ value: '10152', text: 'MAÑANA' }];
 
   assert.throws(() => resolveTurnoOptionValue(options, 'inexistente'), /turno "inexistente" not found among available options: MAÑANA/);
+});
+
+test('isStaleStartUrlSignal returns true when the turno combo has zero options (D-07 stale-start-URL signal)', () => {
+  assert.equal(isStaleStartUrlSignal(0), true);
+});
+
+test('isStaleStartUrlSignal returns false when the turno combo has any options, including a single placeholder', () => {
+  assert.equal(isStaleStartUrlSignal(5), false);
+  assert.equal(isStaleStartUrlSignal(1), false);
 });
