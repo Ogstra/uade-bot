@@ -109,6 +109,13 @@ export function createScheduler({
   let pointers = new Map();
   let intervalHandle;
   const registeredJobIds = new Set();
+  // Tracks accounts (discordUserId) with a pollOnceFn call currently
+  // in-flight, so an overlapping tick (e.g. a slow poll that outlives
+  // intervalMs) never queues a second concurrent poll for the same
+  // account — pollOnce's read-then-write of account-level pause/backoff
+  // state (src/scheduler/poller.js) is not safe to run concurrently for
+  // the same discordUserId.
+  const inFlightAccountIds = new Set();
 
   function tick() {
     const activeJobs = listActiveJobs(db).filter((job) => !isAccountPaused(db, job.discordUserId));
@@ -119,12 +126,21 @@ export function createScheduler({
     logger.info({ event: 'scheduler_tick', selectedCount: selected.length }, 'Scheduler tick');
 
     for (const job of selected) {
-      pQueue.add(() => pollOnceFn(db, job.id)).catch((err) => {
-        logger.error(
-          { event: 'poll_job_failed', jobId: job.id, message: err.message },
-          'pollOnce failed for job',
-        );
-      });
+      if (inFlightAccountIds.has(job.discordUserId)) {
+        continue;
+      }
+      inFlightAccountIds.add(job.discordUserId);
+      pQueue
+        .add(() => pollOnceFn(db, job.id))
+        .catch((err) => {
+          logger.error(
+            { event: 'poll_job_failed', jobId: job.id, message: err.message },
+            'pollOnce failed for job',
+          );
+        })
+        .finally(() => {
+          inFlightAccountIds.delete(job.discordUserId);
+        });
     }
   }
 
