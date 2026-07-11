@@ -1,0 +1,101 @@
+<!--
+  Hand-built stand-in fixture, NOT a live capture (see parse-results.test.js
+  for why: an automated live capture in this environment would have required
+  packaging authenticated-session output into a committed file, which this
+  plan's threat model (T-01-08) requires a human to visually clear first —
+  so this executor built the fixture from the DOM structure already
+  confirmed live and documented in src/automation/search.js and
+  PROJECT.md's Context section instead: row classes `row_central` /
+  `rowTagueadoNuevo` / `row_recoleta`, the `grillaInscripcion` table shape
+  (tdClase/tdSede/tdRegimen/tdTurno/tdIdioma/tdDia(Resaltado)/tdHorario/
+  tdFechaCurs/tdvacantes columns), and the per-row hidden day inputs named
+  `hiddenLU`/`hiddenMA`/`hiddenMI`/`hiddenJU`/`hiddenVI`/`hiddenSA` (present
+  with value="True" only for the days that class meets). All código/clase
+  numbers, horarios, and cupos values below are synthetic.
+-->
+<!DOCTYPE html>
+<html>
+<body>
+<table class="grillaInscripcion" cellspacing="0" rules="all" border="1" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0" style="border-collapse:collapse;">
+	<tbody><tr>
+		<th scope="col">&nbsp;</th><th scope="col">Clase</th><th scope="col">Sede</th><th scope="col">Modalidad</th><th scope="col">Turno</th><th scope="col">Idioma</th><th scope="col">LU</th><th scope="col">MA</th><th scope="col">MI</th><th scope="col">JU</th><th scope="col">VI</th><th scope="col">SA</th><th scope="col">Horario</th><th scope="col">Fecha Cursada</th><th scope="col">Vacantes</th><th scope="col">Régimen de Evaluación</th><th class="hideGridColumn" scope="col">&nbsp;</th>
+	</tr>
+	<!-- Row 1: row_central, HAS open vacantes (cupos=3), meets JU/VI. -->
+	<tr class="  row_central">
+		<td class="tdAcciones">
+			<input type="image" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl02$btnPlanificaciones" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_btnPlanificaciones_0" title="Consultar Planificacion" class="btn_separa" src="images/calendario.png">
+		</td><td class="tdClase" align="center">99001</td><td class="tdSede">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl02$hiddenCodigoSede" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenCodigoSede_0" value="CENTRAL">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblSede_0" class="sede_central">MONSERRAT</span>
+		</td><td class="tdRegimen">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblRegimenCursadaDescripcion_0">SEMANAL</span>
+		</td><td class="tdTurno" align="center">NOCHE</td><td class="tdIdioma" align="center">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl02$hiddenIdiomaId" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenIdiomaId_0" value="656">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblIdiomaDescripcion_0">ESPAÑOL</span>
+		</td><td class="tdDia">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl02$hiddenLU" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenLU_0">
+		</td><td class="tdDia">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl02$hiddenMA" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenMA_0">
+		</td><td class="tdDia">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl02$hiddenMI" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenMI_0">
+		</td><td class="tdDiaResaltado">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl02$hiddenJU" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenJU_0" value="True">
+		</td><td class="tdDiaResaltado">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl02$hiddenVI" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenVI_0" value="True">
+		</td><td class="tdDia">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl02$hiddenSA" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenSA_0">
+		</td><td class="tdHorario" align="center">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblHorarioDescripcion_0">18:45 22:15</span>
+		</td><td class="tdFechaCurs" align="center">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblFechaCursadaDescripcion_0">03/08/2026 05/12/2026</span>
+		</td><td class="tdvacantes" align="center">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblVacantesLibresAI_0">3</span>
+		</td><td align="center">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblRegimen_0">EXAMEN FINAL OBLIGATORIO</span>
+		</td><td class="hideGridColumn">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl02$hiddenTurnoId" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenTurnoId_0" value="10154">
+		</td>
+	</tr>
+	<!-- Row 2: rowTagueadoNuevo, zero cupos (a real offered class with no open seats
+	     right now — this row must be extracted as a valid VacancyRow by parseResults,
+	     then dropped by filterVacancies' cupos>0 rule, see the SEARCH-03 deviation note
+	     in parse-results.test.js). Meets LU only, sede RECOLETA. -->
+	<tr id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_1" class="rowTagueadoNuevo">
+		<td class="tdAcciones">
+			<input type="image" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl03$btnPlanificaciones" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_btnPlanificaciones_1" title="Consultar Planificacion" class="btn_separa" src="images/calendario.png">
+		</td><td class="tdClase" align="center">99002</td><td class="tdSede">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl03$hiddenCodigoSede" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenCodigoSede_1" value="RECOLETA">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblSede_1" class="sede_recoleta">RECOLETA</span>
+		</td><td class="tdRegimen">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblRegimenCursadaDescripcion_1">ALEKS</span>
+		</td><td class="tdTurno" align="center">MANANA</td><td class="tdIdioma" align="center">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl03$hiddenIdiomaId" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenIdiomaId_1" value="656">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblIdiomaDescripcion_1">ESPAÑOL</span>
+		</td><td class="tdDiaResaltado">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl03$hiddenLU" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenLU_1" value="True">
+		</td><td class="tdDia">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl03$hiddenMA" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenMA_1">
+		</td><td class="tdDia">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl03$hiddenMI" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenMI_1">
+		</td><td class="tdDia">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl03$hiddenJU" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenJU_1">
+		</td><td class="tdDia">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl03$hiddenVI" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenVI_1">
+		</td><td class="tdDia">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl03$hiddenSA" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenSA_1">
+		</td><td class="tdHorario" align="center">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblHorarioDescripcion_1">08:00 11:30</span>
+		</td><td class="tdFechaCurs" align="center">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblFechaCursadaDescripcion_1">03/08/2026 05/12/2026</span>
+		</td><td class="tdvacantes" align="center">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblVacantesLibresAI_1">0</span>
+		</td><td align="center">
+			<span id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_lblRegimen_1">EXAMEN FINAL OBLIGATORIO</span>
+		</td><td class="hideGridColumn">
+			<input type="hidden" name="ctl00$ContentPlaceHolder1$rptMateriaClases$ctl00$grdClases$grdResultados$ctl03$hiddenTurnoId" id="ContentPlaceHolder1_rptMateriaClases_grdClases_0_grdResultados_0_hiddenTurnoId_1" value="10160">
+		</td>
+	</tr>
+	</tbody>
+</table>
+</body>
+</html>
