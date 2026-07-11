@@ -40,3 +40,49 @@ export const SearchOutcomeSchema = z.discriminatedUnion('outcome', [
   z.object({ outcome: z.literal('search_failed'), reason: z.string().min(1) }),
   z.object({ outcome: z.literal('invalid_credentials') }),
 ]);
+
+/**
+ * A single row of the `users` table (Phase 2, CRED-03/04/05) — one row per
+ * Discord user, tracking account-level pause state consumed by Plan 02-03's
+ * backoff/scheduler logic. `pauseReason`/`pauseUntil` are both `null` when
+ * the account is not currently paused.
+ */
+export const UserRecordSchema = z.object({
+  discordUserId: z.string().min(1, 'discordUserId must be a non-empty string'),
+  pauseReason: z.enum(['needs_credentials', 'needs_new_start_url', 'rate_limited']).nullable(),
+  pauseUntil: z.number().int().nullable(),
+  backoffAttempt: z.number().int().nonnegative(),
+  createdAt: z.number().int(),
+  updatedAt: z.number().int(),
+});
+
+/**
+ * A single row of the `credentials` table — ciphertext-only. This schema is
+ * intentionally shallow: it never carries plaintext `uadeUsername`/
+ * `uadePassword`/`uadeStartUrl` fields, only the AES-256-GCM output blobs
+ * (CRED-03). Decryption happens exclusively in
+ * `src/crypto/credentials-crypto.js`, never in the repository layer.
+ */
+export const EncryptedCredentialsSchema = z.object({
+  discordUserId: z.string().min(1, 'discordUserId must be a non-empty string'),
+  ciphertext: z.string().min(1, 'ciphertext must be a non-empty string'),
+  iv: z.string().min(1, 'iv must be a non-empty string'),
+  authTag: z.string().min(1, 'authTag must be a non-empty string'),
+  updatedAt: z.number().int(),
+});
+
+/**
+ * A single row of the `jobs` table — one active or paused search job for a
+ * given Discord user. `filtros` re-uses `FiltrosSchema` (Phase 1) so a job's
+ * stored filter shape is always validated against the same contract the
+ * search engine consumes.
+ */
+export const SearchJobSchema = z.object({
+  id: z.number().int(),
+  discordUserId: z.string().min(1, 'discordUserId must be a non-empty string'),
+  filtros: FiltrosSchema,
+  status: z.enum(['active', 'paused_by_user']),
+  lastPolledAt: z.number().int().nullable(),
+  lastOutcome: z.string().nullable(),
+  createdAt: z.number().int(),
+});

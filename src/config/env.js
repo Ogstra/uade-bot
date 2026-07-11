@@ -10,6 +10,11 @@ const EnvSchema = z.object({
   // link, confirmed live 2026-07-11; not a secret in the password sense, but
   // still developer-local and gitignored, never hardcoded.
   UADE_START_URL: z.string().url('UADE_START_URL'),
+  // Where the SQLite database file lives on disk. Defaults to a gitignored
+  // local `data/` directory (see .gitignore) — never the repo root, so a
+  // developer running tests never accidentally commits a DB file that may
+  // contain ciphertext.
+  DATABASE_PATH: z.string().min(1, 'DATABASE_PATH').default('./data/uade-bot.db'),
 });
 
 /**
@@ -20,7 +25,7 @@ const EnvSchema = z.object({
  * variable name(s) — never the attempted value, to avoid leaking a partial
  * credential into a stack trace or console output.
  *
- * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string }}
+ * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string, DATABASE_PATH: string }}
  */
 export function loadEnv() {
   loadDotenv();
