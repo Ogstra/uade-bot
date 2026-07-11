@@ -2,7 +2,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createDatabase } from '../db/database.js';
-import { upsertUser } from '../db/users.repository.js';
+import { upsertUser, getUser } from '../db/users.repository.js';
 import { upsertCredentials } from '../db/credentials.repository.js';
 import { createJob, getJob } from '../db/jobs.repository.js';
 import { encryptCredentials } from '../crypto/credentials-crypto.js';
@@ -134,6 +134,26 @@ test('pollOnce decrypts credentials transiently and passes them to withUadeConte
       password: PLAINTEXT.uadePassword,
     });
     assert.deepEqual(capturedSearchArgs.options, { startUrl: PLAINTEXT.uadeStartUrl });
+  } finally {
+    db.close();
+  }
+});
+
+test('pollOnce persists needs_credentials account-level pause state after an invalid_credentials poll result (D-04)', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+
+    const before = getUser(db, job.discordUserId);
+    assert.equal(before.pauseReason, null);
+
+    const runSearchFn = async () => ({ status: 'invalid_credentials' });
+    const withUadeContextFn = async (creds, run) => run({});
+
+    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn });
+
+    const after = getUser(db, job.discordUserId);
+    assert.equal(after.pauseReason, 'needs_credentials');
   } finally {
     db.close();
   }
