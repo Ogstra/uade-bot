@@ -1,0 +1,25 @@
+{
+  "name": "uade-bot",
+  "version": "0.1.0",
+  "description": "Bot de Discord open-source que monitorea vacantes en el sistema de inscripciones de UADE.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "search": "node src/cli.js",
+    "test": "node --test src"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "pino": "^9.14.0",
+    "playwright": "^1.61.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "eslint": "^10.7.0",
+    "prettier": "^3.9.5"
+  }
+}
