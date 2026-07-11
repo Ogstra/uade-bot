@@ -1,7 +1,17 @@
 import { FiltrosSchema } from '../schemas.js';
+import { loadEnv } from '../config/env.js';
 import logger from '../logger.js';
 
 export const SEARCH_URL = 'https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx';
+
+// KNOWN LIMITATION (confirmed live 2026-07-11): navigating straight to
+// SEARCH_URL authenticates via Basic Auth, but the ASP.NET session never gets
+// the Periodo/Carrera/Turno combos populated — the portal's own signed entry
+// link (UADE_START_URL, developer-local env var) is what actually establishes
+// that session state. Navigation below goes through UADE_START_URL first;
+// SEARCH_URL is kept only as a pathname reference for matching the postback
+// response, since the resolved page URL after the portal redirect may carry
+// a different query string than the bare constant.
 
 // --- Selectors ---------------------------------------------------------
 // Sourced from PROJECT.md's live investigation of the UADE site
@@ -164,12 +174,13 @@ function isAuthChallengeError(err) {
  */
 export async function runSearch(context, filtros) {
   const parsedFiltros = FiltrosSchema.parse(filtros);
+  const { UADE_START_URL } = loadEnv();
 
   const page = await context.newPage();
 
   let navigationResponse;
   try {
-    navigationResponse = await page.goto(SEARCH_URL, { waitUntil: 'domcontentloaded' });
+    navigationResponse = await page.goto(UADE_START_URL, { waitUntil: 'domcontentloaded' });
   } catch (err) {
     if (isAuthChallengeError(err)) {
       logger.info({ event: 'auth_challenge_error' }, 'Navigation failed with an auth challenge');
@@ -183,6 +194,12 @@ export async function runSearch(context, filtros) {
     return { status: 'invalid_credentials' };
   }
 
+  // The portal's signed link may redirect through intermediate pages before
+  // landing on the search page — resolve the pathname actually reached
+  // rather than assuming it matches SEARCH_URL verbatim (query string may
+  // differ, e.g. carrying periodo/carrera state).
+  const searchPagePathname = new URL(page.url()).pathname;
+
   try {
     await driveSearchForm(page, parsedFiltros);
   } catch (err) {
@@ -191,7 +208,13 @@ export async function runSearch(context, filtros) {
   }
 
   const responsePromise = page.waitForResponse((response) => {
-    if (response.url() !== SEARCH_URL) {
+    let responsePathname;
+    try {
+      responsePathname = new URL(response.url()).pathname;
+    } catch {
+      return false;
+    }
+    if (responsePathname !== searchPagePathname) {
       return false;
     }
     return response.request().method() === 'POST';
