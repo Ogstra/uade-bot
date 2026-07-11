@@ -55,6 +55,10 @@ export function createDatabase(path) {
   }
 
   const db = new Database(path);
+  // better-sqlite3/SQLite do not enforce declared REFERENCES constraints
+  // unless foreign_keys is explicitly turned on per connection — without
+  // this, the FK clauses in SCHEMA_SQL below are purely decorative.
+  db.pragma('foreign_keys = ON');
   db.exec(SCHEMA_SQL);
   logger.info({ event: 'db_schema_init', path }, 'Database schema initialized');
   return db;
