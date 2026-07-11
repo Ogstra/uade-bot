@@ -23,14 +23,12 @@ export const SEARCH_URL = 'https://inscripcionespia.uade.edu.ar/InscripcionClase
 // Playwright role/label/text locators are used in preference to
 // ASP.NET's auto-generated element `id`s, per this plan's guidance.
 //
-// KNOWN LIMITATION: the exact accessible names for the "open materias
-// dialog" trigger, the turno control's label, and the día checkbox
-// labels were not independently re-verified against the live DOM at
-// implementation time (no live UADE credentials were available in this
-// environment). These constants are the best-effort selectors derived
-// from PROJECT.md's documented structure; PLAN.md's Task 3 human-check
-// is the point where a developer with real UADE credentials confirms
-// (and corrects, if needed) these values against the real site.
+// SELECTORS confirmed live 2026-07-11 against the real DOM (with a valid
+// UADE_START_URL param establishing acad context) for the top-level page.
+// The materias-dialog trigger is an <a>, not a role="button" element, which
+// is why an earlier role-based guess timed out. ASP.NET auto-generated ids
+// are used directly here since they were confirmed stable against a live
+// page_evaluate() dump, not guessed.
 const OFRECIMIENTO_VALUES = {
   curricular: '145',
   optativa: '146',
@@ -38,14 +36,44 @@ const OFRECIMIENTO_VALUES = {
 
 const SELECTORS = {
   ofrecimientoRadio: (value) => `input[type="radio"][value="${value}"]`,
-  materiasDialogTrigger: { role: 'button', name: /materias/i },
-  materiaCheckbox: (materiaCodigo) => ({
-    role: 'checkbox',
-    name: new RegExp(materiaCodigo.replace(/\./g, '\\.')),
-  }),
-  turnoLabel: /turno/i,
-  diaCheckbox: (dia) => ({ role: 'checkbox', name: new RegExp(`^${dia}$`, 'i') }),
-  buscarButton: { role: 'button', name: /buscar/i },
+  materiasDialogTrigger: '#ContentPlaceHolder1_btnSeleccionarMaterias',
+  turnoSelect: '#ContentPlaceHolder1_cboTurno',
+  buscarButton: '#ContentPlaceHolder1_btnBuscar',
+};
+
+// Materia checkboxes use an ASP.NET id indexed by grid ROW POSITION
+// (e.g. rptMaterias_0_chkSeleccionar_0), not by materia código — that id
+// shifts depending on which row a given materia lands on for a given
+// search, so it cannot be hardcoded. Confirmed live 2026-07-11.
+//
+// KNOWN LIMITATION (two failed attempts, fixed live 2026-07-11): both
+// `tr` and `td` scoped by hasText matched 34 elements — the materias
+// grid sits inside a wrapping layout table, so an OUTER `<td>`/`<tr>`
+// also "contains" the target text via its nested descendant table, and
+// `.first()` in DOM order picks that wrapper, not the leaf data row.
+// Fix: search FROM the checkbox side instead (leaf elements, unambiguous
+// by id substring `chkSeleccionar`), and filter to the one whose OWN
+// nearest ancestor `<tr>` (not any wrapping ancestor further up) contains
+// the materiaCodigo text — this direction of traversal can't fan out the
+// way text-first search did.
+function materiaCheckboxLocator(page, materiaCodigo) {
+  return page.locator(
+    `xpath=//input[@type="checkbox" and contains(@id, "chkSeleccionar")][ancestor::tr[1][contains(., "${materiaCodigo}")]]`
+  );
+}
+
+// Día checkboxes have real ids confirmed live 2026-07-11 — NOT locatable
+// by accessible name/label, since the displayed labels are 3-letter
+// abbreviations (LUN/MAR/MIE/JUE/VIE/SAB) while FiltrosSchema uses 2-letter
+// codes (LU/MA/MI/JU/VI/SA); an exact-match role/label locator would never
+// match either alphabet, so this is a direct code -> id lookup instead.
+const DIA_CHECKBOX_IDS = {
+  LU: '#ContentPlaceHolder1_chkLunes',
+  MA: '#ContentPlaceHolder1_chkMartes',
+  MI: '#ContentPlaceHolder1_chkMiercoles',
+  JU: '#ContentPlaceHolder1_chkJueves',
+  VI: '#ContentPlaceHolder1_chkViernes',
+  SA: '#ContentPlaceHolder1_chkSabado',
 };
 
 const DIA_HIDDEN_INPUT_IDS = {
@@ -70,18 +98,23 @@ async function driveSearchForm(page, filtros) {
   const ofrecimientoValue = OFRECIMIENTO_VALUES[filtros.ofrecimiento];
   await page.locator(SELECTORS.ofrecimientoRadio(ofrecimientoValue)).check();
 
-  await page
-    .getByRole(SELECTORS.materiasDialogTrigger.role, { name: SELECTORS.materiasDialogTrigger.name })
-    .click();
+  await page.locator(SELECTORS.materiasDialogTrigger).click();
 
-  const materiaLocator = SELECTORS.materiaCheckbox(filtros.materiaCodigo);
-  await page.getByRole(materiaLocator.role, { name: materiaLocator.name }).check();
+  await materiaCheckboxLocator(page, filtros.materiaCodigo).check();
 
-  await page.getByLabel(SELECTORS.turnoLabel).selectOption(filtros.turno);
+  // The materias picker is a jQuery UI modal dialog that stays open after
+  // checking a materia — its overlay intercepts clicks on the turno/día
+  // controls underneath until explicitly closed. Confirmed live 2026-07-11:
+  // this theme hides the titlebar "X" icon via CSS (DOM element exists but
+  // is not visible) — the actual close control is the "Cerrar" text button.
+  const cerrarButton = page.getByRole('button', { name: 'Cerrar', exact: true });
+  await cerrarButton.click();
+  await cerrarButton.waitFor({ state: 'hidden' });
+
+  await page.locator(SELECTORS.turnoSelect).selectOption(filtros.turno);
 
   for (const dia of filtros.dias) {
-    const diaLocator = SELECTORS.diaCheckbox(dia);
-    await page.getByRole(diaLocator.role, { name: diaLocator.name }).check();
+    await page.locator(DIA_CHECKBOX_IDS[dia]).check();
   }
 }
 
@@ -91,13 +124,22 @@ async function driveSearchForm(page, filtros) {
  * as authoritative (SEARCH-04).
  *
  * @param {import('playwright').Page} page
+ * @param {string} expectedMateriaCodigo the submitted materiaCodigo, used to
+ *   confirm its presence in the checked row's text as an exact token (see
+ *   the materiaCodigo extraction note below for why this can't be a blind
+ *   generic regex match)
  * @returns {Promise<{ materiaCodigo: string|null, ofrecimiento: string|null, turno: string|null, dias: string[] }>}
  */
-async function readReflectedFormState(page) {
+async function readReflectedFormState(page, expectedMateriaCodigo) {
+  // NOTE: hiddenLU/MA/MI/JU/VI/SA (DIA_HIDDEN_INPUT_IDS) belong to RESULTS
+  // rows (Plan 01-02's concern — which días a given result section runs),
+  // not the search form itself. Reflected form state is read directly off
+  // the same día checkboxes driveSearchForm() checked, confirmed live
+  // 2026-07-11.
   const dias = [];
-  for (const [dia, hiddenId] of Object.entries(DIA_HIDDEN_INPUT_IDS)) {
-    const count = await page.locator(`#${hiddenId}`).count();
-    if (count > 0) {
+  for (const [dia, selector] of Object.entries(DIA_CHECKBOX_IDS)) {
+    const isChecked = await page.locator(selector).isChecked().catch(() => false);
+    if (isChecked) {
       dias.push(dia);
     }
   }
@@ -108,15 +150,41 @@ async function readReflectedFormState(page) {
     Object.entries(OFRECIMIENTO_VALUES).find(([, value]) => value === checkedRadioValue)?.[0] ?? null;
 
   let turno = null;
-  const turnoSelect = page.getByLabel(SELECTORS.turnoLabel);
+  const turnoSelect = page.locator(SELECTORS.turnoSelect);
   if ((await turnoSelect.count()) > 0) {
     turno = await turnoSelect.first().inputValue();
   }
 
+  // Materia checkboxes have no data-materia-codigo attribute and no stable
+  // id (see materiaCheckboxLocator) — find the CHECKED materia-grid
+  // checkbox specifically (scoped by its confirmed id substring, not any
+  // checkbox on the page — día checkboxes are also :checked and would
+  // otherwise collide here) and confirm the código's presence in its row's
+  // text. Climb via xpath ancestor::tr[1] rather than a `tr`-with-hasText/
+  // has locator, which matches every wrapping ancestor row, not just the
+  // leaf.
+  //
+  // KNOWN LIMITATION (fixed live 2026-07-11, two attempts): row text
+  // concatenates the grid's "Or." (order/row number) column directly
+  // against the código with NO separator or whitespace (e.g. row number
+  // "5" + código "3.1.050" reads as "53.1.050"). A generic
+  // `/\d+\.\d+\.\d+/` match is greedy and swallows that leading digit into
+  // the first segment, producing the WRONG code. A first fix attempt
+  // required a non-digit boundary immediately before the expected code —
+  // but the row-number digit is ALWAYS immediately adjacent with no
+  // separator in this site's markup, so that boundary can never be
+  // satisfied for a genuine match either, causing every real match to be
+  // rejected. Since the checked checkbox's row is already the one
+  // materiaCheckboxLocator specifically selected for this exact code, a
+  // plain substring check is sufficient here — this isn't re-deriving an
+  // unknown value, just confirming the expected code's presence survived
+  // the postback in the reflected DOM.
   let materiaCodigo = null;
-  const checkedMateria = page.locator('input[type="checkbox"]:checked');
-  if ((await checkedMateria.count()) > 0) {
-    materiaCodigo = (await checkedMateria.first().getAttribute('data-materia-codigo')) ?? null;
+  const checkedMateriaCheckbox = page.locator('input[type="checkbox"][id*="chkSeleccionar"]:checked');
+  if ((await checkedMateriaCheckbox.count()) > 0) {
+    const row = checkedMateriaCheckbox.first().locator('xpath=ancestor::tr[1]');
+    const rowText = await row.textContent();
+    materiaCodigo = rowText?.includes(expectedMateriaCodigo) ? expectedMateriaCodigo : null;
   }
 
   return { materiaCodigo, ofrecimiento, turno, dias };
@@ -220,7 +288,7 @@ export async function runSearch(context, filtros) {
     return response.request().method() === 'POST';
   });
 
-  const buscarButton = page.getByRole(SELECTORS.buscarButton.role, { name: SELECTORS.buscarButton.name });
+  const buscarButton = page.locator(SELECTORS.buscarButton);
 
   let postbackResponse;
   try {
@@ -235,11 +303,14 @@ export async function runSearch(context, filtros) {
     return { status: 'invalid_credentials' };
   }
 
-  const reflectedState = await readReflectedFormState(page);
+  const reflectedState = await readReflectedFormState(page, parsedFiltros.materiaCodigo);
   const matches = verifyPostbackMatchesQuery(reflectedState, parsedFiltros);
 
   if (!matches) {
-    logger.warn({ event: 'postback_mismatch' }, 'Postback reflected state does not match submitted filtros');
+    logger.warn(
+      { event: 'postback_mismatch', reflectedState, submitted: parsedFiltros },
+      'Postback reflected state does not match submitted filtros'
+    );
     return { status: 'search_failed', reason: 'postback_mismatch' };
   }
 
