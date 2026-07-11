@@ -146,6 +146,23 @@ test('spawning node src/scheduler.js stays alive and logs scheduler_started with
     assert.equal(exited, false, `scheduler.js process exited unexpectedly; stdout=${stdout} stderr=${stderr}`);
   } finally {
     child.kill();
-    rmSync(tmpDir, { recursive: true, force: true });
+    // Wait for the child to actually release its SQLite file handle before
+    // removing the temp dir — on Windows, rmSync can throw EPERM if the
+    // just-killed process hasn't finished exiting yet. Best-effort cleanup:
+    // a lingering temp dir is not a correctness concern for this test's
+    // actual assertions above.
+    await new Promise((resolve) => {
+      if (exited) {
+        resolve();
+        return;
+      }
+      child.once('exit', resolve);
+      setTimeout(resolve, 500);
+    });
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // best-effort; ignore.
+    }
   }
 });

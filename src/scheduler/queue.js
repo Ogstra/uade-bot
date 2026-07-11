@@ -108,6 +108,7 @@ export function createScheduler({
   const pQueue = new PQueue({ concurrency });
   let pointers = new Map();
   let intervalHandle;
+  const registeredJobIds = new Set();
 
   function tick() {
     const activeJobs = listActiveJobs(db).filter((job) => !isAccountPaused(db, job.discordUserId));
@@ -128,6 +129,27 @@ export function createScheduler({
     },
     stop() {
       clearInterval(intervalHandle);
+    },
+    /**
+     * Marks `job.id` as reconstructed/eligible for this scheduler instance
+     * (SCHED-04). A no-op, not an error, if `job.id` is already registered
+     * — this is what makes `src/scheduler/bootstrap.js`'s restart
+     * reconstruction idempotent across repeated restarts. The tick loop's
+     * own `listActiveJobs(db)` call remains the source of truth for WHICH
+     * jobs are currently active each tick; this `Set` only answers "has
+     * this job id already been reconstructed."
+     *
+     * @param {{ id: number }} job
+     */
+    registerJob(job) {
+      registeredJobIds.add(job.id);
+    },
+    /**
+     * @param {number} jobId
+     * @returns {boolean}
+     */
+    isRegistered(jobId) {
+      return registeredJobIds.has(jobId);
     },
   };
 }
