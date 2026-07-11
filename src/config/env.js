@@ -9,7 +9,10 @@ const EnvSchema = z.object({
   // established via the portal's own signed entry link first. This is that
   // link, confirmed live 2026-07-11; not a secret in the password sense, but
   // still developer-local and gitignored, never hardcoded.
-  UADE_START_URL: z.string().url('UADE_START_URL'),
+  // Optional (Plan 02-02): a multi-user scheduler has no single global start
+  // URL — each job resolves its own decrypted `uadeStartUrl` instead. Still
+  // read here for the single-user `src/cli.js` entry point's fallback.
+  UADE_START_URL: z.string().url('UADE_START_URL').optional(),
   // Where the SQLite database file lives on disk. Defaults to a gitignored
   // local `data/` directory (see .gitignore) — never the repo root, so a
   // developer running tests never accidentally commits a DB file that may

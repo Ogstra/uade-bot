@@ -238,17 +238,24 @@ function isAuthChallengeError(err) {
  *
  * @param {import('playwright').BrowserContext} context
  * @param {import('zod').infer<typeof FiltrosSchema>} filtros
+ * @param {{ startUrl?: string }} [options] - per-call start URL (e.g. a
+ *   per-user decrypted `uadeStartUrl`, Plan 02-02). Falls back to the
+ *   process-global `UADE_START_URL` env var when omitted, preserving
+ *   `src/cli.js`'s existing single-user call site unchanged.
  * @returns {Promise<{ status: 'invalid_credentials' } | { status: 'search_failed', reason: string } | { status: 'verified', html: string }>}
  */
-export async function runSearch(context, filtros) {
+export async function runSearch(context, filtros, { startUrl } = {}) {
   const parsedFiltros = FiltrosSchema.parse(filtros);
-  const { UADE_START_URL } = loadEnv();
+  const resolvedStartUrl = startUrl ?? loadEnv().UADE_START_URL;
+  if (!resolvedStartUrl) {
+    throw new Error('runSearch: no startUrl provided and UADE_START_URL is not set');
+  }
 
   const page = await context.newPage();
 
   let navigationResponse;
   try {
-    navigationResponse = await page.goto(UADE_START_URL, { waitUntil: 'domcontentloaded' });
+    navigationResponse = await page.goto(resolvedStartUrl, { waitUntil: 'domcontentloaded' });
   } catch (err) {
     if (isAuthChallengeError(err)) {
       logger.info({ event: 'auth_challenge_error' }, 'Navigation failed with an auth challenge');

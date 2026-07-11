@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createDatabase } from '../db/database.js';
@@ -6,7 +6,18 @@ import { upsertUser } from '../db/users.repository.js';
 import { upsertCredentials } from '../db/credentials.repository.js';
 import { createJob, getJob } from '../db/jobs.repository.js';
 import { encryptCredentials } from '../crypto/credentials-crypto.js';
+import { getBrowser } from '../automation/browser.js';
 import { pollOnce } from './poller.js';
+
+// A 'verified' outcome flows through parseResults(), which launches (and
+// reuses) the shared headless Chromium instance — same reason as
+// src/automation/parse-results.test.js's after() hook: without an explicit
+// close, that Chromium process outlives this test run and keeps
+// `node --test` from exiting on its own.
+after(async () => {
+  const browser = await getBrowser();
+  await browser.close();
+});
 
 // pollOnce internally calls loadEnv() to read CREDENTIALS_MASTER_KEY (and,
 // via the EnvSchema, UADE_USERNAME/UADE_PASSWORD are still required fields).
