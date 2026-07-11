@@ -119,7 +119,12 @@ export function createScheduler({
     logger.info({ event: 'scheduler_tick', selectedCount: selected.length }, 'Scheduler tick');
 
     for (const job of selected) {
-      pQueue.add(() => pollOnceFn(db, job.id));
+      pQueue.add(() => pollOnceFn(db, job.id)).catch((err) => {
+        logger.error(
+          { event: 'poll_job_failed', jobId: job.id, message: err.message },
+          'pollOnce failed for job',
+        );
+      });
     }
   }
 
