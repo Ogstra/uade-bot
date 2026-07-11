@@ -314,7 +314,16 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
       logger.info({ event: 'auth_challenge_error' }, 'Navigation failed with an auth challenge');
       return { status: 'invalid_credentials' };
     }
-    throw err;
+    // resolvedStartUrl is a per-user signed session URL (session-equivalent
+    // credential) — Playwright navigation/timeout errors routinely embed the
+    // full navigated URL verbatim in `err.message`. Never forward that raw
+    // message to the logger or re-throw it up to a top-level `message:
+    // err.message` log call; log only a fixed description plus `err.name`.
+    logger.error(
+      { event: 'start_url_navigation_failed', errorName: err.name },
+      'Navigation to start URL failed',
+    );
+    return { status: 'search_failed', reason: 'navigation_failed' };
   }
 
   if (navigationResponse && navigationResponse.status() === 401) {
