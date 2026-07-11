@@ -86,6 +86,21 @@ const DIA_HIDDEN_INPUT_IDS = {
 };
 
 /**
+ * D-07's stale-`UADE_START_URL` detection signal, isolated from the DOM
+ * query that feeds it (the query itself needs a live/mocked Playwright
+ * `Page` and is out of this pure helper's unit-test scope). A per-user
+ * signed entry link that has gone stale leaves the turno combo with zero
+ * `<option>` elements — the Periodo/Carrera/Turno session state the portal
+ * link is responsible for establishing never got populated.
+ *
+ * @param {number} turnoOptionCount
+ * @returns {boolean}
+ */
+export function isStaleStartUrlSignal(turnoOptionCount) {
+  return turnoOptionCount === 0;
+}
+
+/**
  * Resolves a human-provided turno label (e.g. "mañana", "MAÑANA") to the
  * `<option>` `value` attribute the live `#ContentPlaceHolder1_cboTurno`
  * select actually expects (opaque numeric ids like "10152" — confirmed
@@ -280,7 +295,7 @@ function isAuthChallengeError(err) {
  *   per-user decrypted `uadeStartUrl`, Plan 02-02). Falls back to the
  *   process-global `UADE_START_URL` env var when omitted, preserving
  *   `src/cli.js`'s existing single-user call site unchanged.
- * @returns {Promise<{ status: 'invalid_credentials' } | { status: 'search_failed', reason: string } | { status: 'verified', html: string }>}
+ * @returns {Promise<{ status: 'invalid_credentials' } | { status: 'rate_limited' } | { status: 'stale_start_url' } | { status: 'search_failed', reason: string } | { status: 'verified', html: string }>}
  */
 export async function runSearch(context, filtros, { startUrl } = {}) {
   const parsedFiltros = FiltrosSchema.parse(filtros);
@@ -305,6 +320,24 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
   if (navigationResponse && navigationResponse.status() === 401) {
     logger.info({ event: 'auth_rejected', status: 401 }, 'Basic Auth challenge rejected by the UADE site');
     return { status: 'invalid_credentials' };
+  }
+
+  if (navigationResponse && navigationResponse.status() === 429) {
+    logger.info({ event: 'rate_limited' }, 'Basic Auth challenge returned 429 on navigation');
+    return { status: 'rate_limited' };
+  }
+
+  const turnoOptionCount = await page
+    .locator(SELECTORS.turnoSelect)
+    .locator('option')
+    .count()
+    .catch(() => 0);
+  if (isStaleStartUrlSignal(turnoOptionCount)) {
+    logger.info(
+      { event: 'stale_start_url_detected' },
+      'Turno combo is empty — UADE_START_URL is likely stale for this user',
+    );
+    return { status: 'stale_start_url' };
   }
 
   // The portal's signed link may redirect through intermediate pages before
@@ -346,6 +379,9 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
   if (postbackResponse.status() === 401) {
     logger.info({ event: 'auth_rejected', status: 401 }, 'Basic Auth challenge rejected on postback');
     return { status: 'invalid_credentials' };
+  } else if (postbackResponse.status() === 429) {
+    logger.info({ event: 'rate_limited' }, 'Basic Auth challenge returned 429 on postback');
+    return { status: 'rate_limited' };
   }
 
   const reflectedState = await readReflectedFormState(page, parsedFiltros.materiaCodigo);
