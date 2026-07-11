@@ -86,3 +86,22 @@ export const SearchJobSchema = z.object({
   lastOutcome: z.string().nullable(),
   createdAt: z.number().int(),
 });
+
+/**
+ * The account-level pause state produced/consumed by Plan 02-03's pure
+ * backoff state machine (`src/scheduler/backoff.js`) — always exactly one
+ * of these four branches, discriminated on `reason` (D-04 through D-07).
+ * `{ reason: 'none' }` represents a fresh/never-paused account, distinct
+ * from `UserRecordSchema`'s nullable `pauseReason` column, which this
+ * schema's shape is mapped to/from at the repository boundary.
+ */
+export const AccountPauseStateSchema = z.discriminatedUnion('reason', [
+  z.object({ reason: z.literal('none') }),
+  z.object({ reason: z.literal('needs_credentials') }),
+  z.object({ reason: z.literal('needs_new_start_url') }),
+  z.object({
+    reason: z.literal('rate_limited'),
+    backoffAttempt: z.number().int().positive(),
+    resumeAt: z.number().int(),
+  }),
+]);

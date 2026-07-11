@@ -1,12 +1,71 @@
 import { getJob, updateJobPollResult } from '../db/jobs.repository.js';
 import { getCredentials } from '../db/credentials.repository.js';
+import { getUser, updateAccountPauseState } from '../db/users.repository.js';
 import { decryptCredentials } from '../crypto/credentials-crypto.js';
 import { loadEnv } from '../config/env.js';
 import { withUadeContext } from '../automation/browser.js';
 import { runSearch } from '../automation/search.js';
 import { parseResults, filterVacancies } from '../automation/parse-results.js';
 import { classifySearchResult } from '../automation/classify.js';
+import { nextBackoffState } from './backoff.js';
 import logger from '../logger.js';
+
+/**
+ * Maps a `result.status` from `runSearch` (Plan 02-03) onto the backoff
+ * signal `nextBackoffState` consumes. `search_failed` intentionally maps to
+ * `'success'`, not a pause signal: D-04/D-05/D-06's scope is specifically
+ * credential/rate-limit/stale-URL signals — a transient `search_failed`
+ * like `postback_mismatch` must NOT indefinitely pause an account. Mapping
+ * it to `'success'` simply clears any stale pause left over from a prior
+ * transient issue; it is not itself a stronger claim that the account is
+ * healthy.
+ *
+ * @param {string} status
+ * @returns {'invalid_credentials' | 'rate_limited' | 'stale_start_url' | 'success'}
+ */
+function backoffSignalFromStatus(status) {
+  if (status === 'invalid_credentials' || status === 'rate_limited' || status === 'stale_start_url') {
+    return status;
+  }
+  return 'success';
+}
+
+/**
+ * Maps an `AccountPauseStateSchema`-shaped row (Phase 2, D-04–D-07) back to
+ * the `{ pauseReason, pauseUntil, backoffAttempt }` shape
+ * `updateAccountPauseState` persists onto the `users` table.
+ *
+ * @param {import('zod').infer<typeof import('../schemas.js').AccountPauseStateSchema>} state
+ * @returns {{ pauseReason: string | null, pauseUntil: number | null, backoffAttempt: number }}
+ */
+function pauseStateToUserFields(state) {
+  if (state.reason === 'none') {
+    return { pauseReason: null, pauseUntil: null, backoffAttempt: 0 };
+  }
+  if (state.reason === 'rate_limited') {
+    return { pauseReason: 'rate_limited', pauseUntil: state.resumeAt, backoffAttempt: state.backoffAttempt };
+  }
+  return { pauseReason: state.reason, pauseUntil: null, backoffAttempt: 0 };
+}
+
+/**
+ * Maps a `users` row (as returned by `getUser`) to the
+ * `AccountPauseStateSchema`-shaped object `nextBackoffState` expects as its
+ * `currentState` — `pauseReason === null` maps to `{ reason: 'none' }` (a
+ * fresh/never-paused account).
+ *
+ * @param {import('zod').infer<typeof import('../schemas.js').UserRecordSchema> | null} user
+ * @returns {import('zod').infer<typeof import('../schemas.js').AccountPauseStateSchema>}
+ */
+function userToCurrentPauseState(user) {
+  if (!user || !user.pauseReason) {
+    return { reason: 'none' };
+  }
+  if (user.pauseReason === 'rate_limited') {
+    return { reason: 'rate_limited', backoffAttempt: user.backoffAttempt, resumeAt: user.pauseUntil };
+  }
+  return { reason: user.pauseReason };
+}
 
 /**
  * Runs one complete poll for a single search job: decrypts that job's
@@ -74,6 +133,14 @@ export async function pollOnce(db, jobId, { withUadeContextFn = withUadeContext,
   });
 
   updateJobPollResult(db, jobId, { lastPolledAt: Date.now(), lastOutcome: JSON.stringify(outcome) });
+
+  // D-04: this single write pauses/resumes EVERY job tied to this account,
+  // since queue.js's tick filter reads this same account-level state for
+  // every job at this discordUserId on the next tick — not a per-job write.
+  const currentPauseState = userToCurrentPauseState(getUser(db, job.discordUserId));
+  const signal = backoffSignalFromStatus(outcome.outcome);
+  const nextPauseState = nextBackoffState({ currentState: currentPauseState, signal });
+  updateAccountPauseState(db, job.discordUserId, pauseStateToUserFields(nextPauseState));
 
   logger.info({ event: 'job_polled', jobId, outcome: outcome.outcome }, 'Job polled');
 
