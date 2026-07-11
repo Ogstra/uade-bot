@@ -23,6 +23,14 @@ const EnvSchema = z.object({
   // `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
   // Never logged; on failure only the variable name is named, never its value.
   CREDENTIALS_MASTER_KEY: z.string().regex(/^[0-9a-f]{64}$/i, 'CREDENTIALS_MASTER_KEY'),
+  // How often the scheduler ticks (D-01: ~20-30s), a single global value
+  // shared by every job (D-02: not configurable per-search).
+  POLL_INTERVAL_MS: z.coerce.number().int().positive().default(25000),
+  // Global cap on concurrently-running Playwright BrowserContexts across all
+  // accounts/jobs (SCHED-01, D-08). 4 is the conservative starting point for
+  // a VPS with up to 4GB RAM per CLAUDE.md's concurrency-by-RAM table —
+  // tunable upward later only after observing real memory headroom.
+  SCHEDULER_CONCURRENCY: z.coerce.number().int().positive().default(4),
 });
 
 /**
@@ -33,7 +41,7 @@ const EnvSchema = z.object({
  * variable name(s) — never the attempted value, to avoid leaking a partial
  * credential into a stack trace or console output.
  *
- * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string }}
+ * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string | undefined, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string, POLL_INTERVAL_MS: number, SCHEDULER_CONCURRENCY: number }}
  */
 export function loadEnv() {
   loadDotenv();
