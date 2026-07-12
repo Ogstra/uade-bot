@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyPostbackMatchesQuery, resolveTurnoOptionValue, isStaleStartUrlSignal } from './search.js';
+import {
+  extractMateriaNombreFromCells,
+  verifyPostbackMatchesQuery,
+  resolveTurnoOptionValue,
+  isStaleStartUrlSignal,
+} from './search.js';
 
 const baseFiltros = {
   materiaCodigo: '3.1.050',
@@ -108,4 +113,16 @@ test('isStaleStartUrlSignal returns true when the turno combo has zero options (
 test('isStaleStartUrlSignal returns false when the turno combo has any options, including a single placeholder', () => {
   assert.equal(isStaleStartUrlSignal(5), false);
   assert.equal(isStaleStartUrlSignal(1), false);
+});
+
+test('extractMateriaNombreFromCells returns the name after the materia code', () => {
+  assert.equal(
+    extractMateriaNombreFromCells(['5', '3.4.219', 'Ingenieria de Software'], '3.4.219'),
+    'Ingenieria de Software',
+  );
+  assert.equal(
+    extractMateriaNombreFromCells(['53.1.050', 'Fisica II'], '3.1.050'),
+    'Fisica II',
+  );
+  assert.equal(extractMateriaNombreFromCells(['5', '3.1.099'], '3.1.050'), null);
 });

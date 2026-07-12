@@ -1,3 +1,4 @@
+import { getDb } from '../../db/database.js';
 import { getJob, listJobsByUser } from '../../db/jobs.repository.js';
 import { jobDisplay, jobNotFoundMessage } from '../messages.js';
 
@@ -5,7 +6,7 @@ export function buildJobDisplay(job) {
   return jobDisplay(job);
 }
 
-export async function autocompleteUserJobs(interaction, { db } = {}) {
+export async function autocompleteUserJobs(interaction, { db = getDb() } = {}) {
   const focused = String(interaction.options.getFocused() ?? '').toLowerCase();
   const jobs = listJobsByUser(db, interaction.user.id);
   const choices = jobs

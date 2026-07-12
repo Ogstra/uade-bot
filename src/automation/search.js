@@ -62,6 +62,27 @@ function materiaCheckboxLocator(page, materiaCodigo) {
   );
 }
 
+function normalizeMateriaNombre(value) {
+  const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+export function extractMateriaNombreFromCells(cells, materiaCodigo) {
+  const normalizedCells = cells.map((cell) => String(cell ?? '').replace(/\s+/g, ' ').trim());
+  const codeCellIndex = normalizedCells.findIndex((cell) => cell.includes(materiaCodigo));
+  if (codeCellIndex === -1) {
+    return null;
+  }
+
+  const codeCell = normalizedCells[codeCellIndex];
+  const suffix = normalizeMateriaNombre(codeCell.slice(codeCell.indexOf(materiaCodigo) + materiaCodigo.length));
+  if (suffix) {
+    return suffix;
+  }
+
+  return normalizeMateriaNombre(normalizedCells.slice(codeCellIndex + 1).find((cell) => cell.length > 0));
+}
+
 // Día checkboxes have real ids confirmed live 2026-07-11 — NOT locatable
 // by accessible name/label, since the displayed labels are 3-letter
 // abbreviations (LUN/MAR/MIE/JUE/VIE/SAB) while FiltrosSchema uses 2-letter
@@ -172,7 +193,7 @@ async function driveSearchForm(page, filtros) {
  *   confirm its presence in the checked row's text as an exact token (see
  *   the materiaCodigo extraction note below for why this can't be a blind
  *   generic regex match)
- * @returns {Promise<{ materiaCodigo: string|null, ofrecimiento: string|null, turno: string|null, dias: string[] }>}
+ * @returns {Promise<{ materiaCodigo: string|null, materiaNombre: string|null, ofrecimiento: string|null, turno: string|null, dias: string[] }>}
  */
 async function readReflectedFormState(page, expectedMateriaCodigo) {
   // NOTE: hiddenLU/MA/MI/JU/VI/SA (DIA_HIDDEN_INPUT_IDS) belong to RESULTS
@@ -230,14 +251,18 @@ async function readReflectedFormState(page, expectedMateriaCodigo) {
   // unknown value, just confirming the expected code's presence survived
   // the postback in the reflected DOM.
   let materiaCodigo = null;
+  let materiaNombre = null;
   const checkedMateriaCheckbox = page.locator('input[type="checkbox"][id*="chkSeleccionar"]:checked');
   if ((await checkedMateriaCheckbox.count()) > 0) {
     const row = checkedMateriaCheckbox.first().locator('xpath=ancestor::tr[1]');
     const rowText = await row.textContent();
-    materiaCodigo = rowText?.includes(expectedMateriaCodigo) ? expectedMateriaCodigo : null;
+    if (rowText?.includes(expectedMateriaCodigo)) {
+      materiaCodigo = expectedMateriaCodigo;
+      materiaNombre = extractMateriaNombreFromCells(await row.locator('td').allTextContents(), expectedMateriaCodigo);
+    }
   }
 
-  return { materiaCodigo, ofrecimiento, turno, dias };
+  return { materiaCodigo, materiaNombre, ofrecimiento, turno, dias };
 }
 
 /**
@@ -246,7 +271,7 @@ async function readReflectedFormState(page, expectedMateriaCodigo) {
  * a mismatch as "0 vacancies" — the caller is responsible for mapping a
  * `false` result to a `search_failed` status (SEARCH-04).
  *
- * @param {{ materiaCodigo: string|null, ofrecimiento: string|null, turno: string|null, dias: string[] }} reflectedState
+ * @param {{ materiaCodigo: string|null, materiaNombre?: string|null, ofrecimiento: string|null, turno: string|null, dias: string[] }} reflectedState
  * @param {import('zod').infer<typeof FiltrosSchema>} filtros
  * @returns {boolean}
  */
@@ -295,7 +320,7 @@ function isAuthChallengeError(err) {
  *   per-user decrypted `uadeStartUrl`, Plan 02-02). Falls back to the
  *   process-global `UADE_START_URL` env var when omitted, preserving
  *   `src/cli.js`'s existing single-user call site unchanged.
- * @returns {Promise<{ status: 'invalid_credentials' } | { status: 'rate_limited' } | { status: 'stale_start_url' } | { status: 'search_failed', reason: string } | { status: 'verified', html: string }>}
+ * @returns {Promise<{ status: 'invalid_credentials' } | { status: 'rate_limited' } | { status: 'stale_start_url' } | { status: 'search_failed', reason: string } | { status: 'verified', html: string, materiaNombre?: string }>}
  */
 export async function runSearch(context, filtros, { startUrl } = {}) {
   const parsedFiltros = FiltrosSchema.parse(filtros);
@@ -405,5 +430,5 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
   }
 
   const html = await page.content();
-  return { status: 'verified', html };
+  return { status: 'verified', html, materiaNombre: reflectedState.materiaNombre ?? undefined };
 }

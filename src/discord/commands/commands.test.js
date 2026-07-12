@@ -221,6 +221,14 @@ test('autocomplete returns at most 25 caller-owned job choices and filters by la
   }
 });
 
+test('autocomplete uses the default DB when commandContext has no db', async () => {
+  const interaction = createInteraction({ focused: 'Fisica' });
+  await assert.doesNotReject(() => pausarCommand.autocomplete(interaction, {}));
+
+  const choices = interaction.calls.at(-1)[1];
+  assert.ok(Array.isArray(choices));
+});
+
 test('/detener, /pausar, and /reanudar re-check ownership before mutation', async () => {
   const db = createDatabase(':memory:');
   try {

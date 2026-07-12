@@ -59,13 +59,17 @@ test('pollOnce persists a no_vacancies outcome for a verified search with zero p
     const job = seedJob(db);
     const before = Date.now();
 
-    const runSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
+    const runSearchFn = async () => ({
+      status: 'verified',
+      html: '<table></table>',
+      materiaNombre: 'Fisica II',
+    });
     const withUadeContextFn = async (creds, run) => run({});
 
     await pollOnce(db, job.id, { withUadeContextFn, runSearchFn });
 
     const updated = getJob(db, job.id);
-    assert.equal(updated.lastOutcome, JSON.stringify({ outcome: 'no_vacancies' }));
+    assert.equal(updated.lastOutcome, JSON.stringify({ outcome: 'no_vacancies', materiaNombre: 'Fisica II' }));
     assert.ok(updated.lastPolledAt >= before);
   } finally {
     db.close();

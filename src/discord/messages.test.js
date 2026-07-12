@@ -55,6 +55,17 @@ test('searchCreatedMessage includes filters and paused-account context without s
   assertNoSecrets(text);
 });
 
+test('searchCreatedMessage omits sedes excluidas when none were excluded', () => {
+  const text = searchCreatedMessage({
+    job: { ...JOB, filtros: { ...FILTROS, sedesExcluidas: [] } },
+    filtros: { ...FILTROS, sedesExcluidas: [] },
+    pauseReason: null,
+    requestedCredentials: false,
+  });
+
+  assert.doesNotMatch(text, /Sedes excluidas/);
+});
+
 test('credential copy confirms save or update without echoing values', () => {
   const allText = [
     credentialPrompts.username,
@@ -106,6 +117,7 @@ test('formatJobStatusBlock renders poll state without raw epoch or JSON', () => 
       lastPolledAt: 1783837905670,
       lastOutcome: JSON.stringify({
         outcome: 'found',
+        materiaNombre: 'Fisica II',
         vacancies: [
           {
             turno: 'MAÑANA',
@@ -121,7 +133,26 @@ test('formatJobStatusBlock renders poll state without raw epoch or JSON', () => 
   );
 
   assert.match(text, /Ultimo sondeo: /);
+  assert.match(text, /Materia: 3\.1\.050 - Fisica II/);
   assert.match(text, /vacante encontrada \(18 cupos\)/);
   assert.doesNotMatch(text, /1783837905670/);
   assert.doesNotMatch(text, /\{"outcome"/);
+});
+
+test('vacancyNotificationMessage renders extracted materia name when present', () => {
+  const text = vacancyNotificationMessage(JOB, {
+    outcome: 'found',
+    materiaNombre: 'Fisica II',
+    vacancies: [
+      {
+        turno: 'Noche',
+        sede: 'Monserrat',
+        horario: '18:30 22:00',
+        dias: ['LU'],
+        cupos: 1,
+      },
+    ],
+  });
+
+  assert.match(text, /Materia: 3\.1\.050 - Fisica II/);
 });

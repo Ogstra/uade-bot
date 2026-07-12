@@ -112,7 +112,8 @@ export async function pollOnce(db, jobId, { withUadeContextFn = withUadeContext,
     if (result.status === 'verified') {
       const rows = await parseResults(result.html);
       const vacancies = filterVacancies(rows, job.filtros);
-      return classifySearchResult({ searchStatus: 'verified', vacancies });
+      const outcome = classifySearchResult({ searchStatus: 'verified', vacancies });
+      return result.materiaNombre ? { ...outcome, materiaNombre: result.materiaNombre } : outcome;
     }
 
     if (result.status === 'search_failed') {

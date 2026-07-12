@@ -15,14 +15,37 @@ export function formatSedes(sedesExcluidas) {
   return sedesExcluidas.length > 0 ? sedesExcluidas.join(', ') : 'ninguna';
 }
 
+function parseLastOutcome(lastOutcome) {
+  if (!lastOutcome) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(lastOutcome);
+  } catch {
+    return { outcome: lastOutcome };
+  }
+}
+
+export function formatMateria(job, outcome = null) {
+  return outcome?.materiaNombre
+    ? `${job.filtros.materiaCodigo} - ${outcome.materiaNombre}`
+    : job.filtros.materiaCodigo;
+}
+
+function optionalSedesLine(sedesExcluidas) {
+  return sedesExcluidas.length > 0 ? [`Sedes excluidas: ${formatSedes(sedesExcluidas)}`] : [];
+}
+
 export function searchCreatedMessage({ job, filtros, pauseReason, credentialResult, requestedCredentials }) {
-  const base =
-    `Busqueda creada: ${job.label}\n` +
-    `Materia: ${filtros.materiaCodigo}\n` +
-    `Turno: ${filtros.turno}\n` +
-    `Ofrecimiento: ${filtros.ofrecimiento}\n` +
-    `Dias: ${filtros.dias.join(', ')}\n` +
-    `Sedes excluidas: ${formatSedes(filtros.sedesExcluidas)}`;
+  const base = [
+    `Busqueda creada: ${job.label}`,
+    `Materia: ${filtros.materiaCodigo}`,
+    `Turno: ${filtros.turno}`,
+    `Ofrecimiento: ${filtros.ofrecimiento}`,
+    `Dias: ${filtros.dias.join(', ')}`,
+    ...optionalSedesLine(filtros.sedesExcluidas),
+  ].join('\n');
   const pausedSuffix = pauseReason
     ? `\nQuedo creada pausada por el estado de tu cuenta: ${pauseReason}.`
     : '';
@@ -66,15 +89,9 @@ export function formatLastPoll(lastPolledAt) {
 }
 
 export function formatLastOutcome(lastOutcome) {
-  if (!lastOutcome) {
+  const outcome = parseLastOutcome(lastOutcome);
+  if (!outcome) {
     return 'sin resultado';
-  }
-
-  let outcome;
-  try {
-    outcome = JSON.parse(lastOutcome);
-  } catch {
-    outcome = { outcome: lastOutcome };
   }
 
   if (outcome.outcome === 'found') {
@@ -101,12 +118,14 @@ export function formatLastOutcome(lastOutcome) {
 }
 
 export function formatJobStatusBlock(job, user) {
+  const lastOutcome = parseLastOutcome(job.lastOutcome);
+
   return [
     `**${job.label}**`,
-    `Materia: ${job.filtros.materiaCodigo}`,
+    `Materia: ${formatMateria(job, lastOutcome)}`,
     `Turno: ${job.filtros.turno}`,
     `Dias: ${job.filtros.dias.join(', ')}`,
-    `Sedes excluidas: ${formatSedes(job.filtros.sedesExcluidas)}`,
+    ...optionalSedesLine(job.filtros.sedesExcluidas),
     `Estado: ${formatJobStatus(job, user)}`,
     `Ultimo sondeo: ${formatLastPoll(job.lastPolledAt)}`,
     `Ultimo resultado: ${formatLastOutcome(job.lastOutcome)}`,
@@ -171,7 +190,7 @@ export function vacancyNotificationMessage(job, outcome, { channel = false } = {
 
   return (
     `${title}\n` +
-    `Materia: ${job.filtros.materiaCodigo}\n` +
+    `Materia: ${formatMateria(job, outcome)}\n` +
     `Turno buscado: ${job.filtros.turno}\n\n` +
     formatVacancyLines(outcome.vacancies)
   );

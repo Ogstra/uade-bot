@@ -35,10 +35,18 @@ export const VacancyRowSchema = z.object({
  * `classifySearchResult`.
  */
 export const SearchOutcomeSchema = z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.literal('found'), vacancies: z.array(VacancyRowSchema).min(1) }),
-  z.object({ outcome: z.literal('no_vacancies') }),
-  z.object({ outcome: z.literal('search_failed'), reason: z.string().min(1) }),
-  z.object({ outcome: z.literal('invalid_credentials') }),
+  z.object({
+    outcome: z.literal('found'),
+    vacancies: z.array(VacancyRowSchema).min(1),
+    materiaNombre: z.string().min(1).optional(),
+  }),
+  z.object({ outcome: z.literal('no_vacancies'), materiaNombre: z.string().min(1).optional() }),
+  z.object({
+    outcome: z.literal('search_failed'),
+    reason: z.string().min(1),
+    materiaNombre: z.string().min(1).optional(),
+  }),
+  z.object({ outcome: z.literal('invalid_credentials'), materiaNombre: z.string().min(1).optional() }),
 ]);
 
 /**
