@@ -21,15 +21,31 @@ const FILTROS = {
   sedesExcluidas: [],
 };
 
-function createButtonInteraction({ userId = 'user-1', customId } = {}) {
+function createButtonInteraction({ userId = 'user-1', customId, channelId = 'dm-channel' } = {}) {
   const calls = [];
+  const channelSends = [];
   return {
     user: { id: userId },
     customId,
+    channelId,
     isButton: () => true,
+    client: {
+      channels: {
+        async fetch(id) {
+          return {
+            async send(content) {
+              channelSends.push({ id, content });
+            },
+          };
+        },
+      },
+    },
     reply: async (payload) => calls.push(['reply', payload]),
     get calls() {
       return calls;
+    },
+    get channelSends() {
+      return channelSends;
     },
   };
 }
@@ -64,6 +80,57 @@ test('handleDetenerButton deletes the job and confirms when the clicker owns it'
     assert.equal(interaction.calls[0][0], 'reply');
     assert.match(interaction.calls[0][1].content, /Busqueda detenida/);
     assert.equal(interaction.calls[0][1].ephemeral, true);
+    assert.equal(interaction.channelSends.length, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('handleDetenerButton echoes the confirmation to the original channel when stopped from the DM button', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, {
+      discordUserId: 'user-1',
+      filtros: FILTROS,
+      label: 'Fisica II',
+      channelId: 'original-channel',
+    });
+    const interaction = createButtonInteraction({
+      userId: 'user-1',
+      customId: `detener_job:${job.id}`,
+      channelId: 'dm-channel',
+    });
+
+    await handleDetenerButton(interaction, { db });
+
+    assert.equal(interaction.channelSends.length, 1);
+    assert.equal(interaction.channelSends[0].id, 'original-channel');
+    assert.match(interaction.channelSends[0].content, /Busqueda detenida/);
+  } finally {
+    db.close();
+  }
+});
+
+test('handleDetenerButton does not double-post when clicked from the search\'s own channel', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, {
+      discordUserId: 'user-1',
+      filtros: FILTROS,
+      label: 'Fisica II',
+      channelId: 'original-channel',
+    });
+    const interaction = createButtonInteraction({
+      userId: 'user-1',
+      customId: `detener_job:${job.id}`,
+      channelId: 'original-channel',
+    });
+
+    await handleDetenerButton(interaction, { db });
+
+    assert.equal(interaction.channelSends.length, 0);
   } finally {
     db.close();
   }

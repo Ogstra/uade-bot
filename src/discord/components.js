@@ -98,6 +98,11 @@ export function buildEstadoActionRows(jobs) {
  * re-checked here exactly like `/detener` — a click from someone other
  * than the search's own `discordUserId` is treated as not-found, never as
  * a cross-user delete.
+ *
+ * When the click happens somewhere other than the search's own channel
+ * (typically: stopping it from the DM copy of a vacancy notification),
+ * the confirmation is also echoed to `job.channelId` so anyone watching
+ * the original channel sees the search was stopped, not just the DM.
  */
 export async function handleDetenerButton(interaction, { db = getDb() } = {}) {
   const jobId = parsePrefixedJobId(DETENER_BUTTON_PREFIX, interaction.customId);
@@ -110,6 +115,18 @@ export async function handleDetenerButton(interaction, { db = getDb() } = {}) {
 
   deleteJob(db, job.id);
   await interaction.reply({ content: jobActionMessage('detenida', job), ephemeral: true });
+
+  if (job.channelId && job.channelId !== interaction.channelId) {
+    try {
+      const channel = await interaction.client.channels.fetch(job.channelId);
+      await channel.send(jobActionMessage('detenida', job));
+    } catch (err) {
+      logger.error(
+        { event: 'detener_channel_echo_failed', jobId: job.id, channelId: job.channelId, message: err.message },
+        'Detener channel echo failed',
+      );
+    }
+  }
 }
 
 /**
