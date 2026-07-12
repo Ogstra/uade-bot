@@ -40,6 +40,7 @@ export const adminUserStatsCommand = {
         pauseReason: user.pauseReason,
         totalCommandUsage: countCommandUsageForUser(db, discordUserId),
         topCommands: countCommandUsageByCommandForUser(db, discordUserId, { limit: 6 }),
+        client: interaction.client,
       }),
       flags: MessageFlags.Ephemeral,
     });

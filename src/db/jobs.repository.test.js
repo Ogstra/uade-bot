@@ -55,6 +55,31 @@ test('createJob persists channelId and label, defaulting label to materiaCodigo'
   }
 });
 
+test('createJob persists guildId, defaulting to null for jobs created outside any guild (e.g. DM)', () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+
+    const inGuild = createJob(db, {
+      discordUserId: 'user-1',
+      filtros: FILTROS,
+      channelId: 'channel-1',
+      guildId: 'guild-1',
+    });
+    const inDm = createJob(db, {
+      discordUserId: 'user-1',
+      filtros: { ...FILTROS, materiaCodigo: '3.4.219' },
+      channelId: 'dm-channel-1',
+    });
+
+    assert.equal(inGuild.guildId, 'guild-1');
+    assert.equal(inDm.guildId, null);
+    assert.equal(getJob(db, inGuild.id).guildId, 'guild-1');
+  } finally {
+    db.close();
+  }
+});
+
 test('listJobsByUser returns only active and paused jobs for that user with poll fields', () => {
   const db = createDatabase(':memory:');
   try {

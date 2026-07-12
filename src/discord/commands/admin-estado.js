@@ -22,6 +22,6 @@ export const adminEstadoCommand = {
   async execute(interaction, { db = getDb() } = {}) {
     const filterUserId = interaction.options.getString('usuario');
     const jobs = filterUserId ? listJobsByUser(db, filterUserId) : listAllJobs(db);
-    await interaction.reply({ content: adminJobListMessage(jobs), flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: adminJobListMessage(jobs, interaction.client), flags: MessageFlags.Ephemeral });
   },
 };

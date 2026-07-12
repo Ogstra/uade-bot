@@ -75,6 +75,7 @@ const MIGRATIONS = [
     column: 'last_pause_notified_reason',
     sql: 'ALTER TABLE users ADD COLUMN last_pause_notified_reason TEXT',
   },
+  { table: 'jobs', column: 'guild_id', sql: 'ALTER TABLE jobs ADD COLUMN guild_id TEXT' },
 ];
 
 /** @type {import('better-sqlite3').Database | undefined} */

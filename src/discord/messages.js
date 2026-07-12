@@ -133,7 +133,28 @@ export function formatLastOutcome(lastOutcome) {
   return String(outcome.outcome ?? lastOutcome);
 }
 
-export function formatJobStatusBlock(job, user) {
+/**
+ * Where a job lives: the server it was created in (resolved to a name via
+ * the bot's own guild cache -- no extra fetch needed, the bot is already a
+ * member of every guild any of its jobs could belong to) plus a channel
+ * mention, which Discord renders as a clickable `#channel-name` and
+ * implicitly confirms which server too. Falls back to "DM" for a job
+ * created outside any guild, since a DM channel id doesn't render as a
+ * usable mention.
+ *
+ * @param {{ channelId: string | null, guildId: string | null }} job
+ * @param {import('discord.js').Client} [client]
+ */
+export function formatJobLocation(job, client) {
+  if (!job.guildId) {
+    return job.channelId ? 'DM' : 'sin canal';
+  }
+
+  const guildName = client?.guilds?.cache?.get(job.guildId)?.name ?? job.guildId;
+  return job.channelId ? `${guildName} · <#${job.channelId}>` : guildName;
+}
+
+export function formatJobStatusBlock(job, user, client) {
   const lastOutcome = parseLastOutcome(job.lastOutcome);
 
   return [
@@ -142,6 +163,7 @@ export function formatJobStatusBlock(job, user) {
     `**Turno:** ${job.filtros.turno}`,
     `**Dias:** ${job.filtros.dias.join(', ')}`,
     ...optionalSedesLine(job.filtros.sedesExcluidas),
+    `**Server/Canal:** ${formatJobLocation(job, client)}`,
     `**Estado:** ${formatJobStatus(job, user)}`,
     `**Ultimo sondeo:** ${formatLastPoll(job.lastPolledAt)}`,
     `**Ultimo resultado:** ${formatLastOutcome(job.lastOutcome)}`,
@@ -242,21 +264,22 @@ export function adminNoJobsMessage() {
  * (multi-line, one caller's own searches), this lists every account's jobs
  * in one message, so it has to stay terse to fit Discord's 2000-char limit.
  */
-export function formatAdminJobLine(job) {
+export function formatAdminJobLine(job, client) {
   const identity = formatJobIdentity(job, parseLastOutcome(job.lastOutcome));
   const estado = job.status === 'paused_by_user' ? 'pausada' : 'activa';
-  return `**#${job.id}** <@${job.discordUserId}> · ${identity} · ${job.filtros.turno} ${job.filtros.dias.join('/')} · ${estado} · ${formatLastOutcome(job.lastOutcome)}`;
+  return `**#${job.id}** <@${job.discordUserId}> · ${identity} · ${job.filtros.turno} ${job.filtros.dias.join('/')} · ${estado} · ${formatJobLocation(job, client)} · ${formatLastOutcome(job.lastOutcome)}`;
 }
 
 /**
  * @param {import('zod').infer<typeof import('../schemas.js').SearchJobSchema>[]} jobs
+ * @param {import('discord.js').Client} [client]
  */
-export function adminJobListMessage(jobs) {
+export function adminJobListMessage(jobs, client) {
   if (jobs.length === 0) {
     return adminNoJobsMessage();
   }
 
-  const lines = jobs.map(formatAdminJobLine);
+  const lines = jobs.map((job) => formatAdminJobLine(job, client));
   const joined = lines.join('\n');
 
   // Discord message content cap is 2000 chars -- truncate defensively
@@ -301,7 +324,7 @@ export function adminUserNotFoundMessage() {
  * though it's redundant here, for visual consistency with `/admin-estado`),
  * pause state, and command usage.
  */
-export function adminUserStatsMessage({ displayName, discordUserId, jobs, pauseReason, totalCommandUsage, topCommands }) {
+export function adminUserStatsMessage({ displayName, discordUserId, jobs, pauseReason, totalCommandUsage, topCommands, client }) {
   const activeJobs = jobs.filter((job) => job.status === 'active').length;
   const pausedJobs = jobs.filter((job) => job.status === 'paused_by_user').length;
 
@@ -320,7 +343,7 @@ export function adminUserStatsMessage({ displayName, discordUserId, jobs, pauseR
 
   if (jobs.length > 0) {
     lines.push('**Busquedas:**');
-    lines.push(jobs.map(formatAdminJobLine).join('\n'));
+    lines.push(jobs.map((job) => formatAdminJobLine(job, client)).join('\n'));
   }
 
   return lines.join('\n');

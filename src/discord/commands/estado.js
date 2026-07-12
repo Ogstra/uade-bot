@@ -18,7 +18,7 @@ export const estadoCommand = {
 
     const user = getUser(db, interaction.user.id);
     await interaction.reply({
-      content: jobs.map((job) => formatJobStatusBlock(job, user)).join('\n\n'),
+      content: jobs.map((job) => formatJobStatusBlock(job, user, interaction.client)).join('\n\n'),
       flags: MessageFlags.Ephemeral,
     });
   },

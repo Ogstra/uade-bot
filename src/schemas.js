@@ -91,6 +91,7 @@ export const SearchJobSchema = z.object({
   discordUserId: z.string().min(1, 'discordUserId must be a non-empty string'),
   filtros: FiltrosSchema,
   channelId: z.string().min(1, 'channelId must be a non-empty string').nullable(),
+  guildId: z.string().min(1, 'guildId must be a non-empty string').nullable(),
   label: z.string().min(1, 'label must be a non-empty string'),
   status: z.enum(['active', 'paused_by_user']),
   lastPolledAt: z.number().int().nullable(),

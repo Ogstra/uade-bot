@@ -115,6 +115,7 @@ export const buscarCommand = {
       discordUserId: interaction.user.id,
       filtros,
       channelId: interaction.channelId ?? null,
+      guildId: interaction.guildId ?? null,
       label,
     });
     const user = getUser(db, interaction.user.id);

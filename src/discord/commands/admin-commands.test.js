@@ -33,6 +33,9 @@ function fakeClient() {
         return { username: USERNAMES[id], globalName: null };
       },
     },
+    guilds: {
+      cache: new Map([['guild-1', { name: 'Los Pibes de UADE' }]]),
+    },
   };
 }
 
@@ -60,6 +63,27 @@ test('all admin commands are flagged adminOnly for the central interactions.js g
   assert.equal(adminReanudarCommand.adminOnly, true);
   assert.equal(adminStatsCommand.adminOnly, true);
   assert.equal(adminUserStatsCommand.adminOnly, true);
+});
+
+test('/admin-estado shows the resolved server name and a channel mention per job', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, {
+      discordUserId: 'user-1',
+      filtros: FILTROS,
+      label: 'Fisica II',
+      channelId: 'channel-1',
+      guildId: 'guild-1',
+    });
+
+    const interaction = createInteraction();
+    await adminEstadoCommand.execute(interaction, { db });
+
+    assert.match(interaction.calls[0][1].content, new RegExp(`#${job.id}.*Los Pibes de UADE.*<#channel-1>`));
+  } finally {
+    db.close();
+  }
 });
 
 test('/admin-estado lists jobs from every account, not just the caller', async () => {

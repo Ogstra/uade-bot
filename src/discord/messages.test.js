@@ -5,6 +5,7 @@ import {
   credentialPrompts,
   credentialsSavedMessage,
   credentialsUpdatedMessage,
+  formatJobLocation,
   formatJobStatusBlock,
   jobActionMessage,
   pauseNotificationMessage,
@@ -150,6 +151,31 @@ test('formatJobStatusBlock renders poll state without raw epoch or JSON', () => 
   assert.match(text, /vacante encontrada \(18 cupos\)/);
   assert.doesNotMatch(text, /1783837905670/);
   assert.doesNotMatch(text, /\{"outcome"/);
+});
+
+test('formatJobLocation shows the resolved guild name and a channel mention', () => {
+  const client = { guilds: { cache: new Map([['guild-1', { name: 'Los Pibes de UADE' }]]) } };
+  const location = formatJobLocation({ guildId: 'guild-1', channelId: 'channel-1' }, client);
+
+  assert.equal(location, 'Los Pibes de UADE · <#channel-1>');
+});
+
+test('formatJobLocation falls back to the raw guild id when the bot has no cached guild data', () => {
+  const location = formatJobLocation({ guildId: 'guild-1', channelId: 'channel-1' }, undefined);
+
+  assert.equal(location, 'guild-1 · <#channel-1>');
+});
+
+test('formatJobLocation reports DM for a job created outside any guild', () => {
+  assert.equal(formatJobLocation({ guildId: null, channelId: 'dm-channel-1' }), 'DM');
+  assert.equal(formatJobLocation({ guildId: null, channelId: null }), 'sin canal');
+});
+
+test('formatJobStatusBlock includes the resolved server/channel location', () => {
+  const client = { guilds: { cache: new Map([['guild-1', { name: 'Los Pibes de UADE' }]]) } };
+  const text = formatJobStatusBlock({ ...JOB, guildId: 'guild-1', channelId: 'channel-1' }, null, client);
+
+  assert.match(text, /\*\*Server\/Canal:\*\* Los Pibes de UADE · <#channel-1>/);
 });
 
 test('vacancyNotificationMessage renders extracted materia name when present', () => {

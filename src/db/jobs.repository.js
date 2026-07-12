@@ -17,6 +17,7 @@ function rowToJob(row) {
     discordUserId: row.discord_user_id,
     filtros,
     channelId: row.channel_id ?? null,
+    guildId: row.guild_id ?? null,
     label: row.label || filtros.materiaCodigo,
     status: row.status,
     lastPolledAt: row.last_polled_at,
@@ -32,20 +33,20 @@ function rowToJob(row) {
  * against `FiltrosSchema` and `JSON.stringify`d into `filtros_json`.
  *
  * @param {import('better-sqlite3').Database} db
- * @param {{ discordUserId: string, filtros: import('zod').infer<typeof FiltrosSchema>, channelId?: string | null, label?: string }} params
+ * @param {{ discordUserId: string, filtros: import('zod').infer<typeof FiltrosSchema>, channelId?: string | null, guildId?: string | null, label?: string }} params
  * @returns {import('zod').infer<typeof SearchJobSchema>}
  */
-export function createJob(db, { discordUserId, filtros, channelId = null, label }) {
+export function createJob(db, { discordUserId, filtros, channelId = null, guildId = null, label }) {
   const now = Date.now();
   const parsedFiltros = FiltrosSchema.parse(filtros);
   const parsedLabel = label || parsedFiltros.materiaCodigo;
 
   const info = db
     .prepare(
-      `INSERT INTO jobs (discord_user_id, filtros_json, channel_id, label, status, created_at)
-       VALUES (?, ?, ?, ?, 'active', ?)`,
+      `INSERT INTO jobs (discord_user_id, filtros_json, channel_id, guild_id, label, status, created_at)
+       VALUES (?, ?, ?, ?, ?, 'active', ?)`,
     )
-    .run(discordUserId, JSON.stringify(parsedFiltros), channelId, parsedLabel, now);
+    .run(discordUserId, JSON.stringify(parsedFiltros), channelId, guildId, parsedLabel, now);
 
   logger.info(
     { event: 'job_created', discordUserId, jobId: Number(info.lastInsertRowid) },
