@@ -121,9 +121,24 @@ export function createScheduler({
   // state (src/scheduler/poller.js) is not safe to run concurrently for
   // the same discordUserId.
   const inFlightAccountIds = new Set();
+  // A `pollJobNow` (immediate: /buscar's first search, /reanudar, /admin-
+  // reanudar) that arrives while that same account already has a poll
+  // in-flight used to be silently dropped by the `inFlightAccountIds` guard
+  // below, with no retry -- the new/resumed job then just waited for its
+  // own turn in the next tick's round-robin selection, which for an account
+  // with several other active jobs could take multiple full POLL_INTERVAL_MS
+  // cycles before that job was ever polled at all (confirmed live: a
+  // freshly-created search sat at "sin sondeos" well past its expected
+  // immediate poll). This map remembers the most recent such blocked
+  // request per account and fires it the moment the in-flight poll finishes,
+  // instead of losing it.
+  const pendingImmediate = new Map();
 
   function enqueuePoll(job, { event = 'scheduled' } = {}) {
     if (inFlightAccountIds.has(job.discordUserId)) {
+      if (event === 'immediate') {
+        pendingImmediate.set(job.discordUserId, job);
+      }
       return false;
     }
 
@@ -148,6 +163,11 @@ export function createScheduler({
       })
       .finally(() => {
         inFlightAccountIds.delete(job.discordUserId);
+        const queuedJob = pendingImmediate.get(job.discordUserId);
+        if (queuedJob) {
+          pendingImmediate.delete(job.discordUserId);
+          enqueuePoll(queuedJob, { event: 'immediate' });
+        }
       });
     logger.info({ event: 'scheduler_job_enqueued', jobId: job.id, source: event }, 'Scheduler job enqueued');
     return true;

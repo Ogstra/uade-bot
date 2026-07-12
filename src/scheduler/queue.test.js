@@ -199,6 +199,55 @@ test('scheduler.pollJobNow enqueues a specific job immediately through the notif
   }
 });
 
+test('scheduler.pollJobNow queues behind an in-flight poll for the same account instead of dropping the request', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const jobA = createJob(db, { discordUserId: 'user-1', filtros: FILTROS, label: 'A' });
+    const jobB = createJob(db, { discordUserId: 'user-1', filtros: { ...FILTROS, materiaCodigo: '3.4.219' }, label: 'B' });
+
+    let releaseJobA;
+    const jobAGate = new Promise((resolve) => {
+      releaseJobA = resolve;
+    });
+    let signalJobAStarted;
+    const jobAStarted = new Promise((resolve) => {
+      signalJobAStarted = resolve;
+    });
+
+    const polled = [];
+    const scheduler = createScheduler({
+      db,
+      intervalMs: 1000000,
+      concurrency: 2,
+      pollOnceFn: async (_db, jobId) => {
+        if (jobId === jobA.id) {
+          signalJobAStarted();
+          await jobAGate;
+        }
+        polled.push(jobId);
+        return { outcome: 'no_vacancies' };
+      },
+      onJobPolled: async () => {},
+    });
+
+    assert.equal(scheduler.pollJobNow(jobA), true);
+    await jobAStarted;
+
+    // jobA's poll is now in-flight (blocked on its own gate) -- this
+    // immediate request for jobB (same account) must be queued behind it,
+    // not silently dropped.
+    assert.equal(scheduler.pollJobNow(jobB), false);
+
+    releaseJobA();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.deepEqual(polled, [jobA.id, jobB.id]);
+  } finally {
+    db.close();
+  }
+});
+
 test('createScheduler does not call onJobPolled when pollOnceFn rejects', async () => {
   const db = createDatabase(':memory:');
   try {
