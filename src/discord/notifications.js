@@ -56,13 +56,24 @@ export function createNotificationDispatcher({ client, db, delayMs = 250, log = 
   let sendTail = Promise.resolve();
 
   function enqueueSend(fn) {
-    sendTail = sendTail.then(async () => {
+    const result = sendTail.then(async () => {
       if (delayMs > 0) {
         await sleep(delayMs);
       }
       return fn();
     });
-    return sendTail;
+
+    // `sendTail` only exists to serialize sends with a delay between them --
+    // it must always resolve, or ANY single failed send (a channel with no
+    // permission, a closed DM, etc.) permanently poisons it: `.then()` on a
+    // rejected promise skips the callback and re-throws the SAME old
+    // rejection forever, so every later send (any job, any user, DM or
+    // channel) would short-circuit with that first stale error without
+    // `fn()` ever running again, until the process restarts. Callers still
+    // get the real per-call outcome via `result`, which keeps its own
+    // rejection.
+    sendTail = result.catch(() => {});
+    return result;
   }
 
   async function sendUserDm(discordUserId, payload) {

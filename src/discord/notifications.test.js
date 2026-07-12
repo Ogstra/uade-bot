@@ -185,3 +185,49 @@ test('dispatcher throttles outbound sends in order', async () => {
     db.close();
   }
 });
+
+test('a send failure (e.g. missing channel permissions) does not permanently break later, unrelated sends', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    upsertUser(db, 'user-2');
+    const brokenJob = createJob(db, { discordUserId: 'user-1', filtros: FILTROS, channelId: 'no-permission-channel' });
+    const healthyJob = createJob(db, { discordUserId: 'user-2', filtros: FILTROS, channelId: 'channel-2' });
+
+    const sends = [];
+    const client = {
+      sends,
+      users: {
+        async fetch(id) {
+          return { async send(content) { sends.push({ destination: 'dm', id, content }); } };
+        },
+      },
+      channels: {
+        async fetch(id) {
+          return {
+            async send(content) {
+              if (id === 'no-permission-channel') {
+                throw new Error('Missing Permissions');
+              }
+              sends.push({ destination: 'channel', id, content });
+            },
+          };
+        },
+      },
+    };
+    const dispatcher = createNotificationDispatcher({ client, db, delayMs: 0, log: { error() {}, warn() {} } });
+
+    // First job's channel send fails -- this is what used to poison the
+    // shared send queue for every job/user afterwards.
+    await dispatcher.onJobPolled(brokenJob, { outcome: 'found', vacancies: [VACANCY] });
+    // A second, unrelated job's DM and channel sends must still go through.
+    await dispatcher.onJobPolled(healthyJob, { outcome: 'found', vacancies: [VACANCY] });
+
+    const healthySends = sends.filter((s) => s.id === 'user-2' || s.id === 'channel-2');
+    assert.equal(healthySends.length, 2);
+    assert.ok(healthySends.some((s) => s.destination === 'dm'));
+    assert.ok(healthySends.some((s) => s.destination === 'channel'));
+  } finally {
+    db.close();
+  }
+});
