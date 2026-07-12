@@ -18,7 +18,7 @@ export const pausarCommand = {
 
   autocomplete: autocompleteUserJobs,
 
-  async execute(interaction, { db = getDb() } = {}) {
+  async execute(interaction, { db = getDb(), ephemeralReplies = false } = {}) {
     const job = getOwnedJobFromInteraction(db, interaction);
     if (!job) {
       await replyJobNotFound(interaction);
@@ -26,6 +26,6 @@ export const pausarCommand = {
     }
 
     updateJobStatus(db, job.id, 'paused_by_user');
-    await interaction.reply({ content: jobActionMessage('pausada', job), ephemeral: true });
+    await interaction.reply({ content: jobActionMessage('pausada', job), ephemeral: ephemeralReplies });
   },
 };

@@ -18,7 +18,7 @@ export const reanudarCommand = {
 
   autocomplete: autocompleteUserJobs,
 
-  async execute(interaction, { db = getDb() } = {}) {
+  async execute(interaction, { db = getDb(), ephemeralReplies = false } = {}) {
     const job = getOwnedJobFromInteraction(db, interaction);
     if (!job) {
       await replyJobNotFound(interaction);
@@ -26,6 +26,6 @@ export const reanudarCommand = {
     }
 
     updateJobStatus(db, job.id, 'active');
-    await interaction.reply({ content: jobActionMessage('reanudada', job), ephemeral: true });
+    await interaction.reply({ content: jobActionMessage('reanudada', job), ephemeral: ephemeralReplies });
   },
 };

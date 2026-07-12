@@ -36,6 +36,17 @@ const EnvSchema = z.object({
   // a VPS with up to 4GB RAM per CLAUDE.md's concurrency-by-RAM table —
   // tunable upward later only after observing real memory headroom.
   SCHEDULER_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  // Whether /buscar, /detener, /pausar, and /reanudar replies are Discord
+  // "Only you can see this" ephemeral replies. Defaults to public ("false")
+  // so search activity is visible in the channel; set to "true" to make
+  // those four replies private instead. Does not affect /credenciales or
+  // /estado, which stay ephemeral unconditionally (credential/account
+  // content should never default to public).
+  DISCORD_EPHEMERAL_REPLIES: z
+    .enum(['true', 'false'])
+    .optional()
+    .default('false')
+    .transform((value) => value === 'true'),
 });
 
 /**
@@ -46,7 +57,7 @@ const EnvSchema = z.object({
  * variable name(s) — never the attempted value, to avoid leaking a partial
  * credential into a stack trace or console output.
  *
- * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string | undefined, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string, DISCORD_BOT_TOKEN: string, DISCORD_CLIENT_ID: string, DISCORD_GUILD_ID: string, POLL_INTERVAL_MS: number, SCHEDULER_CONCURRENCY: number }}
+ * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string | undefined, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string, DISCORD_BOT_TOKEN: string, DISCORD_CLIENT_ID: string, DISCORD_GUILD_ID: string, POLL_INTERVAL_MS: number, SCHEDULER_CONCURRENCY: number, DISCORD_EPHEMERAL_REPLIES: boolean }}
  */
 export function loadEnv({ loadDotenvFile = true } = {}) {
   if (loadDotenvFile) {

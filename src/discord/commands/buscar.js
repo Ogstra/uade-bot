@@ -81,9 +81,15 @@ export const buscarCommand = {
 
   async execute(
     interaction,
-    { db = getDb(), env, credentialOnboarding = runFullCredentialOnboarding, onJobCreated } = {},
+    {
+      db = getDb(),
+      env,
+      credentialOnboarding = runFullCredentialOnboarding,
+      onJobCreated,
+      ephemeralReplies = false,
+    } = {},
   ) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ ephemeral: ephemeralReplies });
 
     let filtros;
     try {

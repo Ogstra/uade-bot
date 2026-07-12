@@ -18,7 +18,7 @@ export const detenerCommand = {
 
   autocomplete: autocompleteUserJobs,
 
-  async execute(interaction, { db = getDb() } = {}) {
+  async execute(interaction, { db = getDb(), ephemeralReplies = false } = {}) {
     const job = getOwnedJobFromInteraction(db, interaction);
     if (!job) {
       await replyJobNotFound(interaction);
@@ -26,6 +26,6 @@ export const detenerCommand = {
     }
 
     deleteJob(db, job.id);
-    await interaction.reply({ content: jobActionMessage('detenida', job), ephemeral: true });
+    await interaction.reply({ content: jobActionMessage('detenida', job), ephemeral: ephemeralReplies });
   },
 };

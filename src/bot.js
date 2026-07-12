@@ -23,6 +23,7 @@ async function main() {
       logger,
       commandContext: {
         onJobCreated: scheduler.pollJobNow,
+        ephemeralReplies: env.DISCORD_EPHEMERAL_REPLIES,
       },
     }),
   );

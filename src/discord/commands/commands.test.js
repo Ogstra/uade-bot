@@ -96,8 +96,37 @@ test('/buscar validates locally, creates duplicate jobs, and never calls live se
       dias: ['LU', 'MI'],
       sedesExcluidas: ['Monserrat', 'Recoleta'],
     });
-    assert.deepEqual(interaction.calls[0], ['deferReply', { ephemeral: true }]);
+    assert.deepEqual(interaction.calls[0], ['deferReply', { ephemeral: false }]);
     assert.match(String(interaction.calls.at(-1)[1]), /Busqueda creada/i);
+  } finally {
+    db.close();
+  }
+});
+
+test('/buscar, /detener, /pausar, and /reanudar default to public replies and honor ephemeralReplies: true', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const buscarInteraction = createInteraction();
+    await buscarCommand.execute(buscarInteraction, { db });
+    assert.deepEqual(buscarInteraction.calls[0], ['deferReply', { ephemeral: false }]);
+
+    const buscarEphemeral = createInteraction({ userId: 'user-2' });
+    await buscarCommand.execute(buscarEphemeral, { db, ephemeralReplies: true });
+    assert.deepEqual(buscarEphemeral.calls[0], ['deferReply', { ephemeral: true }]);
+
+    const [job] = listJobsByUser(db, 'user-1');
+
+    const pausarInteraction = createInteraction({ options: { busqueda: String(job.id) } });
+    await pausarCommand.execute(pausarInteraction, { db });
+    assert.equal(pausarInteraction.calls[0][1].ephemeral, false);
+
+    const reanudarInteraction = createInteraction({ options: { busqueda: String(job.id) } });
+    await reanudarCommand.execute(reanudarInteraction, { db, ephemeralReplies: true });
+    assert.equal(reanudarInteraction.calls[0][1].ephemeral, true);
+
+    const detenerInteraction = createInteraction({ options: { busqueda: String(job.id) } });
+    await detenerCommand.execute(detenerInteraction, { db });
+    assert.equal(detenerInteraction.calls[0][1].ephemeral, false);
   } finally {
     db.close();
   }

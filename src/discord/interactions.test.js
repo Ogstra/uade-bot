@@ -119,7 +119,7 @@ test('dispatcher passes commandContext to autocomplete handlers', async () => {
   assert.deepEqual(seenContexts, [commandContext]);
 });
 
-test('/buscar defers ephemerally before async work and finishes with editReply()', async () => {
+test('/buscar defers before async work and finishes with editReply(), publicly by default', async () => {
   const events = [];
   const interaction = createInteraction({
     deferReply: async (payload) => events.push(['deferReply', payload]),
@@ -133,6 +133,23 @@ test('/buscar defers ephemerally before async work and finishes with editReply()
   });
 
   assert.equal(events[0][0], 'deferReply');
-  assert.deepEqual(events[0][1], { ephemeral: true });
+  assert.deepEqual(events[0][1], { ephemeral: false });
   assert.equal(events.at(-1)[0], 'editReply');
+});
+
+test('/buscar defers ephemerally when ephemeralReplies: true is set', async () => {
+  const events = [];
+  const interaction = createInteraction({
+    deferReply: async (payload) => events.push(['deferReply', payload]),
+    editReply: async (payload) => events.push(['editReply', payload]),
+  });
+  const db = createDatabase(':memory:');
+
+  await buscarCommand.execute(interaction, {
+    db,
+    credentialOnboarding: async () => ({ ok: true, message: 'ok' }),
+    ephemeralReplies: true,
+  });
+
+  assert.deepEqual(events[0], ['deferReply', { ephemeral: true }]);
 });

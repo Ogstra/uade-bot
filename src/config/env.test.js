@@ -20,6 +20,7 @@ beforeEach(() => {
   delete process.env.DISCORD_BOT_TOKEN;
   delete process.env.DISCORD_CLIENT_ID;
   delete process.env.DISCORD_GUILD_ID;
+  delete process.env.DISCORD_EPHEMERAL_REPLIES;
 });
 
 afterEach(() => {
@@ -59,4 +60,43 @@ test('loadEnv() returns Discord variables alongside prior Phase 1 and 2 variable
   assert.equal(env.DISCORD_GUILD_ID, 'discord-guild-id');
   assert.equal(env.POLL_INTERVAL_MS, 30000);
   assert.equal(env.SCHEDULER_CONCURRENCY, 2);
+});
+
+test('loadEnv() defaults DISCORD_EPHEMERAL_REPLIES to false (public replies) when unset', () => {
+  setBaseEnv();
+  process.env.DISCORD_BOT_TOKEN = 'discord-token';
+  process.env.DISCORD_CLIENT_ID = 'discord-client-id';
+  process.env.DISCORD_GUILD_ID = 'discord-guild-id';
+
+  const env = loadEnv({ loadDotenvFile: false });
+
+  assert.equal(env.DISCORD_EPHEMERAL_REPLIES, false);
+});
+
+test('loadEnv() coerces DISCORD_EPHEMERAL_REPLIES="true" to boolean true', () => {
+  setBaseEnv();
+  process.env.DISCORD_BOT_TOKEN = 'discord-token';
+  process.env.DISCORD_CLIENT_ID = 'discord-client-id';
+  process.env.DISCORD_GUILD_ID = 'discord-guild-id';
+  process.env.DISCORD_EPHEMERAL_REPLIES = 'true';
+
+  const env = loadEnv({ loadDotenvFile: false });
+
+  assert.equal(env.DISCORD_EPHEMERAL_REPLIES, true);
+});
+
+test('loadEnv() rejects a non-"true"/"false" DISCORD_EPHEMERAL_REPLIES value', () => {
+  setBaseEnv();
+  process.env.DISCORD_BOT_TOKEN = 'discord-token';
+  process.env.DISCORD_CLIENT_ID = 'discord-client-id';
+  process.env.DISCORD_GUILD_ID = 'discord-guild-id';
+  process.env.DISCORD_EPHEMERAL_REPLIES = 'yes';
+
+  assert.throws(
+    () => loadEnv({ loadDotenvFile: false }),
+    (err) => {
+      assert.match(err.message, /DISCORD_EPHEMERAL_REPLIES/);
+      return true;
+    },
+  );
 });
