@@ -1,7 +1,8 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { updateJobStatus } from '../../db/jobs.repository.js';
-import { autocompleteUserJobs, buildJobDisplay, getOwnedJobFromInteraction, replyJobNotFound } from './job-selection.js';
+import { autocompleteUserJobs, getOwnedJobFromInteraction, replyJobNotFound } from './job-selection.js';
+import { jobActionMessage } from '../messages.js';
 
 export const pausarCommand = {
   data: new SlashCommandBuilder()
@@ -25,6 +26,6 @@ export const pausarCommand = {
     }
 
     updateJobStatus(db, job.id, 'paused_by_user');
-    await interaction.reply({ content: `Busqueda pausada: ${buildJobDisplay(job)}.`, ephemeral: true });
+    await interaction.reply({ content: jobActionMessage('pausada', job), ephemeral: true });
   },
 };

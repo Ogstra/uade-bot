@@ -8,6 +8,7 @@ import {
   markPauseNotificationSent,
 } from '../db/users.repository.js';
 import logger from '../logger.js';
+import { pauseNotificationMessage, vacancyNotificationMessage } from './messages.js';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,36 +51,6 @@ export function notificationDecision(job, outcome) {
   return { action: 'suppress', nextState, nextCupos };
 }
 
-function formatVacancyLines(vacancies) {
-  return vacancies
-    .map(
-      (vacancy) =>
-        `Sede: ${vacancy.sede}\nHorario: ${vacancy.horario}\nDias: ${vacancy.dias.join(', ')}\n${vacancy.cupos} cupos`,
-    )
-    .join('\n\n');
-}
-
-function formatVacancyMessage(job, outcome, { channel = false } = {}) {
-  const title = channel
-    ? `<@${job.discordUserId}> se encontro una vacante para ${job.label}.`
-    : `Se encontro una vacante para ${job.label}.`;
-
-  return (
-    `${title}\n` +
-    `Materia: ${job.filtros.materiaCodigo}\n` +
-    `Turno buscado: ${job.filtros.turno}\n\n` +
-    formatVacancyLines(outcome.vacancies)
-  );
-}
-
-function pauseMessage(reason) {
-  if (reason === 'needs_new_start_url') {
-    return 'Pausé tus búsquedas porque el link de inscripción de UADE parece vencido. Usá /credenciales modo:link para actualizarlo.';
-  }
-
-  return 'Pausé tus búsquedas porque tus credenciales de UADE parecen vencidas. Usá /credenciales para actualizarlas.';
-}
-
 export function createNotificationDispatcher({ client, db, delayMs = 250, log = logger }) {
   let sendTail = Promise.resolve();
 
@@ -119,7 +90,7 @@ export function createNotificationDispatcher({ client, db, delayMs = 250, log = 
     }
 
     try {
-      await enqueueSend(() => sendUserDm(job.discordUserId, pauseMessage(reason)));
+      await enqueueSend(() => sendUserDm(job.discordUserId, pauseNotificationMessage(reason)));
       markPauseNotificationSent(db, job.discordUserId, reason);
     } catch (err) {
       log.error(
@@ -146,7 +117,7 @@ export function createNotificationDispatcher({ client, db, delayMs = 250, log = 
     }
 
     let successCount = 0;
-    const dmContent = formatVacancyMessage(freshJob, outcome);
+    const dmContent = vacancyNotificationMessage(freshJob, outcome);
     try {
       await enqueueSend(() => sendUserDm(freshJob.discordUserId, dmContent));
       successCount += 1;
@@ -159,7 +130,9 @@ export function createNotificationDispatcher({ client, db, delayMs = 250, log = 
 
     if (freshJob.channelId) {
       try {
-        await enqueueSend(() => sendChannelMessage(freshJob.channelId, formatVacancyMessage(freshJob, outcome, { channel: true })));
+        await enqueueSend(() =>
+          sendChannelMessage(freshJob.channelId, vacancyNotificationMessage(freshJob, outcome, { channel: true })),
+        );
         successCount += 1;
       } catch (err) {
         log.error(

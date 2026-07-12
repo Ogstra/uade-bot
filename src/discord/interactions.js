@@ -1,7 +1,6 @@
 import { isFromAuthorizedGuild, isGuildInteraction } from './access-control.js';
 import logger from '../logger.js';
-
-const GENERIC_ERROR = 'No pude procesar ese comando. Proba de nuevo en unos minutos.';
+import { genericInteractionErrorMessage } from './messages.js';
 
 function isDispatchableInteraction(interaction) {
   return interaction.isChatInputCommand?.() || interaction.isAutocomplete?.();
@@ -13,11 +12,11 @@ async function sendGenericError(interaction) {
   }
 
   if (interaction.deferred || interaction.replied) {
-    await interaction.editReply(GENERIC_ERROR);
+    await interaction.editReply(genericInteractionErrorMessage());
     return;
   }
 
-  await interaction.reply({ content: GENERIC_ERROR, ephemeral: true });
+  await interaction.reply({ content: genericInteractionErrorMessage(), ephemeral: true });
 }
 
 export function createInteractionHandler({

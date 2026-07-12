@@ -1,8 +1,8 @@
 import { getJob, listJobsByUser } from '../../db/jobs.repository.js';
+import { jobDisplay, jobNotFoundMessage } from '../messages.js';
 
 export function buildJobDisplay(job) {
-  const dias = job.filtros.dias.join('/');
-  return `${job.label} - ${job.filtros.turno} - ${dias}`;
+  return jobDisplay(job);
 }
 
 export async function autocompleteUserJobs(interaction, { db }) {
@@ -32,5 +32,5 @@ export function getOwnedJobFromInteraction(db, interaction) {
 }
 
 export async function replyJobNotFound(interaction) {
-  await interaction.reply({ content: 'No encontre esa busqueda entre tus busquedas activas.', ephemeral: true });
+  await interaction.reply({ content: jobNotFoundMessage(), ephemeral: true });
 }

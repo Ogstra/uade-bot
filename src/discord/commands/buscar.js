@@ -1,11 +1,11 @@
 import { SlashCommandBuilder } from 'discord.js';
-import { ZodError } from 'zod';
 import { getDb } from '../../db/database.js';
 import { getCredentials } from '../../db/credentials.repository.js';
 import { createJob } from '../../db/jobs.repository.js';
 import { getUser, upsertUser } from '../../db/users.repository.js';
 import { FiltrosSchema } from '../../schemas.js';
 import { runFullCredentialOnboarding } from '../credentials-flow.js';
+import { searchCreatedMessage, searchValidationError } from '../messages.js';
 
 const TURNO_CHOICES = ['Mañana', 'Tarde', 'Noche', 'Intensivo', 'Online'];
 const OFRECIMIENTO_CHOICES = [
@@ -33,17 +33,6 @@ function parseFiltrosFromOptions(options) {
     dias: parseDias(options.getString('dias')).filter((dia) => VALID_DIAS.has(dia)),
     sedesExcluidas: parseCsv(options.getString('sedes_excluidas')),
   });
-}
-
-function validationMessage(err) {
-  if (err instanceof ZodError) {
-    const invalidMateria = err.issues.some((issue) => issue.path.includes('materiaCodigo'));
-    if (invalidMateria) {
-      return 'El codigo de materia tiene que tener formato N.N.NNN, por ejemplo 3.1.050.';
-    }
-  }
-
-  return 'No pude validar esos filtros. Revisa materia, dias, turno y ofrecimiento.';
 }
 
 export const buscarCommand = {
@@ -96,7 +85,7 @@ export const buscarCommand = {
     try {
       filtros = parseFiltrosFromOptions(interaction.options);
     } catch (err) {
-      await interaction.editReply(validationMessage(err));
+      await interaction.editReply(searchValidationError(err));
       return;
     }
 
@@ -110,25 +99,19 @@ export const buscarCommand = {
       label,
     });
     const user = getUser(db, interaction.user.id);
-    const sedes = filtros.sedesExcluidas.length > 0 ? filtros.sedesExcluidas.join(', ') : 'ninguna';
-    const base =
-      `Busqueda creada: ${job.label}\n` +
-      `Materia: ${filtros.materiaCodigo}\n` +
-      `Turno: ${filtros.turno}\n` +
-      `Ofrecimiento: ${filtros.ofrecimiento}\n` +
-      `Dias: ${filtros.dias.join(', ')}\n` +
-      `Sedes excluidas: ${sedes}`;
-    const pausedSuffix = user?.pauseReason
-      ? `\nQuedo creada pausada por el estado de tu cuenta: ${user.pauseReason}.`
-      : '';
-    let credentialSuffix = '';
+    let credentialResult;
     if (!hadCredentials) {
-      const result = await credentialOnboarding(interaction, { db, env });
-      credentialSuffix = result.ok
-        ? '\nComo no tenias credenciales guardadas, te las pedi por DM y quedaron guardadas.'
-        : `\n${result.message}`;
+      credentialResult = await credentialOnboarding(interaction, { db, env });
     }
 
-    await interaction.editReply(`${base}${pausedSuffix}${credentialSuffix}`);
+    await interaction.editReply(
+      searchCreatedMessage({
+        job,
+        filtros,
+        pauseReason: user?.pauseReason,
+        credentialResult,
+        requestedCredentials: !hadCredentials,
+      }),
+    );
   },
 };

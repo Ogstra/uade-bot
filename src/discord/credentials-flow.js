@@ -3,6 +3,14 @@ import { upsertUser } from '../db/users.repository.js';
 import { encryptCredentials, decryptCredentials } from '../crypto/credentials-crypto.js';
 import { loadEnv } from '../config/env.js';
 import logger from '../logger.js';
+import {
+  credentialOnboardingFailedMessage,
+  credentialPrompts,
+  credentialRotationFailedMessage,
+  credentialsSavedMessage,
+  credentialsUpdatedMessage,
+  dmUnavailableMessage,
+} from './messages.js';
 
 const DEFAULT_TIMEOUT_MS = 120000;
 
@@ -17,9 +25,9 @@ async function ask(dm, message, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
 }
 
 export async function collectCredentialValues(dm, options = {}) {
-  const uadeUsername = await ask(dm, 'Mandame tu usuario de UADE.', options);
-  const uadePassword = await ask(dm, 'Mandame tu password de UADE.', options);
-  const uadeStartUrl = await ask(dm, 'Mandame el link de inscripcion de UADE.', options);
+  const uadeUsername = await ask(dm, credentialPrompts.username, options);
+  const uadePassword = await ask(dm, credentialPrompts.password, options);
+  const uadeStartUrl = await ask(dm, credentialPrompts.startUrl, options);
   return { uadeUsername, uadePassword, uadeStartUrl };
 }
 
@@ -62,7 +70,7 @@ export async function runFullCredentialOnboarding(interaction, { db, env } = {})
     logger.warn({ event: 'credential_dm_open_failed', discordUserId: interaction.user.id }, 'Could not open credential DM');
     return {
       ok: false,
-      message: 'No pude abrirte DM. Habilita mensajes privados del servidor y volve a intentar.',
+      message: dmUnavailableMessage(),
     };
   }
 
@@ -74,7 +82,7 @@ export async function runFullCredentialOnboarding(interaction, { db, env } = {})
       masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,
       values,
     });
-    return { ok: true, message: 'Credenciales guardadas.' };
+    return { ok: true, message: credentialsSavedMessage() };
   } catch (err) {
     logger.warn(
       { event: 'credential_onboarding_failed', discordUserId: interaction.user.id, message: err.message },
@@ -82,7 +90,7 @@ export async function runFullCredentialOnboarding(interaction, { db, env } = {})
     );
     return {
       ok: false,
-      message: 'No pude completar la carga de credenciales. Volve a intentar con /credenciales.',
+      message: credentialOnboardingFailedMessage(),
     };
   }
 }
@@ -95,7 +103,7 @@ export async function runCredentialRotation(interaction, { db, env } = {}) {
     logger.warn({ event: 'credential_dm_open_failed', discordUserId: interaction.user.id }, 'Could not open credential DM');
     return {
       ok: false,
-      message: 'No pude abrirte DM. Habilita mensajes privados del servidor y volve a intentar.',
+      message: dmUnavailableMessage(),
     };
   }
 
@@ -103,15 +111,15 @@ export async function runCredentialRotation(interaction, { db, env } = {}) {
   try {
     const resolvedEnv = env ?? loadEnv();
     if (mode === 'usuario_password') {
-      const uadeUsername = await ask(dm, 'Mandame tu nuevo usuario de UADE.');
-      const uadePassword = await ask(dm, 'Mandame tu nuevo password de UADE.');
+      const uadeUsername = await ask(dm, credentialPrompts.newUsername);
+      const uadePassword = await ask(dm, credentialPrompts.newPassword);
       rotateCredentialValues(db, {
         discordUserId: interaction.user.id,
         masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,
         updates: { uadeUsername, uadePassword },
       });
     } else if (mode === 'link') {
-      const uadeStartUrl = await ask(dm, 'Mandame el nuevo link de inscripcion de UADE.');
+      const uadeStartUrl = await ask(dm, credentialPrompts.newStartUrl);
       rotateCredentialValues(db, {
         discordUserId: interaction.user.id,
         masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,
@@ -126,7 +134,7 @@ export async function runCredentialRotation(interaction, { db, env } = {}) {
       });
     }
 
-    return { ok: true, message: mode === 'todo' ? 'Credenciales guardadas.' : 'Credenciales actualizadas.' };
+    return { ok: true, message: mode === 'todo' ? credentialsSavedMessage() : credentialsUpdatedMessage() };
   } catch (err) {
     logger.warn(
       { event: 'credential_rotation_failed', discordUserId: interaction.user.id, mode, message: err.message },
@@ -134,7 +142,7 @@ export async function runCredentialRotation(interaction, { db, env } = {}) {
     );
     return {
       ok: false,
-      message: 'No pude actualizar tus credenciales. Volve a intentar.',
+      message: credentialRotationFailedMessage(),
     };
   }
 }
