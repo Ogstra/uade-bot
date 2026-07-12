@@ -34,7 +34,7 @@ test('/buscar exports a SlashCommandBuilder with the expected options and fixed 
 });
 
 test('commands index exposes /buscar by name', () => {
-  assert.equal(commands.length, 6);
+  assert.equal(commands.length, 9);
   assert.equal(commandsByName.get('buscar'), buscarCommand);
 });
 

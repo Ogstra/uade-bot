@@ -75,6 +75,18 @@ export function listActiveJobs(db) {
 }
 
 /**
+ * Every job across every account, active or paused -- admin-only
+ * visibility (unlike `listJobsByUser`, not scoped to a single caller).
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @returns {import('zod').infer<typeof SearchJobSchema>[]}
+ */
+export function listAllJobs(db) {
+  const rows = db.prepare('SELECT * FROM jobs ORDER BY id ASC').all();
+  return rows.map(rowToJob);
+}
+
+/**
  * @param {import('better-sqlite3').Database} db
  * @param {string} discordUserId
  * @returns {import('zod').infer<typeof SearchJobSchema>[]}

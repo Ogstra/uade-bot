@@ -56,6 +56,26 @@ export function getUser(db, discordUserId) {
 
 /**
  * @param {import('better-sqlite3').Database} db
+ * @returns {number}
+ */
+export function countUsers(db) {
+  return db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+}
+
+/**
+ * Accounts currently paused for any reason (credentials, stale link, rate
+ * limit) -- admin-only visibility.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @returns {import('zod').infer<typeof UserRecordSchema>[]}
+ */
+export function listPausedAccounts(db) {
+  const rows = db.prepare('SELECT * FROM users WHERE pause_reason IS NOT NULL ORDER BY discord_user_id ASC').all();
+  return rows.map(rowToUser);
+}
+
+/**
+ * @param {import('better-sqlite3').Database} db
  * @param {string} discordUserId
  * @param {{ pauseReason: string | null, pauseUntil: number | null, backoffAttempt: number }} state
  * @returns {import('zod').infer<typeof UserRecordSchema>}

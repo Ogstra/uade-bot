@@ -300,3 +300,73 @@ test('dispatcher never throws when both the command handler and the fallback err
     db.close();
   }
 });
+
+function fakePermissions(hasAdmin) {
+  return { has: () => hasAdmin };
+}
+
+test('dispatcher rejects a non-admin invoking an adminOnly command with a not-authorized reply', async () => {
+  const executed = [];
+  const command = { adminOnly: true, execute: async () => executed.push('ran') };
+  const interaction = createInteraction({ commandName: 'admin-stats', memberPermissions: fakePermissions(false) });
+  const handler = createInteractionHandler({
+    commandsByName: new Map([['admin-stats', command]]),
+    env: { DISCORD_GUILD_ID: 'guild-1' },
+    logger: createLogger(),
+  });
+
+  await handler(interaction);
+
+  assert.deepEqual(executed, []);
+  assert.equal(interaction.calls[0][0], 'reply');
+  assert.match(interaction.calls[0][1].content, /solo para administradores/i);
+});
+
+test('dispatcher lets an admin invoke an adminOnly command', async () => {
+  const executed = [];
+  const command = {
+    adminOnly: true,
+    execute: async (i) => {
+      executed.push('ran');
+      await i.reply({ content: 'ok', ephemeral: true });
+    },
+  };
+  const interaction = createInteraction({ commandName: 'admin-stats', memberPermissions: fakePermissions(true) });
+  const db = createDatabase(':memory:');
+  try {
+    const handler = createInteractionHandler({
+      commandsByName: new Map([['admin-stats', command]]),
+      env: { DISCORD_GUILD_ID: 'guild-1' },
+      logger: createLogger(),
+      commandContext: { db },
+    });
+
+    await handler(interaction);
+
+    assert.deepEqual(executed, ['ran']);
+  } finally {
+    db.close();
+  }
+});
+
+test('dispatcher silently empties autocomplete for a non-admin on an adminOnly command, without leaking choices', async () => {
+  const command = {
+    adminOnly: true,
+    autocomplete: async (i) => i.respond([{ name: 'secret-job-of-another-user', value: '1' }]),
+  };
+  const interaction = createInteraction({
+    commandName: 'admin-detener',
+    isChatInputCommand: () => false,
+    isAutocomplete: () => true,
+    memberPermissions: fakePermissions(false),
+  });
+  const handler = createInteractionHandler({
+    commandsByName: new Map([['admin-detener', command]]),
+    env: { DISCORD_GUILD_ID: 'guild-1' },
+    logger: createLogger(),
+  });
+
+  await handler(interaction);
+
+  assert.deepEqual(interaction.calls, [['respond', []]]);
+});

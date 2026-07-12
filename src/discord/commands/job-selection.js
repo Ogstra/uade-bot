@@ -1,5 +1,5 @@
 import { getDb } from '../../db/database.js';
-import { getJob, listJobsByUser } from '../../db/jobs.repository.js';
+import { getJob, listAllJobs, listJobsByUser } from '../../db/jobs.repository.js';
 import { getUser } from '../../db/users.repository.js';
 import { formatJobIdentity, formatJobStatus, jobNotFoundMessage, parseLastOutcome } from '../messages.js';
 
@@ -46,6 +46,26 @@ export async function autocompleteUserJobs(interaction, { db = getDb() } = {}) {
   await interaction.respond(choices);
 }
 
+/**
+ * Admin-only autocomplete: every account's jobs, not just the caller's own
+ * (unlike `autocompleteUserJobs`). The job id itself is prefixed into the
+ * label since duplicate labels across *different* accounts are far more
+ * likely than within one account.
+ */
+export async function autocompleteAllJobs(interaction, { db = getDb() } = {}) {
+  const focused = String(interaction.options.getFocused() ?? '').toLowerCase();
+  const jobs = listAllJobs(db);
+  const choices = jobs
+    .map((job) => ({
+      name: `#${job.id} · ${buildJobDisplay(job, getUser(db, job.discordUserId))}`.slice(0, 100),
+      value: String(job.id),
+    }))
+    .filter((choice) => choice.name.toLowerCase().includes(focused))
+    .slice(0, 25);
+
+  await interaction.respond(choices);
+}
+
 export function getOwnedJob(db, jobId, discordUserId) {
   if (!Number.isInteger(jobId)) {
     return null;
@@ -61,6 +81,15 @@ export function getOwnedJob(db, jobId, discordUserId) {
 
 export function getOwnedJobFromInteraction(db, interaction) {
   return getOwnedJob(db, Number(interaction.options.getString('busqueda')), interaction.user.id);
+}
+
+/**
+ * Admin-only lookup by job id, no ownership check -- the whole point of
+ * `/admin-detener` is acting on jobs the admin doesn't own.
+ */
+export function getAnyJobFromInteraction(db, interaction) {
+  const jobId = Number(interaction.options.getString('busqueda'));
+  return Number.isInteger(jobId) ? getJob(db, jobId) : null;
 }
 
 export async function replyJobNotFound(interaction) {

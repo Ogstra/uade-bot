@@ -1,9 +1,9 @@
-import { isFromAuthorizedGuild, isGuildInteraction } from './access-control.js';
+import { isAdminInteraction, isFromAuthorizedGuild, isGuildInteraction } from './access-control.js';
 import { handleDetenerButton, isDetenerButton } from './components.js';
 import { getDb } from '../db/database.js';
 import { logCommandUsage } from '../db/command-log.repository.js';
 import logger from '../logger.js';
-import { genericInteractionErrorMessage } from './messages.js';
+import { genericInteractionErrorMessage, notAuthorizedMessage } from './messages.js';
 
 function isDispatchableInteraction(interaction) {
   return interaction.isChatInputCommand?.() || interaction.isAutocomplete?.() || interaction.isButton?.();
@@ -68,6 +68,18 @@ export function createInteractionHandler({
 
       const command = commandsByName.get(interaction.commandName);
       if (!command) {
+        return;
+      }
+
+      if (command.adminOnly && !isAdminInteraction(interaction)) {
+        if (interaction.isAutocomplete?.()) {
+          // Silently empty, not an error reply -- an autocomplete listing
+          // every account's jobs would itself leak data to a non-admin
+          // before they even see a permission error.
+          await interaction.respond([]);
+        } else {
+          await interaction.reply({ content: notAuthorizedMessage(), ephemeral: true });
+        }
         return;
       }
 

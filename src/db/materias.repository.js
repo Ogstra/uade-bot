@@ -27,3 +27,11 @@ export function getMateriaNombre(db, codigo) {
   const row = db.prepare('SELECT nombre FROM materias WHERE codigo = ?').get(codigo);
   return row?.nombre ?? null;
 }
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @returns {number}
+ */
+export function countMaterias(db) {
+  return db.prepare('SELECT COUNT(*) AS n FROM materias').get().n;
+}

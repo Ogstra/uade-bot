@@ -31,3 +31,31 @@ export function listCommandUsageByUser(db, discordUserId, { limit = 50 } = {}) {
     createdAt: row.created_at,
   }));
 }
+
+/**
+ * Usage counts per command name, most-used first -- admin stats.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {{ limit?: number }} [options]
+ * @returns {{ commandName: string, count: number }[]}
+ */
+export function countCommandUsageByCommand(db, { limit = 10 } = {}) {
+  const rows = db
+    .prepare(
+      `SELECT command_name, COUNT(*) AS count FROM command_log
+       GROUP BY command_name
+       ORDER BY count DESC
+       LIMIT ?`,
+    )
+    .all(limit);
+
+  return rows.map((row) => ({ commandName: row.command_name, count: row.count }));
+}
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @returns {number}
+ */
+export function countTotalCommandUsage(db) {
+  return db.prepare('SELECT COUNT(*) AS n FROM command_log').get().n;
+}

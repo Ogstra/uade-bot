@@ -228,3 +228,95 @@ export function pauseNotificationMessage(reason) {
 export function genericInteractionErrorMessage() {
   return 'No pude procesar ese comando. Proba de nuevo en unos minutos.';
 }
+
+export function notAuthorizedMessage() {
+  return 'Ese comando es solo para administradores del servidor.';
+}
+
+export function adminNoJobsMessage() {
+  return '_No hay busquedas activas ni pausadas en ninguna cuenta._';
+}
+
+/**
+ * One compact line per job for `/admin-estado` -- unlike `formatJobStatusBlock`
+ * (multi-line, one caller's own searches), this lists every account's jobs
+ * in one message, so it has to stay terse to fit Discord's 2000-char limit.
+ */
+export function formatAdminJobLine(job) {
+  const identity = formatJobIdentity(job, parseLastOutcome(job.lastOutcome));
+  const estado = job.status === 'paused_by_user' ? 'pausada' : 'activa';
+  return `**#${job.id}** <@${job.discordUserId}> · ${identity} · ${job.filtros.turno} ${job.filtros.dias.join('/')} · ${estado} · ${formatLastOutcome(job.lastOutcome)}`;
+}
+
+/**
+ * @param {import('zod').infer<typeof import('../schemas.js').SearchJobSchema>[]} jobs
+ */
+export function adminJobListMessage(jobs) {
+  if (jobs.length === 0) {
+    return adminNoJobsMessage();
+  }
+
+  const lines = jobs.map(formatAdminJobLine);
+  const joined = lines.join('\n');
+
+  // Discord message content cap is 2000 chars -- truncate defensively
+  // rather than let a large friends-group roster fail to send at all.
+  if (joined.length <= 1900) {
+    return joined;
+  }
+
+  let truncated = '';
+  let shown = 0;
+  for (const line of lines) {
+    if (truncated.length + line.length + 1 > 1850) {
+      break;
+    }
+    truncated += (truncated ? '\n' : '') + line;
+    shown += 1;
+  }
+  return `${truncated}\n_...y ${jobs.length - shown} mas (no entran en un solo mensaje)._`;
+}
+
+export function adminJobNotFoundMessage() {
+  return 'No encontre ninguna busqueda (de nadie) con ese id.';
+}
+
+export function adminJobStoppedMessage(job) {
+  return `**Busqueda detenida (admin):** #${job.id} de <@${job.discordUserId}> — ${jobDisplay(job)}.`;
+}
+
+export function adminStatsMessage({
+  totalUsers,
+  totalActiveJobs,
+  totalPausedJobs,
+  pausedAccounts,
+  materiasCached,
+  totalCommandUsage,
+  topCommands,
+}) {
+  const lines = [
+    '**Estadisticas del bot**',
+    `**Usuarios registrados:** ${totalUsers}`,
+    `**Busquedas activas:** ${totalActiveJobs}`,
+    `**Busquedas pausadas (por usuario):** ${totalPausedJobs}`,
+    `**Cuentas pausadas (credenciales/link/rate limit):** ${pausedAccounts.length}`,
+  ];
+
+  if (pausedAccounts.length > 0) {
+    lines.push(
+      pausedAccounts
+        .map((user) => `  - <@${user.discordUserId}>: _${user.pauseReason}_`)
+        .join('\n'),
+    );
+  }
+
+  lines.push(`**Materias en cache:** ${materiasCached}`);
+  lines.push(`**Comandos ejecutados (total):** ${totalCommandUsage}`);
+
+  if (topCommands.length > 0) {
+    lines.push('**Comandos mas usados:**');
+    lines.push(topCommands.map((c) => `  - \`/${c.commandName}\`: ${c.count}`).join('\n'));
+  }
+
+  return lines.join('\n');
+}

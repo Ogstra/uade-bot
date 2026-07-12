@@ -22,6 +22,6 @@ test('registerCommands registers all commands only to the configured guild route
   assert.equal(calls[0].route, Routes.applicationGuildCommands('client-1', 'guild-1'));
   assert.deepEqual(
     calls[0].body.body.map((command) => command.name),
-    ['buscar', 'estado', 'detener', 'pausar', 'reanudar', 'credenciales'],
+    ['buscar', 'estado', 'detener', 'pausar', 'reanudar', 'credenciales', 'admin-estado', 'admin-detener', 'admin-stats'],
   );
 });
