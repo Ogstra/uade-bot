@@ -205,7 +205,7 @@ export function vacancyNotificationMessage(job, outcome, { channel = false } = {
 
   return (
     `${title}\n` +
-    `**Turno buscado:** ${job.filtros.turno}\n\n` +
+    `**Turno:** ${job.filtros.turno}\n\n` +
     formatVacancyLines(outcome.vacancies)
   );
 }
