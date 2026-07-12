@@ -1,9 +1,11 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { ZodError } from 'zod';
 import { getDb } from '../../db/database.js';
+import { getCredentials } from '../../db/credentials.repository.js';
 import { createJob } from '../../db/jobs.repository.js';
 import { getUser, upsertUser } from '../../db/users.repository.js';
 import { FiltrosSchema } from '../../schemas.js';
+import { runFullCredentialOnboarding } from '../credentials-flow.js';
 
 const TURNO_CHOICES = ['Mañana', 'Tarde', 'Noche', 'Intensivo', 'Online'];
 const OFRECIMIENTO_CHOICES = [
@@ -87,7 +89,7 @@ export const buscarCommand = {
         .setRequired(false),
     ),
 
-  async execute(interaction, { db = getDb() } = {}) {
+  async execute(interaction, { db = getDb(), env, credentialOnboarding = runFullCredentialOnboarding } = {}) {
     await interaction.deferReply({ ephemeral: true });
 
     let filtros;
@@ -99,6 +101,7 @@ export const buscarCommand = {
     }
 
     upsertUser(db, interaction.user.id);
+    const hadCredentials = getCredentials(db, interaction.user.id) !== null;
     const label = interaction.options.getString('etiqueta') || filtros.materiaCodigo;
     const job = createJob(db, {
       discordUserId: interaction.user.id,
@@ -118,7 +121,14 @@ export const buscarCommand = {
     const pausedSuffix = user?.pauseReason
       ? `\nQuedo creada pausada por el estado de tu cuenta: ${user.pauseReason}.`
       : '';
+    let credentialSuffix = '';
+    if (!hadCredentials) {
+      const result = await credentialOnboarding(interaction, { db, env });
+      credentialSuffix = result.ok
+        ? '\nComo no tenias credenciales guardadas, te las pedi por DM y quedaron guardadas.'
+        : `\n${result.message}`;
+    }
 
-    await interaction.editReply(`${base}${pausedSuffix}`);
+    await interaction.editReply(`${base}${pausedSuffix}${credentialSuffix}`);
   },
 };

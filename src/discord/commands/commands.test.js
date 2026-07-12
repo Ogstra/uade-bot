@@ -45,7 +45,7 @@ function createInteraction({ userId = 'user-1', channelId = 'channel-1', options
 test('command builders expose search CRUD commands with required options and fixed choices', () => {
   assert.deepEqual(
     commands.map((command) => command.data.name),
-    ['buscar', 'estado', 'detener', 'pausar', 'reanudar'],
+    ['buscar', 'estado', 'detener', 'pausar', 'reanudar', 'credenciales'],
   );
   assert.equal(commandsByName.get('buscar'), buscarCommand);
 

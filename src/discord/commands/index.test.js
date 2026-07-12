@@ -11,7 +11,14 @@ test('/buscar exports a SlashCommandBuilder with the expected options and fixed 
   assert.equal(json.name, 'buscar');
 
   const optionNames = json.options.map((option) => option.name);
-  assert.deepEqual(optionNames, ['materia', 'turno', 'ofrecimiento', 'dias', 'sedes_excluidas']);
+  assert.deepEqual(optionNames, [
+    'materia',
+    'turno',
+    'ofrecimiento',
+    'dias',
+    'sedes_excluidas',
+    'etiqueta',
+  ]);
 
   const turno = json.options.find((option) => option.name === 'turno');
   assert.deepEqual(
@@ -27,7 +34,7 @@ test('/buscar exports a SlashCommandBuilder with the expected options and fixed 
 });
 
 test('commands index exposes /buscar by name', () => {
-  assert.equal(commands.length, 1);
+  assert.equal(commands.length, 6);
   assert.equal(commandsByName.get('buscar'), buscarCommand);
 });
 

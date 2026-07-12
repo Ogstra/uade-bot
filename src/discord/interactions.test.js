@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { createDatabase } from '../db/database.js';
 import { buscarCommand } from './commands/buscar.js';
 import { createInteractionHandler } from './interactions.js';
 
@@ -19,8 +20,16 @@ function createInteraction(overrides = {}) {
     guildId: 'guild-1',
     user: { id: 'user-1' },
     options: {
-      getString() {
-        return null;
+      getString(name) {
+        const values = {
+          materia: '3.1.050',
+          turno: 'Noche',
+          ofrecimiento: 'curricular',
+          dias: 'LU,MI',
+          sedes_excluidas: null,
+          etiqueta: null,
+        };
+        return values[name] ?? null;
       },
     },
     isChatInputCommand: () => true,
@@ -92,8 +101,12 @@ test('/buscar defers ephemerally before async work and finishes with editReply()
     deferReply: async (payload) => events.push(['deferReply', payload]),
     editReply: async (payload) => events.push(['editReply', payload]),
   });
+  const db = createDatabase(':memory:');
 
-  await buscarCommand.execute(interaction);
+  await buscarCommand.execute(interaction, {
+    db,
+    credentialOnboarding: async () => ({ ok: true, message: 'ok' }),
+  });
 
   assert.equal(events[0][0], 'deferReply');
   assert.deepEqual(events[0][1], { ephemeral: true });
