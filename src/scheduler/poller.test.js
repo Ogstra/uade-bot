@@ -8,7 +8,7 @@ import { createJob, getJob } from '../db/jobs.repository.js';
 import { getMateriaNombre } from '../db/materias.repository.js';
 import { encryptCredentials } from '../crypto/credentials-crypto.js';
 import { getBrowser } from '../automation/browser.js';
-import { pollOnce } from './poller.js';
+import { pollOnce, attemptAutoRelink } from './poller.js';
 
 // A 'verified' outcome flows through parseResults(), which launches (and
 // reuses) the shared headless Chromium instance — same reason as
@@ -179,6 +179,216 @@ test('pollOnce persists needs_credentials account-level pause state after an inv
 
     const after = getUser(db, job.discordUserId);
     assert.equal(after.pauseReason, 'needs_credentials');
+  } finally {
+    db.close();
+  }
+});
+
+// --- AUTOLINK-03: attemptAutoRelinkFn is only reachable from the
+// stale_start_url branch of pollOnce -------------------------------------
+
+test('pollOnce never calls attemptAutoRelinkFn for a verified/no_vacancies outcome', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    let relinkCalls = 0;
+    const attemptAutoRelinkFn = async () => {
+      relinkCalls += 1;
+      return { status: 'fallback' };
+    };
+    const runSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
+    const withUadeContextFn = async (creds, run) => run({});
+
+    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+
+    assert.equal(relinkCalls, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('pollOnce never calls attemptAutoRelinkFn for an invalid_credentials/rate_limited/search_failed outcome', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    let relinkCalls = 0;
+    const attemptAutoRelinkFn = async () => {
+      relinkCalls += 1;
+      return { status: 'fallback' };
+    };
+    const withUadeContextFn = async (creds, run) => run({});
+
+    for (const status of ['invalid_credentials', 'rate_limited', 'search_failed']) {
+      relinkCalls = 0;
+      const runSearchFn = async () => (status === 'search_failed' ? { status, reason: 'postback_timeout' } : { status });
+      await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+      assert.equal(relinkCalls, 0, `attemptAutoRelinkFn must not be called for outcome "${status}"`);
+    }
+  } finally {
+    db.close();
+  }
+});
+
+test('pollOnce calls attemptAutoRelinkFn exactly once, with the job and the already-decrypted credentials, when the outcome is stale_start_url', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    let relinkCalls = 0;
+    let capturedJob;
+    let capturedCreds;
+    const attemptAutoRelinkFn = async (dbArg, jobArg, creds) => {
+      relinkCalls += 1;
+      capturedJob = jobArg;
+      capturedCreds = creds;
+      return { status: 'fallback' };
+    };
+    const runSearchFn = async () => ({ status: 'stale_start_url' });
+    const withUadeContextFn = async (creds, run) => run({});
+
+    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+
+    assert.equal(relinkCalls, 1);
+    assert.equal(capturedJob.id, job.id);
+    assert.deepEqual(capturedCreds, {
+      username: PLAINTEXT.uadeUsername,
+      password: PLAINTEXT.uadePassword,
+      masterKey: MASTER_KEY,
+    });
+  } finally {
+    db.close();
+  }
+});
+
+test('a successful automatic relink clears the account pause state after a stale_start_url poll (no needs_new_start_url pause, no DM)', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    const attemptAutoRelinkFn = async () => ({ status: 'success' });
+    const runSearchFn = async () => ({ status: 'stale_start_url' });
+    const withUadeContextFn = async (creds, run) => run({});
+
+    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+
+    const after = getUser(db, job.discordUserId);
+    assert.equal(after.pauseReason, null);
+  } finally {
+    db.close();
+  }
+});
+
+test('a fallback automatic relink preserves the exact pre-existing needs_new_start_url pause behavior', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    const attemptAutoRelinkFn = async () => ({ status: 'fallback' });
+    const runSearchFn = async () => ({ status: 'stale_start_url' });
+    const withUadeContextFn = async (creds, run) => run({});
+
+    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+
+    const after = getUser(db, job.discordUserId);
+    assert.equal(after.pauseReason, 'needs_new_start_url');
+  } finally {
+    db.close();
+  }
+});
+
+test('a successful automatic relink never mutates the persisted outcome — lastOutcome still reflects stale_start_url', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    const attemptAutoRelinkFn = async () => ({ status: 'success' });
+    const runSearchFn = async () => ({ status: 'stale_start_url' });
+    const withUadeContextFn = async (creds, run) => run({});
+
+    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+
+    const updated = getJob(db, job.id);
+    assert.equal(updated.lastOutcome, JSON.stringify({ outcome: 'stale_start_url' }));
+  } finally {
+    db.close();
+  }
+});
+
+// --- attemptAutoRelink unit behavior --------------------------------------
+
+test('attemptAutoRelink rotates uadeStartUrl via rotateCredentialValuesFn and returns only { status: "success" } on an obtainStartUrlFn success', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    let rotateArgs;
+    const withPlainContextFn = async (run) => run({});
+    const obtainStartUrlFn = async () => ({
+      status: 'success',
+      startUrl: 'https://inscripcionespia.uade.edu.ar/x?param=freshlink123',
+    });
+    const rotateCredentialValuesFn = (dbArg, args) => {
+      rotateArgs = args;
+    };
+
+    const result = await attemptAutoRelink(
+      db,
+      job,
+      { username: 'someuser', password: 'somepass', masterKey: MASTER_KEY },
+      { withPlainContextFn, obtainStartUrlFn, rotateCredentialValuesFn },
+    );
+
+    assert.deepEqual(result, { status: 'success' });
+    assert.deepEqual(Object.keys(result), ['status']);
+    assert.equal(rotateArgs.discordUserId, job.discordUserId);
+    assert.equal(rotateArgs.masterKey, MASTER_KEY);
+    assert.deepEqual(rotateArgs.updates, { uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=freshlink123' });
+  } finally {
+    db.close();
+  }
+});
+
+test('attemptAutoRelink never calls rotateCredentialValuesFn and returns only { status: "fallback" } on mfa_required', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    let rotateCalls = 0;
+    const withPlainContextFn = async (run) => run({});
+    const obtainStartUrlFn = async () => ({ status: 'mfa_required' });
+    const rotateCredentialValuesFn = () => {
+      rotateCalls += 1;
+    };
+
+    const result = await attemptAutoRelink(
+      db,
+      job,
+      { username: 'someuser', password: 'somepass', masterKey: MASTER_KEY },
+      { withPlainContextFn, obtainStartUrlFn, rotateCredentialValuesFn },
+    );
+
+    assert.deepEqual(result, { status: 'fallback' });
+    assert.deepEqual(Object.keys(result), ['status']);
+    assert.equal(rotateCalls, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('attemptAutoRelink never calls rotateCredentialValuesFn and returns only { status: "fallback" } on a failed obtainStartUrlFn result', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    let rotateCalls = 0;
+    const withPlainContextFn = async (run) => run({});
+    const obtainStartUrlFn = async () => ({ status: 'failed', reason: 'link_not_found' });
+    const rotateCredentialValuesFn = () => {
+      rotateCalls += 1;
+    };
+
+    const result = await attemptAutoRelink(
+      db,
+      job,
+      { username: 'someuser', password: 'somepass', masterKey: MASTER_KEY },
+      { withPlainContextFn, obtainStartUrlFn, rotateCredentialValuesFn },
+    );
+
+    assert.deepEqual(result, { status: 'fallback' });
+    assert.equal(rotateCalls, 0);
   } finally {
     db.close();
   }
