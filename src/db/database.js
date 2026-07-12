@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   discord_user_id TEXT NOT NULL REFERENCES users(discord_user_id),
   filtros_json TEXT NOT NULL,
+  channel_id TEXT,
+  label TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   last_polled_at INTEGER,
   last_outcome TEXT,
@@ -38,8 +40,25 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 `;
 
+const MIGRATIONS = [
+  { table: 'jobs', column: 'channel_id', sql: 'ALTER TABLE jobs ADD COLUMN channel_id TEXT' },
+  { table: 'jobs', column: 'label', sql: 'ALTER TABLE jobs ADD COLUMN label TEXT' },
+];
+
 /** @type {import('better-sqlite3').Database | undefined} */
 let dbSingleton;
+
+function hasColumn(db, table, column) {
+  return db.prepare(`PRAGMA table_info('${table}')`).all().some((row) => row.name === column);
+}
+
+function runMigrations(db) {
+  for (const migration of MIGRATIONS) {
+    if (!hasColumn(db, migration.table, migration.column)) {
+      db.exec(migration.sql);
+    }
+  }
+}
 
 /**
  * Opens a `better-sqlite3` `Database` at `path` (accepts `':memory:'` for
@@ -60,6 +79,7 @@ export function createDatabase(path) {
   // this, the FK clauses in SCHEMA_SQL below are purely decorative.
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA_SQL);
+  runMigrations(db);
   logger.info({ event: 'db_schema_init', path }, 'Database schema initialized');
   return db;
 }

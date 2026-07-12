@@ -16,6 +16,8 @@ function rowToJob(row) {
     id: row.id,
     discordUserId: row.discord_user_id,
     filtros,
+    channelId: row.channel_id ?? null,
+    label: row.label || filtros.materiaCodigo,
     status: row.status,
     lastPolledAt: row.last_polled_at,
     lastOutcome: row.last_outcome,
@@ -28,19 +30,20 @@ function rowToJob(row) {
  * against `FiltrosSchema` and `JSON.stringify`d into `filtros_json`.
  *
  * @param {import('better-sqlite3').Database} db
- * @param {{ discordUserId: string, filtros: import('zod').infer<typeof FiltrosSchema> }} params
+ * @param {{ discordUserId: string, filtros: import('zod').infer<typeof FiltrosSchema>, channelId?: string | null, label?: string }} params
  * @returns {import('zod').infer<typeof SearchJobSchema>}
  */
-export function createJob(db, { discordUserId, filtros }) {
+export function createJob(db, { discordUserId, filtros, channelId = null, label }) {
   const now = Date.now();
   const parsedFiltros = FiltrosSchema.parse(filtros);
+  const parsedLabel = label || parsedFiltros.materiaCodigo;
 
   const info = db
     .prepare(
-      `INSERT INTO jobs (discord_user_id, filtros_json, status, created_at)
-       VALUES (?, ?, 'active', ?)`,
+      `INSERT INTO jobs (discord_user_id, filtros_json, channel_id, label, status, created_at)
+       VALUES (?, ?, ?, ?, 'active', ?)`,
     )
-    .run(discordUserId, JSON.stringify(parsedFiltros), now);
+    .run(discordUserId, JSON.stringify(parsedFiltros), channelId, parsedLabel, now);
 
   logger.info(
     { event: 'job_created', discordUserId, jobId: Number(info.lastInsertRowid) },
@@ -67,6 +70,52 @@ export function getJob(db, jobId) {
 export function listActiveJobs(db) {
   const rows = db.prepare("SELECT * FROM jobs WHERE status = 'active'").all();
   return rows.map(rowToJob);
+}
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} discordUserId
+ * @returns {import('zod').infer<typeof SearchJobSchema>[]}
+ */
+export function listJobsByUser(db, discordUserId) {
+  const rows = db
+    .prepare(
+      `SELECT * FROM jobs
+       WHERE discord_user_id = ?
+         AND status IN ('active', 'paused_by_user')
+       ORDER BY id ASC`,
+    )
+    .all(discordUserId);
+  return rows.map(rowToJob);
+}
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @param {number} jobId
+ * @param {'active' | 'paused_by_user'} status
+ * @returns {import('zod').infer<typeof SearchJobSchema>}
+ */
+export function updateJobStatus(db, jobId, status) {
+  SearchJobSchema.shape.status.parse(status);
+
+  db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run(status, jobId);
+
+  logger.info({ event: 'job_status_update', jobId, status }, 'Job status updated');
+
+  return getJob(db, jobId);
+}
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @param {number} jobId
+ * @returns {boolean}
+ */
+export function deleteJob(db, jobId) {
+  const info = db.prepare('DELETE FROM jobs WHERE id = ?').run(jobId);
+
+  logger.info({ event: 'job_deleted', jobId, deleted: info.changes > 0 }, 'Job deleted');
+
+  return info.changes > 0;
 }
 
 /**
