@@ -432,7 +432,13 @@ export async function runSearch(context, filtros, { startUrl, navigationRetryDel
   try {
     await driveSearchForm(page, parsedFiltros);
   } catch (err) {
-    logger.error({ event: 'form_drive_failed', message: err.message }, 'Failed to drive the search form');
+    // Same discipline as the navigation-failure catch above: Playwright's
+    // locator/navigation timeout errors embed the full page URL (which
+    // carries the session-equivalent param=) verbatim in `err.message`'s
+    // "Call log" trace -- confirmed live 2026-07-12, a `locator.check`
+    // timeout's message included the complete signed URL. Never log
+    // `err.message` raw here; `err.name` only.
+    logger.error({ event: 'form_drive_failed', errorName: err.name }, 'Failed to drive the search form');
     return { status: 'search_failed', reason: 'form_drive_failed' };
   }
 
@@ -455,7 +461,10 @@ export async function runSearch(context, filtros, { startUrl, navigationRetryDel
   try {
     [postbackResponse] = await Promise.all([responsePromise, buscarButton.click()]);
   } catch (err) {
-    logger.error({ event: 'postback_wait_failed', message: err.message }, 'Timed out waiting for the search postback response');
+    // Same param=-leak risk as the other catches in this function -- the
+    // whole session stays on one URL carrying param=, so any Playwright
+    // timeout's embedded "Call log" can include it. err.name only.
+    logger.error({ event: 'postback_wait_failed', errorName: err.name }, 'Timed out waiting for the search postback response');
     return { status: 'search_failed', reason: 'postback_timeout' };
   }
 
@@ -506,8 +515,9 @@ export async function runSearch(context, filtros, { startUrl, navigationRetryDel
       { timeout: 10000 },
     );
   } catch (err) {
+    // Same param=-leak risk as the other catches in this function -- err.name only.
     logger.warn(
-      { event: 'postback_settle_timeout', message: err.message },
+      { event: 'postback_settle_timeout', errorName: err.name },
       'Async postback did not report completion within timeout; refusing to read possibly-stale results',
     );
     return { status: 'search_failed', reason: 'postback_settle_timeout' };
