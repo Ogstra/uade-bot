@@ -22,7 +22,15 @@ export async function getBrowser() {
 
   if (!launchPromise) {
     logger.info({ event: 'browser_launch_start' }, 'Launching shared Chromium browser');
-    launchPromise = chromium.launch({ headless: true });
+    // --disable-gpu: headless never needs GPU compositing. --no-sandbox:
+    // standard for containerized Chromium (CLAUDE.md) -- the container
+    // itself provides isolation. --disable-dev-shm-usage: avoids /dev/shm
+    // size limits on small VPS instances by using disk-backed temp files
+    // instead. All three trim Chromium's baseline memory footprint.
+    launchPromise = chromium.launch({
+      headless: true,
+      args: ['--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage'],
+    });
   }
 
   sharedBrowser = await launchPromise;
