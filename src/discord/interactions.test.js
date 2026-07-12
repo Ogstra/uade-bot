@@ -269,3 +269,34 @@ test('dispatcher silently ignores button clicks from another server', async () =
     db.close();
   }
 });
+
+test('dispatcher never throws when both the command handler and the fallback error reply fail', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const command = {
+      execute: async () => {
+        throw new Error('boom');
+      },
+    };
+    const errorLogger = createLogger();
+    const interaction = createInteraction({
+      reply: async () => {
+        // Mirrors a real "Interaction has already been acknowledged" (40060)
+        // failure: our own local reply attempt errors even though Discord's
+        // server-side state may already consider the interaction handled.
+        throw new Error('Interaction has already been acknowledged.');
+      },
+    });
+    const handler = createInteractionHandler({
+      commandsByName: new Map([['buscar', command]]),
+      env: { DISCORD_GUILD_ID: 'guild-1' },
+      logger: errorLogger,
+      commandContext: { db },
+    });
+
+    await assert.doesNotReject(() => handler(interaction));
+    assert.ok(errorLogger.errorCalls.length >= 1);
+  } finally {
+    db.close();
+  }
+});
