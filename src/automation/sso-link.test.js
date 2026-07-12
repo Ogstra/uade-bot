@@ -65,15 +65,32 @@ describe('isValidStartUrl', () => {
   });
 });
 
+// Wraps a link in the real page's `.panel.panel-primary` > ... >
+// `.lbl-inscripciones` structure that distinguishes listings sharing the
+// same data-tipolink (see asignaturasPanelLocator's docstring in
+// sso-link.js). `label` is the panel's own heading text.
+function panelWith(label, linkMarkup) {
+  return `
+    <div class="panel panel-primary">
+      <div class="panel-body">
+        <div class="row list-group-item_on">
+          <span class="lbl-inscripciones">${label}</span>
+        </div>
+        ${linkMarkup}
+      </div>
+    </div>`;
+}
+
 describe('extractInscripcionLink', () => {
   test('reads data-linkid from the InscripcionAsignatura link', async () => {
     const browser = await getBrowser();
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      await page.setContent(`<!DOCTYPE html><html><body>
-        <a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=secret123">¡INSCRIBITE!</a>
-      </body></html>`);
+      await page.setContent(`<!DOCTYPE html><html><body>${panelWith(
+        'Asignaturas 2do Cuatrimestre 2026',
+        '<a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=secret123">¡INSCRIBITE!</a>',
+      )}</body></html>`);
 
       const linkId = await extractInscripcionLink(page);
       assert.equal(linkId, 'https://inscripcionespia.uade.edu.ar/x?param=secret123');
@@ -88,8 +105,42 @@ describe('extractInscripcionLink', () => {
     try {
       const page = await context.newPage();
       await page.setContent(`<!DOCTYPE html><html><body>
-        <a class="link-inscripciones inscribite" data-tipolink="MRI" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=mri-secret">¡INSCRIBITE!</a>
-        <a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=correct-secret">¡INSCRIBITE!</a>
+        ${panelWith(
+          'Cambios/Bajas 2do Cuatrimestre 2026',
+          '<a class="link-inscripciones inscribite" data-tipolink="CambioAsignaturaPack" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=mri-secret">¡INSCRIBITE!</a>',
+        )}
+        ${panelWith(
+          'Asignaturas 2do Cuatrimestre 2026',
+          '<a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=correct-secret">¡INSCRIBITE!</a>',
+        )}
+      </body></html>`);
+
+      const linkId = await extractInscripcionLink(page);
+      assert.equal(linkId, 'https://inscripcionespia.uade.edu.ar/x?param=correct-secret');
+    } finally {
+      await context.close();
+    }
+  });
+
+  // Regression test for the live 2026-07-12 bug: UADE's own markup gives the
+  // MRI (Cursos Regulares Intensivos) listing's link the exact same
+  // data-tipolink="InscripcionAsignatura" value as the real Asignaturas
+  // listing, and MRI's panel sits earlier in the DOM -- filtering on
+  // data-tipolink alone let `.first()` silently pick MRI's link instead.
+  test('picks the Asignaturas panel link, not the MRI panel link sharing the same data-tipolink', async () => {
+    const browser = await getBrowser();
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.setContent(`<!DOCTYPE html><html><body>
+        ${panelWith(
+          'Cursos Regulares Intensivos (MRI) 1er Cuatrimestre 2026',
+          '<a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=mri-secret">¡INSCRIBITE!</a>',
+        )}
+        ${panelWith(
+          'Asignaturas 2do Cuatrimestre 2026',
+          '<a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=correct-secret">¡INSCRIBITE!</a>',
+        )}
       </body></html>`);
 
       const linkId = await extractInscripcionLink(page);
@@ -120,14 +171,15 @@ describe('confirmInscripcionLink', () => {
   // opens the real destination in a new page once that modal is confirmed --
   // this is the "activation" side effect that reading data-linkid alone
   // skips (confirmed live 2026-07-12, see obtainStartUrl's docstring).
-  const PAGE_WITH_BOOTBOX_GATE = `<!DOCTYPE html><html><body>
-    <a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura"
+  const PAGE_WITH_BOOTBOX_GATE = `<!DOCTYPE html><html><body>${panelWith(
+    'Asignaturas 2do Cuatrimestre 2026',
+    `<a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura"
        data-linkid="https://inscripcionespia.uade.edu.ar/x?param=secret123"
        href="#" target="_blank" onclick="document.getElementById('modal').style.display='block'; return false;">¡INSCRIBITE!</a>
     <div id="modal" class="bootbox" style="display:none;">
       <button class="btn-primary" onclick="window.open(document.querySelector('.inscribite').getAttribute('data-linkid'), '_blank'); document.getElementById('modal').style.display='none';">Confirmar</button>
-    </div>
-  </body></html>`;
+    </div>`,
+  )}</body></html>`;
 
   test('clicks the link, confirms the bootbox modal, and returns the popup URL', async () => {
     const browser = await getBrowser();
@@ -149,11 +201,12 @@ describe('confirmInscripcionLink', () => {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      await page.setContent(`<!DOCTYPE html><html><body>
-        <a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura"
+      await page.setContent(`<!DOCTYPE html><html><body>${panelWith(
+        'Asignaturas 2do Cuatrimestre 2026',
+        `<a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura"
            data-linkid="https://inscripcionespia.uade.edu.ar/x?param=fallback-secret"
-           href="#" onclick="return false;">¡INSCRIBITE!</a>
-      </body></html>`);
+           href="#" onclick="return false;">¡INSCRIBITE!</a>`,
+      )}</body></html>`);
 
       const startUrl = await confirmInscripcionLink(context, page);
 

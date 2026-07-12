@@ -22,6 +22,18 @@ const SELECTORS = {
   microsoftContinueButton: '#idSIButton9',
   microsoftPassword: 'input[name="passwd"], #i0118',
   bootstrapTab: 'a[data-toggle="tab"][href="#menu3"]',
+  // `data-tipolink="InscripcionAsignatura"` is NOT unique to the real
+  // "Asignaturas" listing -- confirmed live 2026-07-12 against a saved copy
+  // of the page (Inscripciones.html) that the MRI (Cursos Regulares
+  // Intensivos) listing's link carries the exact same data-tipolink value.
+  // The only thing that actually distinguishes the two is the panel's own
+  // heading text (`.lbl-inscripciones`), e.g. "Asignaturas 2do Cuatrimestre
+  // 2026" vs "Cursos Regulares Intensivos (MRI) 1er Cuatrimestre 2026". Using
+  // data-tipolink alone let `.first()` silently pick the MRI link (it sits
+  // earlier in the DOM), producing a materias catalog for the wrong listing
+  // (form_drive_failed, 8 unrelated checkboxes).
+  asignaturasPanel: '.panel.panel-primary',
+  asignaturasLabel: '.lbl-inscripciones',
   inscripcionLink: 'a.inscribite[data-tipolink="InscripcionAsignatura"]',
   // The link's own click handler shows a bootbox.js confirmation before
   // doing anything -- confirmed live 2026-07-12 (a bootbox modal intercepted
@@ -30,6 +42,35 @@ const SELECTORS = {
   // config (button label) hasn't been observed directly yet.
   bootboxConfirmButton: '.bootbox .btn-primary, .bootbox .btn-confirm',
 };
+
+/**
+ * The `.panel.panel-primary` block whose own heading text starts with
+ * "Asignaturas" (case-insensitive) -- deliberately excludes any panel whose
+ * heading starts with something else (e.g. "Cursos Regulares Intensivos
+ * (MRI)", "Cambios/Bajas", "Bajas Verano", "Exámenes Previos") even though
+ * some of those panels' links share the same data-tipolink value.
+ *
+ * @param {import('playwright').Page} page
+ * @returns {import('playwright').Locator}
+ */
+function asignaturasPanelLocator(page) {
+  return page
+    .locator(SELECTORS.asignaturasPanel)
+    .filter({ has: page.locator(SELECTORS.asignaturasLabel).getByText(/^Asignaturas/i) });
+}
+
+/**
+ * The real "Asignaturas" `InscripcionAsignatura` link, scoped to the panel
+ * matched by `asignaturasPanelLocator` -- never the bare
+ * `a.inscribite[data-tipolink="InscripcionAsignatura"]` selector alone,
+ * which also matches the MRI listing's link.
+ *
+ * @param {import('playwright').Page} page
+ * @returns {import('playwright').Locator}
+ */
+function inscripcionLinkLocator(page) {
+  return asignaturasPanelLocator(page).locator(SELECTORS.inscripcionLink).first();
+}
 
 /**
  * Adds `@uade.edu.ar` to `username` only if it doesn't already carry an
@@ -90,7 +131,7 @@ export function isValidStartUrl(candidate) {
  * @returns {Promise<string | null>}
  */
 export async function extractInscripcionLink(page) {
-  const link = page.locator(SELECTORS.inscripcionLink).first();
+  const link = inscripcionLinkLocator(page);
   const count = await link.count();
   if (count === 0) {
     return null;
@@ -111,23 +152,26 @@ export async function extractInscripcionLink(page) {
  * @returns {Promise<string | null>}
  */
 export async function confirmInscripcionLink(context, page) {
-  const link = page.locator(SELECTORS.inscripcionLink).first();
+  const link = inscripcionLinkLocator(page);
   if ((await link.count()) === 0) {
     return null;
   }
 
   // Diagnostic only, never sensitive: confirms the selector is really
-  // matching the InscripcionAsignatura link and not some other listing
-  // (e.g. MRI) that happens to share the .inscribite class -- doubted live
-  // 2026-07-12 when a materia catalog mismatch surfaced. tipolink/count are
-  // plain attribute values, not URLs or credentials.
+  // matching the Asignaturas panel's link and not some other listing (e.g.
+  // MRI) that happens to share both the .inscribite class AND the
+  // data-tipolink value -- confirmed live 2026-07-12 that data-tipolink
+  // alone can't tell them apart, so this also logs the matched panel's own
+  // heading text (plain UI copy, never a URL or credential) as positive
+  // confirmation the scoped locator worked.
   const allInscribiteLinks = page.locator('a.inscribite');
-  const [totalInscribiteLinks, matchedTipolink] = await Promise.all([
+  const [totalInscribiteLinks, matchedTipolink, matchedPanelLabel] = await Promise.all([
     allInscribiteLinks.count().catch(() => -1),
     link.getAttribute('data-tipolink').catch(() => null),
+    asignaturasPanelLocator(page).locator(SELECTORS.asignaturasLabel).first().innerText().catch(() => null),
   ]);
   logger.info(
-    { event: 'sso_inscripcion_link_selected', totalInscribiteLinks, matchedTipolink },
+    { event: 'sso_inscripcion_link_selected', totalInscribiteLinks, matchedTipolink, matchedPanelLabel },
     'Selected the inscripción link to click',
   );
 
