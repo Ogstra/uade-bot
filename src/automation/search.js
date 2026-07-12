@@ -420,14 +420,24 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
 
   // SEARCH-04: `page.waitForResponse` above resolves once the partial-postback
   // HTTP response is RECEIVED, not once the page's own JS (ASP.NET
-  // UpdatePanel / jQuery) has finished applying that response's HTML
+  // UpdatePanel / MS AJAX) has finished applying that response's HTML
   // fragment into the results table's DOM -- that application runs
-  // asynchronously afterward. Reading page.content() immediately risks a
-  // race where the results table hasn't been swapped in yet, misreading a
-  // genuine `found` result as `no_vacancies`. Give the DOM a bounded window
-  // to settle first.
+  // asynchronously afterward, shown to the user as a "Procesando..."
+  // indicator. Reading page.content() before it clears risks a race where
+  // the results table hasn't been swapped in yet, misreading a genuine
+  // `found` result as `no_vacancies`.
   //
-  // Deliberately NOT best-effort: if the settle wait times out, we have no
+  // Confirmed live 2026-07-12 (`typeof Sys !== 'undefined' && !!Sys.WebForms`
+  // -> true in the browser console) that this site runs the standard
+  // Microsoft AJAX / ScriptManager framework, which exposes the async
+  // postback's actual completion state directly:
+  // `Sys.WebForms.PageRequestManager.getInstance().get_isInAsyncPostBack()`.
+  // This is the authoritative signal -- not a proxy like network idleness,
+  // which can resolve early if the page's own JS stalls with no further
+  // network activity (e.g. a genuinely stuck "Procesando..." overlay) and
+  // late/never on pages with unrelated background network chatter.
+  //
+  // Deliberately NOT best-effort: if this wait times out, we have no
   // positive confirmation the results table finished rendering, so we must
   // NOT fall through to reading (and possibly misreading, as empty) the
   // DOM. A `search_failed` here just costs one extra polling cycle
@@ -435,19 +445,21 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
   // account); silently downgrading to `no_vacancies` instead would hide a
   // real vacancy behind a false negative -- the one outcome this bot's core
   // value promise ("avisame apenas se abre un lugar") cannot tolerate.
-  // 10s headroom (not the initial 5s) for a cold-started browser's first
-  // navigation on this account -- confirmed live 2026-07-12 that a fresh
-  // Chromium launch (queue.js's idle-close, browser.js) can take longer
-  // than 5s to settle on its very first postback, even though the site
-  // itself does reach networkidle (not persistent background chatter --
-  // later polls on the same warm browser settled well within 5s). The
-  // default POLL_INTERVAL_MS (25s) comfortably absorbs the extra margin.
+  // 10s headroom accommodates a cold-started browser's first navigation on
+  // this account; the default POLL_INTERVAL_MS (25s) comfortably absorbs it.
   try {
-    await page.waitForLoadState('networkidle', { timeout: 10000 });
+    await page.waitForFunction(
+      () =>
+        typeof Sys !== 'undefined' &&
+        Sys.WebForms &&
+        Sys.WebForms.PageRequestManager.getInstance().get_isInAsyncPostBack() === false,
+      null,
+      { timeout: 10000 },
+    );
   } catch (err) {
     logger.warn(
       { event: 'postback_settle_timeout', message: err.message },
-      'Page did not reach networkidle after postback within timeout; refusing to read possibly-stale results',
+      'Async postback did not report completion within timeout; refusing to read possibly-stale results',
     );
     return { status: 'search_failed', reason: 'postback_settle_timeout' };
   }
