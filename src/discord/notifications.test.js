@@ -95,12 +95,14 @@ test('dispatcher sends Spanish DM and channel mention, then persists notificatio
     assert.equal(client.sends.length, 2);
     assert.equal(client.sends[0].destination, 'dm');
     assert.equal(client.sends[1].destination, 'channel');
-    assert.match(client.sends[0].content, /Fisica II/);
-    assert.match(client.sends[0].content, /Monserrat/);
-    assert.match(client.sends[0].content, /08:00 11:30/);
-    assert.match(client.sends[0].content, /LU, MI/);
-    assert.match(client.sends[0].content, /2 cupos/);
-    assert.match(client.sends[1].content, /<@user-1>/);
+    assert.match(client.sends[0].content.content, /Fisica II/);
+    assert.match(client.sends[0].content.content, /Monserrat/);
+    assert.match(client.sends[0].content.content, /08:00 11:30/);
+    assert.match(client.sends[0].content.content, /LU, MI/);
+    assert.match(client.sends[0].content.content, /2 cupos/);
+    assert.match(client.sends[1].content.content, /<@user-1>/);
+    assert.equal(client.sends[0].content.components.length, 1);
+    assert.equal(client.sends[1].content.components.length, 1);
 
     const updated = getJob(db, job.id);
     assert.equal(updated.lastNotifiedCupos, 2);

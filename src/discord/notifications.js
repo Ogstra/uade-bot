@@ -8,6 +8,7 @@ import {
   markPauseNotificationSent,
 } from '../db/users.repository.js';
 import logger from '../logger.js';
+import { buildVacancyActionRow } from './components.js';
 import { pauseNotificationMessage, vacancyNotificationMessage } from './messages.js';
 
 function sleep(ms) {
@@ -64,14 +65,14 @@ export function createNotificationDispatcher({ client, db, delayMs = 250, log = 
     return sendTail;
   }
 
-  async function sendUserDm(discordUserId, content) {
+  async function sendUserDm(discordUserId, payload) {
     const user = await client.users.fetch(discordUserId);
-    await user.send(content);
+    await user.send(payload);
   }
 
-  async function sendChannelMessage(channelId, content) {
+  async function sendChannelMessage(channelId, payload) {
     const channel = await client.channels.fetch(channelId);
-    await channel.send(content);
+    await channel.send(payload);
   }
 
   async function handlePauseNotification(job) {
@@ -117,9 +118,10 @@ export function createNotificationDispatcher({ client, db, delayMs = 250, log = 
     }
 
     let successCount = 0;
+    const actionRow = buildVacancyActionRow(freshJob.id);
     const dmContent = vacancyNotificationMessage(freshJob, outcome);
     try {
-      await enqueueSend(() => sendUserDm(freshJob.discordUserId, dmContent));
+      await enqueueSend(() => sendUserDm(freshJob.discordUserId, { content: dmContent, components: [actionRow] }));
       successCount += 1;
     } catch (err) {
       log.error(
@@ -131,7 +133,10 @@ export function createNotificationDispatcher({ client, db, delayMs = 250, log = 
     if (freshJob.channelId) {
       try {
         await enqueueSend(() =>
-          sendChannelMessage(freshJob.channelId, vacancyNotificationMessage(freshJob, outcome, { channel: true })),
+          sendChannelMessage(freshJob.channelId, {
+            content: vacancyNotificationMessage(freshJob, outcome, { channel: true }),
+            components: [actionRow],
+          }),
         );
         successCount += 1;
       } catch (err) {

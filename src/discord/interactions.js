@@ -1,9 +1,10 @@
 import { isFromAuthorizedGuild, isGuildInteraction } from './access-control.js';
+import { handleDetenerButton } from './components.js';
 import logger from '../logger.js';
 import { genericInteractionErrorMessage } from './messages.js';
 
 function isDispatchableInteraction(interaction) {
-  return interaction.isChatInputCommand?.() || interaction.isAutocomplete?.();
+  return interaction.isChatInputCommand?.() || interaction.isAutocomplete?.() || interaction.isButton?.();
 }
 
 async function sendGenericError(interaction) {
@@ -37,12 +38,17 @@ export function createInteractionHandler({
       return;
     }
 
-    const command = commandsByName.get(interaction.commandName);
-    if (!command) {
-      return;
-    }
-
     try {
+      if (interaction.isButton?.()) {
+        await handleDetenerButton(interaction, commandContext);
+        return;
+      }
+
+      const command = commandsByName.get(interaction.commandName);
+      if (!command) {
+        return;
+      }
+
       if (interaction.isAutocomplete?.()) {
         if (command.autocomplete) {
           await command.autocomplete(interaction, commandContext);

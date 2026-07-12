@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createDatabase } from '../db/database.js';
+import { createJob, getJob } from '../db/jobs.repository.js';
+import { upsertUser } from '../db/users.repository.js';
 import { buscarCommand } from './commands/buscar.js';
 import { createInteractionHandler } from './interactions.js';
+
+const FILTROS = {
+  materiaCodigo: '3.1.050',
+  ofrecimiento: 'curricular',
+  turno: 'Mañana',
+  dias: ['LU'],
+  sedesExcluidas: [],
+};
 
 function createLogger() {
   return {
@@ -152,4 +162,64 @@ test('/buscar defers ephemerally when ephemeralReplies: true is set', async () =
   });
 
   assert.deepEqual(events[0], ['deferReply', { ephemeral: true }]);
+});
+
+test('dispatcher routes a "Detener busqueda" button click to handleDetenerButton', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS, label: 'Fisica II' });
+
+    const interaction = createInteraction({
+      commandName: undefined,
+      isChatInputCommand: () => false,
+      isAutocomplete: () => false,
+      isButton: () => true,
+      customId: `detener_job:${job.id}`,
+    });
+    const handler = createInteractionHandler({
+      commandsByName: new Map([['buscar', buscarCommand]]),
+      env: { DISCORD_GUILD_ID: 'guild-1' },
+      logger: createLogger(),
+      commandContext: { db },
+    });
+
+    await handler(interaction);
+
+    assert.equal(getJob(db, job.id), null);
+    assert.equal(interaction.calls[0][0], 'reply');
+    assert.match(interaction.calls[0][1].content, /Busqueda detenida/);
+  } finally {
+    db.close();
+  }
+});
+
+test('dispatcher silently ignores button clicks from another server', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS, label: 'Fisica II' });
+
+    const interaction = createInteraction({
+      guildId: 'other-guild',
+      commandName: undefined,
+      isChatInputCommand: () => false,
+      isAutocomplete: () => false,
+      isButton: () => true,
+      customId: `detener_job:${job.id}`,
+    });
+    const handler = createInteractionHandler({
+      commandsByName: new Map([['buscar', buscarCommand]]),
+      env: { DISCORD_GUILD_ID: 'guild-1' },
+      logger: createLogger(),
+      commandContext: { db },
+    });
+
+    await handler(interaction);
+
+    assert.deepEqual(interaction.calls, []);
+    assert.notEqual(getJob(db, job.id), null);
+  } finally {
+    db.close();
+  }
 });
