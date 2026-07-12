@@ -39,6 +39,31 @@ export async function getBrowser() {
 }
 
 /**
+ * Closes the shared Chromium `Browser` singleton if one is open, and clears
+ * the singleton so the next `getBrowser()` call relaunches it lazily.
+ * No-op (and never throws) if no browser is currently open — safe to call
+ * on every idle scheduler tick (queue.js) without guarding first.
+ *
+ * @returns {Promise<void>}
+ */
+export async function closeBrowser() {
+  if (!sharedBrowser) {
+    return;
+  }
+
+  const browser = sharedBrowser;
+  sharedBrowser = undefined;
+  launchPromise = undefined;
+
+  try {
+    await browser.close();
+    logger.info({ event: 'browser_closed' }, 'Shared Chromium browser closed (idle)');
+  } catch (err) {
+    logger.error({ event: 'browser_close_failed', message: err.message }, 'Failed to close idle Chromium browser');
+  }
+}
+
+/**
  * Opens a fresh `BrowserContext` carrying the given `httpCredentials`,
  * invokes `run(context)`, and always closes the context in a `finally`
  * block so the context — and the credentials it carries — never outlives

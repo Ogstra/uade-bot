@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import PQueue from 'p-queue';
 import { createDatabase } from '../db/database.js';
 import { upsertUser } from '../db/users.repository.js';
-import { createJob } from '../db/jobs.repository.js';
+import { createJob, deleteJob } from '../db/jobs.repository.js';
 import { groupActiveJobsByAccount, selectRoundRobinTick, createScheduler } from './queue.js';
 
 const FILTROS = {
@@ -277,4 +277,71 @@ test('a PQueue with concurrency N never lets .pending exceed N', async () => {
   clearInterval(sampleInterval);
 
   assert.ok(maxPending <= 2);
+});
+
+test('createScheduler closes the idle browser when a tick finds no jobs to poll', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    let closeCalls = 0;
+    const closeBrowserFn = async () => {
+      closeCalls += 1;
+    };
+
+    const scheduler = createScheduler({ db, intervalMs: 1000, concurrency: 1, closeBrowserFn });
+    scheduler.start({ immediate: true });
+    scheduler.stop();
+
+    assert.equal(closeCalls, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test('createScheduler does not close the browser when a tick has jobs to poll', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    createJob(db, { discordUserId: 'user-1', filtros: FILTROS });
+    let closeCalls = 0;
+    const closeBrowserFn = async () => {
+      closeCalls += 1;
+    };
+    const pollOnceFn = async () => ({ outcome: 'no_vacancies' });
+
+    const scheduler = createScheduler({ db, intervalMs: 1000, concurrency: 1, pollOnceFn, closeBrowserFn });
+    scheduler.start({ immediate: true });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    scheduler.stop();
+
+    assert.equal(closeCalls, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('createScheduler does not close the browser while a poll is still in-flight for a since-removed job', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS });
+    let closeCalls = 0;
+    const closeBrowserFn = async () => {
+      closeCalls += 1;
+    };
+    let resolvePoll;
+    const pollOnceFn = () => new Promise((resolve) => { resolvePoll = resolve; });
+
+    const scheduler = createScheduler({ db, intervalMs: 15, concurrency: 1, pollOnceFn, closeBrowserFn });
+    scheduler.start({ immediate: true }); // tick 1: enqueues the poll, job now in-flight
+
+    deleteJob(db, job.id); // removed while its poll is still running
+    await new Promise((resolve) => setTimeout(resolve, 40)); // let tick 2+ fire with selected=0
+
+    scheduler.stop();
+    assert.equal(closeCalls, 0);
+
+    resolvePoll({ outcome: 'no_vacancies' });
+  } finally {
+    db.close();
+  }
 });
