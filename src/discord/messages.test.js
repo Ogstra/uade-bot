@@ -179,7 +179,10 @@ test('jobActionMessage includes materia code and scraped name, not just the labe
 
   const text = jobActionMessage('pausada', jobWithOutcome);
 
-  assert.match(text, /\*\*Busqueda pausada:\*\* Fisica II - 3\.1\.050 - Fisica II - Noche - LU\/MI\./);
+  assert.match(
+    text,
+    /\*\*Busqueda pausada:\*\* Fisica II - 3\.1\.050 - Fisica II - Noche - curricular - LU\/MI \(sin Monserrat\)\./,
+  );
 });
 
 test('jobActionMessage omits the etiqueta prefix when label is the bare materia code', () => {
@@ -187,7 +190,20 @@ test('jobActionMessage omits the etiqueta prefix when label is the bare materia 
 
   const text = jobActionMessage('detenida', jobWithoutEtiqueta);
 
-  assert.match(text, /\*\*Busqueda detenida:\*\* 3\.1\.050 - Noche - LU\/MI\./);
+  assert.match(text, /\*\*Busqueda detenida:\*\* 3\.1\.050 - Noche - curricular - LU\/MI \(sin Monserrat\)\./);
+});
+
+test('jobActionMessage omits the sedes-excluidas suffix when none were excluded', () => {
+  const jobWithoutSedes = {
+    ...JOB,
+    filtros: { ...JOB.filtros, sedesExcluidas: [] },
+    lastOutcome: null,
+  };
+
+  const text = jobActionMessage('reanudada', jobWithoutSedes);
+
+  assert.doesNotMatch(text, /sin /);
+  assert.match(text, /\*\*Busqueda reanudada:\*\* Fisica II - 3\.1\.050 - Noche - curricular - LU\/MI\./);
 });
 
 test('credentialPrompts.startUrl and newStartUrl include a link example', () => {

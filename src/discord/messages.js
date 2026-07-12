@@ -145,9 +145,10 @@ export function formatJobStatusBlock(job, user) {
 }
 
 export function jobDisplay(job) {
-  const dias = job.filtros.dias.join('/');
+  const { turno, ofrecimiento, dias, sedesExcluidas } = job.filtros;
   const identity = formatJobIdentity(job, parseLastOutcome(job.lastOutcome));
-  return `${identity} - ${job.filtros.turno} - ${dias}`;
+  const sedesSuffix = sedesExcluidas.length > 0 ? ` (sin ${formatSedes(sedesExcluidas)})` : '';
+  return `${identity} - ${turno} - ${ofrecimiento} - ${dias.join('/')}${sedesSuffix}`;
 }
 
 export function jobNotFoundMessage() {
