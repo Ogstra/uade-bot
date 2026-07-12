@@ -33,6 +33,16 @@ export function formatMateria(job, outcome = null) {
     : job.filtros.materiaCodigo;
 }
 
+/**
+ * Full search identity for messages that otherwise only show `job.label`:
+ * `codigo` or `codigo - nombre` (once a poll has captured it), prefixed
+ * with the custom `etiqueta` when one was given (label !== materiaCodigo).
+ */
+function formatJobIdentity(job, outcome = null) {
+  const materia = formatMateria(job, outcome);
+  return job.label === job.filtros.materiaCodigo ? materia : `${job.label} - ${materia}`;
+}
+
 function optionalSedesLine(sedesExcluidas) {
   return sedesExcluidas.length > 0 ? [`**Sedes excluidas:** ${formatSedes(sedesExcluidas)}`] : [];
 }
@@ -134,7 +144,8 @@ export function formatJobStatusBlock(job, user) {
 
 export function jobDisplay(job) {
   const dias = job.filtros.dias.join('/');
-  return `${job.label} - ${job.filtros.turno} - ${dias}`;
+  const identity = formatJobIdentity(job, parseLastOutcome(job.lastOutcome));
+  return `${identity} - ${job.filtros.turno} - ${dias}`;
 }
 
 export function jobNotFoundMessage() {
@@ -148,10 +159,13 @@ export function jobActionMessage(action, job) {
 export const credentialPrompts = {
   username: 'Mandame tu **usuario** de UADE.',
   password: 'Mandame tu **password** de UADE.',
-  startUrl: 'Mandame el **link de inscripcion** de UADE.',
+  startUrl:
+    'Mandame el **link de inscripcion** de UADE (el que te lleva directo al buscador, ya logueado). ' +
+    'Algo asi: `https://inscripcionespia.uade.edu.ar/...?param=xxxxx`.',
   newUsername: 'Mandame tu **nuevo usuario** de UADE.',
   newPassword: 'Mandame tu **nuevo password** de UADE.',
-  newStartUrl: 'Mandame el **nuevo link de inscripcion** de UADE.',
+  newStartUrl:
+    'Mandame el **nuevo link de inscripcion** de UADE. Algo asi: `https://inscripcionespia.uade.edu.ar/...?param=xxxxx`.',
 };
 
 export function dmUnavailableMessage() {
@@ -184,13 +198,13 @@ function formatVacancyLines(vacancies) {
 }
 
 export function vacancyNotificationMessage(job, outcome, { channel = false } = {}) {
+  const identity = formatJobIdentity(job, outcome);
   const title = channel
-    ? `<@${job.discordUserId}> se encontro una vacante para **${job.label}**.`
-    : `Se encontro una vacante para **${job.label}**.`;
+    ? `<@${job.discordUserId}> se encontro una vacante para **${identity}**.`
+    : `Se encontro una vacante para **${identity}**.`;
 
   return (
     `${title}\n` +
-    `**Materia:** ${formatMateria(job, outcome)}\n` +
     `**Turno buscado:** ${job.filtros.turno}\n\n` +
     formatVacancyLines(outcome.vacancies)
   );

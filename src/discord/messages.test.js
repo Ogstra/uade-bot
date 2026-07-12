@@ -6,6 +6,7 @@ import {
   credentialsSavedMessage,
   credentialsUpdatedMessage,
   formatJobStatusBlock,
+  jobActionMessage,
   pauseNotificationMessage,
   searchCreatedMessage,
   vacancyNotificationMessage,
@@ -154,5 +155,42 @@ test('vacancyNotificationMessage renders extracted materia name when present', (
     ],
   });
 
-  assert.match(text, /\*\*Materia:\*\* 3\.1\.050 - Fisica II/);
+  assert.match(text, /Se encontro una vacante para \*\*Fisica II - 3\.1\.050 - Fisica II\*\*\./);
+});
+
+test('vacancyNotificationMessage omits the etiqueta prefix when label is the bare materia code', () => {
+  const jobWithoutEtiqueta = { ...JOB, label: JOB.filtros.materiaCodigo };
+  const text = vacancyNotificationMessage(jobWithoutEtiqueta, {
+    outcome: 'found',
+    materiaNombre: 'Fisica II',
+    vacancies: [
+      { turno: 'Noche', sede: 'Monserrat', horario: '18:30 22:00', dias: ['LU'], cupos: 1 },
+    ],
+  });
+
+  assert.match(text, /Se encontro una vacante para \*\*3\.1\.050 - Fisica II\*\*\./);
+});
+
+test('jobActionMessage includes materia code and scraped name, not just the label', () => {
+  const jobWithOutcome = {
+    ...JOB,
+    lastOutcome: JSON.stringify({ outcome: 'no_vacancies', materiaNombre: 'Fisica II' }),
+  };
+
+  const text = jobActionMessage('pausada', jobWithOutcome);
+
+  assert.match(text, /\*\*Busqueda pausada:\*\* Fisica II - 3\.1\.050 - Fisica II - Noche - LU\/MI\./);
+});
+
+test('jobActionMessage omits the etiqueta prefix when label is the bare materia code', () => {
+  const jobWithoutEtiqueta = { ...JOB, label: JOB.filtros.materiaCodigo, lastOutcome: null };
+
+  const text = jobActionMessage('detenida', jobWithoutEtiqueta);
+
+  assert.match(text, /\*\*Busqueda detenida:\*\* 3\.1\.050 - Noche - LU\/MI\./);
+});
+
+test('credentialPrompts.startUrl and newStartUrl include a link example', () => {
+  assert.match(credentialPrompts.startUrl, /inscripcionespia\.uade\.edu\.ar/);
+  assert.match(credentialPrompts.newStartUrl, /inscripcionespia\.uade\.edu\.ar/);
 });
