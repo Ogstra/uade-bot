@@ -15,7 +15,7 @@ export function formatSedes(sedesExcluidas) {
   return sedesExcluidas.length > 0 ? sedesExcluidas.join(', ') : 'ninguna';
 }
 
-function parseLastOutcome(lastOutcome) {
+export function parseLastOutcome(lastOutcome) {
   if (!lastOutcome) {
     return null;
   }

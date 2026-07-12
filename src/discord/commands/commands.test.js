@@ -250,6 +250,37 @@ test('autocomplete returns at most 25 caller-owned job choices and filters by la
   }
 });
 
+test('autocomplete choices include materia code, scraped materia name, and estado for D-07 duplicate disambiguation', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    await buscarCommand.execute(createInteraction({ options: { ...VALID_OPTIONS, etiqueta: 'Duplicada' } }), { db });
+    await buscarCommand.execute(createInteraction({ options: { ...VALID_OPTIONS, etiqueta: 'Duplicada' } }), { db });
+
+    const [firstJob, secondJob] = listJobsByUser(db, 'user-1');
+    db.prepare('UPDATE jobs SET last_outcome = ? WHERE id = ?').run(
+      JSON.stringify({ outcome: 'no_vacancies', materiaNombre: 'FISICA II' }),
+      firstJob.id,
+    );
+    db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('paused_by_user', secondJob.id);
+
+    const interaction = createInteraction({ focused: 'Duplicada' });
+    await pausarCommand.autocomplete(interaction, { db });
+
+    const choices = interaction.calls.at(-1)[1];
+    assert.equal(choices.length, 2);
+    assert.match(choices[0].name, /Duplicada/);
+    assert.match(choices[0].name, /3\.1\.050/);
+    assert.match(choices[0].name, /FISICA II/);
+    assert.match(choices[0].name, /activa/);
+    assert.match(choices[1].name, /pausada/);
+    for (const choice of choices) {
+      assert.ok(choice.name.length <= 100);
+    }
+  } finally {
+    db.close();
+  }
+});
+
 test('autocomplete uses the default DB when commandContext has no db', async () => {
   const interaction = createInteraction({ focused: 'Fisica' });
   await assert.doesNotReject(() => pausarCommand.autocomplete(interaction, {}));
