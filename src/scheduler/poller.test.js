@@ -28,6 +28,9 @@ process.env.UADE_USERNAME = process.env.UADE_USERNAME || 'test-username-placehol
 process.env.UADE_PASSWORD = process.env.UADE_PASSWORD || 'test-password-placeholder';
 const MASTER_KEY = randomBytes(32).toString('hex');
 process.env.CREDENTIALS_MASTER_KEY = MASTER_KEY;
+process.env.DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || 'test-discord-token';
+process.env.DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || 'test-discord-client-id';
+process.env.DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID || 'test-discord-guild-id';
 
 const FILTROS = {
   materiaCodigo: '3.1.050',

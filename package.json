@@ -11,7 +11,7 @@
     "bot": "node src/bot.js",
     "discord:register": "node src/discord/register-commands.js",
     "search": "node src/cli.js",
-    "test": "node --test src"
+    "test": "node --test \"src/**/*.test.js\""
   },
   "license": "MIT",
   "dependencies": {
