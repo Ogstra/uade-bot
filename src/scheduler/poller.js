@@ -4,10 +4,12 @@ import { getUser, updateAccountPauseState } from '../db/users.repository.js';
 import { upsertMateriaNombre } from '../db/materias.repository.js';
 import { decryptCredentials } from '../crypto/credentials-crypto.js';
 import { loadEnv } from '../config/env.js';
-import { withUadeContext } from '../automation/browser.js';
+import { withUadeContext, withPlainContext } from '../automation/browser.js';
 import { runSearch } from '../automation/search.js';
+import { obtainStartUrl } from '../automation/sso-link.js';
 import { parseResults, filterVacancies } from '../automation/parse-results.js';
 import { classifySearchResult } from '../automation/classify.js';
+import { rotateCredentialValues } from '../discord/credentials-flow.js';
 import { nextBackoffState } from './backoff.js';
 import logger from '../logger.js';
 
@@ -69,27 +71,98 @@ function userToCurrentPauseState(user) {
 }
 
 /**
+ * AUTOLINK-01/02/03: attempts a fully automated SSO relink for the account
+ * that owns `job`, using the SAME already-decrypted credentials `pollOnce`
+ * passes in — never re-reads/re-decrypts anything from the DB itself. Opens
+ * its OWN `withPlainContextFn` (not nested inside the `withUadeContext` this
+ * job's search run already closed) so the credential-free SSO login form
+ * flow never shares a `BrowserContext` with the Basic Auth search flow.
+ *
+ * A `success` from `obtainStartUrlFn` persists the new `uadeStartUrl`
+ * through the exact same encrypted path `/credenciales modo:link` already
+ * uses (`rotateCredentialValuesFn`) and reports `{ status: 'success' }`. Any
+ * other result (`mfa_required` or `failed`) leaves the stored credentials
+ * untouched and reports `{ status: 'fallback' }` — the caller is
+ * responsible for preserving the pre-existing manual pause/DM flow in that
+ * case. Only ever returns an object with a single `status` key — never the
+ * obtained `startUrl` or any credential (T-03.1-05/AUTOLINK-04): that value
+ * must never flow into anything `pollOnce` persists as `lastOutcome`.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {import('zod').infer<typeof import('../schemas.js').SearchJobSchema>} job
+ * @param {{ username: string, password: string, masterKey: string }} credentials
+ * @param {{
+ *   withPlainContextFn?: typeof withPlainContext,
+ *   obtainStartUrlFn?: typeof obtainStartUrl,
+ *   rotateCredentialValuesFn?: typeof rotateCredentialValues,
+ * }} [deps]
+ * @returns {Promise<{ status: 'success' } | { status: 'fallback' }>}
+ */
+export async function attemptAutoRelink(
+  db,
+  job,
+  { username, password, masterKey },
+  {
+    withPlainContextFn = withPlainContext,
+    obtainStartUrlFn = obtainStartUrl,
+    rotateCredentialValuesFn = rotateCredentialValues,
+  } = {},
+) {
+  const result = await withPlainContextFn((context) => obtainStartUrlFn(context, { username, password }));
+
+  if (result.status === 'success') {
+    rotateCredentialValuesFn(db, {
+      discordUserId: job.discordUserId,
+      masterKey,
+      updates: { uadeStartUrl: result.startUrl },
+    });
+    logger.info({ event: 'auto_relink_applied', jobId: job.id }, 'Automatic SSO relink succeeded; uadeStartUrl rotated');
+    return { status: 'success' };
+  }
+
+  const reason = result.status === 'mfa_required' ? 'mfa_required' : result.reason;
+  logger.info(
+    { event: 'auto_relink_fallback', jobId: job.id, reason },
+    'Automatic SSO relink did not succeed; falling back to the manual credential flow',
+  );
+  return { status: 'fallback' };
+}
+
+/**
  * Runs one complete poll for a single search job: decrypts that job's
  * account credentials transiently, drives the real Phase-1 search chain
  * (`withUadeContext` -> `runSearch` -> `parseResults` -> `filterVacancies` ->
  * `classifySearchResult`) with the job's own decrypted `uadeStartUrl`, and
  * persists the resulting outcome onto the job's row.
  *
+ * AUTOLINK-03: `attemptAutoRelinkFn` runs only when this poll's outcome is
+ * `stale_start_url` — every other outcome branch never reaches it. A
+ * successful relink overrides only the LOCAL backoff signal fed into
+ * `nextBackoffState` (so this account comes out of this call unpaused with
+ * no DM); it never mutates `outcome` itself, which is persisted via
+ * `updateJobPollResult` BEFORE the relink attempt runs, exactly as it was
+ * before this phase.
+ *
  * CRED-04/CRED-05 discipline: `decryptCredentials`'s output is destructured
  * into a single local `const` used only inside this function body, passed
- * directly into `withUadeContextFn`/`runSearchFn`, never assigned to any
- * object that outlives this call, and never logged — only the final
- * `outcome.outcome` string is logged.
+ * directly into `withUadeContextFn`/`runSearchFn`/`attemptAutoRelinkFn`,
+ * never assigned to any object that outlives this call, and never logged —
+ * only the final `outcome.outcome` string is logged.
  *
  * @param {import('better-sqlite3').Database} db
  * @param {number} jobId
  * @param {{
  *   withUadeContextFn?: typeof withUadeContext,
  *   runSearchFn?: typeof runSearch,
+ *   attemptAutoRelinkFn?: typeof attemptAutoRelink,
  * }} [deps]
  * @returns {Promise<import('zod').infer<typeof import('../schemas.js').SearchOutcomeSchema> | { outcome: string }>}
  */
-export async function pollOnce(db, jobId, { withUadeContextFn = withUadeContext, runSearchFn = runSearch } = {}) {
+export async function pollOnce(
+  db,
+  jobId,
+  { withUadeContextFn = withUadeContext, runSearchFn = runSearch, attemptAutoRelinkFn = attemptAutoRelink } = {},
+) {
   const job = getJob(db, jobId);
   if (!job) {
     throw new Error(`pollOnce: job ${jobId} not found`);
@@ -140,11 +213,28 @@ export async function pollOnce(db, jobId, { withUadeContextFn = withUadeContext,
     upsertMateriaNombre(db, job.filtros.materiaCodigo, outcome.materiaNombre);
   }
 
+  // AUTOLINK-01/02/03: only a stale_start_url outcome ever reaches the
+  // automated SSO relink attempt — reusing the same uadeUsername/uadePassword
+  // this call already decrypted above, never re-reading/re-decrypting them.
+  let relinkSucceeded = false;
+  if (outcome.outcome === 'stale_start_url') {
+    const relinkResult = await attemptAutoRelinkFn(db, job, {
+      username: uadeUsername,
+      password: uadePassword,
+      masterKey: CREDENTIALS_MASTER_KEY,
+    });
+    relinkSucceeded = relinkResult.status === 'success';
+  }
+
   // D-04: this single write pauses/resumes EVERY job tied to this account,
   // since queue.js's tick filter reads this same account-level state for
   // every job at this discordUserId on the next tick — not a per-job write.
   const currentPauseState = userToCurrentPauseState(getUser(db, job.discordUserId));
-  const signal = backoffSignalFromStatus(outcome.outcome);
+  // A successful automatic relink treats this poll's backoff signal as a
+  // success (clearing any pause, no DM) WITHOUT changing outcome.outcome
+  // itself — that already-persisted lastOutcome stays 'stale_start_url' for
+  // this run, as before this phase.
+  const signal = relinkSucceeded ? 'success' : backoffSignalFromStatus(outcome.outcome);
   const nextPauseState = nextBackoffState({ currentState: currentPauseState, signal });
   updateAccountPauseState(db, job.discordUserId, pauseStateToUserFields(nextPauseState));
 
