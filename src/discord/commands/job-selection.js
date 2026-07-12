@@ -1,6 +1,6 @@
 import { getDb } from '../../db/database.js';
 import { getJob, listAllJobs, listDistinctJobOwnerIds, listJobsByUser } from '../../db/jobs.repository.js';
-import { getUser } from '../../db/users.repository.js';
+import { getUser, listAllUserIds } from '../../db/users.repository.js';
 import { formatJobIdentity, formatJobStatus, jobNotFoundMessage, parseLastOutcome } from '../messages.js';
 
 // Discord rejects an autocomplete choice `name` longer than 100 characters.
@@ -57,7 +57,7 @@ export async function autocompleteUserJobs(interaction, { db = getDb() } = {}) {
  * @param {string} discordUserId
  * @returns {Promise<string>}
  */
-async function resolveDisplayName(client, discordUserId) {
+export async function resolveDisplayName(client, discordUserId) {
   try {
     const user = await client.users.fetch(discordUserId);
     return user.globalName || user.username || discordUserId;
@@ -95,22 +95,39 @@ export async function autocompleteAllJobs(interaction, { db = getDb() } = {}) {
 }
 
 /**
- * Backs the `/admin-estado` `usuario` filter: one choice per account that
- * currently has at least one job, showing the account's resolved display
- * name (value is the raw discord user id used to filter).
+ * Shared by every autocomplete that offers "pick an account" choices:
+ * resolves each id to a display name and builds `{name, value}` pairs
+ * filtered by the currently-typed text, value is the raw discord user id.
  */
-export async function autocompleteJobOwners(interaction, { db = getDb() } = {}) {
-  const focused = String(interaction.options.getFocused() ?? '').toLowerCase();
-  const ownerIds = listDistinctJobOwnerIds(db);
+async function buildUserChoices(client, userIds, focused) {
   const entries = await Promise.all(
-    ownerIds.map(async (id) => ({ id, name: await resolveDisplayName(interaction.client, id) })),
+    userIds.map(async (id) => ({ id, name: await resolveDisplayName(client, id) })),
   );
 
-  const choices = entries
+  return entries
     .map((entry) => ({ name: `${entry.name} (${entry.id})`.slice(0, 100), value: entry.id }))
     .filter((choice) => choice.name.toLowerCase().includes(focused))
     .slice(0, 25);
+}
 
+/**
+ * Backs the `/admin-estado` `usuario` filter: one choice per account that
+ * currently has at least one job.
+ */
+export async function autocompleteJobOwners(interaction, { db = getDb() } = {}) {
+  const focused = String(interaction.options.getFocused() ?? '').toLowerCase();
+  const choices = await buildUserChoices(interaction.client, listDistinctJobOwnerIds(db), focused);
+  await interaction.respond(choices);
+}
+
+/**
+ * Backs the `/admin-user-stats` `usuario` option: every registered account,
+ * including ones with zero jobs -- unlike `autocompleteJobOwners`, an admin
+ * may want a status check on an account that never created a search.
+ */
+export async function autocompleteAllUsers(interaction, { db = getDb() } = {}) {
+  const focused = String(interaction.options.getFocused() ?? '').toLowerCase();
+  const choices = await buildUserChoices(interaction.client, listAllUserIds(db), focused);
   await interaction.respond(choices);
 }
 

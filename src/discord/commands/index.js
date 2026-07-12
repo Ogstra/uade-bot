@@ -9,6 +9,7 @@ import { adminDetenerCommand } from './admin-detener.js';
 import { adminPausarCommand } from './admin-pausar.js';
 import { adminReanudarCommand } from './admin-reanudar.js';
 import { adminStatsCommand } from './admin-stats.js';
+import { adminUserStatsCommand } from './admin-user-stats.js';
 
 export const commands = [
   buscarCommand,
@@ -22,5 +23,6 @@ export const commands = [
   adminPausarCommand,
   adminReanudarCommand,
   adminStatsCommand,
+  adminUserStatsCommand,
 ];
 export const commandsByName = new Map(commands.map((command) => [command.data.name, command]));

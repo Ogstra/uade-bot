@@ -63,6 +63,19 @@ export function countUsers(db) {
 }
 
 /**
+ * Every registered account's id -- backs `/admin-user-stats`'s autocomplete
+ * (unlike `listDistinctJobOwnerIds` in jobs.repository.js, includes accounts
+ * with zero jobs, since an admin may still want a status check on them).
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @returns {string[]}
+ */
+export function listAllUserIds(db) {
+  const rows = db.prepare('SELECT discord_user_id FROM users ORDER BY discord_user_id ASC').all();
+  return rows.map((row) => row.discord_user_id);
+}
+
+/**
  * Accounts currently paused for any reason (credentials, stale link, rate
  * limit) -- admin-only visibility.
  *

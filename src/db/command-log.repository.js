@@ -59,3 +59,35 @@ export function countCommandUsageByCommand(db, { limit = 10 } = {}) {
 export function countTotalCommandUsage(db) {
   return db.prepare('SELECT COUNT(*) AS n FROM command_log').get().n;
 }
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} discordUserId
+ * @returns {number}
+ */
+export function countCommandUsageForUser(db, discordUserId) {
+  return db.prepare('SELECT COUNT(*) AS n FROM command_log WHERE discord_user_id = ?').get(discordUserId).n;
+}
+
+/**
+ * Usage counts per command name for a single account, most-used first --
+ * backs `/admin-user-stats`.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} discordUserId
+ * @param {{ limit?: number }} [options]
+ * @returns {{ commandName: string, count: number }[]}
+ */
+export function countCommandUsageByCommandForUser(db, discordUserId, { limit = 10 } = {}) {
+  const rows = db
+    .prepare(
+      `SELECT command_name, COUNT(*) AS count FROM command_log
+       WHERE discord_user_id = ?
+       GROUP BY command_name
+       ORDER BY count DESC
+       LIMIT ?`,
+    )
+    .all(discordUserId, limit);
+
+  return rows.map((row) => ({ commandName: row.command_name, count: row.count }));
+}

@@ -290,6 +290,42 @@ export function adminJobActionMessage(action, job) {
   return `**Busqueda ${action} (admin):** #${job.id} de <@${job.discordUserId}> — ${jobDisplay(job)}.`;
 }
 
+export function adminUserNotFoundMessage() {
+  return 'Esa cuenta no esta registrada (nunca uso el bot).';
+}
+
+/**
+ * Per-account breakdown for `/admin-user-stats` -- unlike `adminStatsMessage`
+ * (bot-wide totals), this scopes everything to one account: its jobs (via
+ * `formatAdminJobLine`, so each line still shows the owner mention/id even
+ * though it's redundant here, for visual consistency with `/admin-estado`),
+ * pause state, and command usage.
+ */
+export function adminUserStatsMessage({ displayName, discordUserId, jobs, pauseReason, totalCommandUsage, topCommands }) {
+  const activeJobs = jobs.filter((job) => job.status === 'active').length;
+  const pausedJobs = jobs.filter((job) => job.status === 'paused_by_user').length;
+
+  const lines = [
+    `**Estadisticas de ${displayName}** (<@${discordUserId}>)`,
+    `**Estado de la cuenta:** ${pauseReason ? `pausada (${pauseReason})` : 'activa'}`,
+    `**Busquedas activas:** ${activeJobs}`,
+    `**Busquedas pausadas (por usuario):** ${pausedJobs}`,
+    `**Comandos ejecutados (total):** ${totalCommandUsage}`,
+  ];
+
+  if (topCommands.length > 0) {
+    lines.push('**Comandos mas usados:**');
+    lines.push(topCommands.map((c) => `  - \`/${c.commandName}\`: ${c.count}`).join('\n'));
+  }
+
+  if (jobs.length > 0) {
+    lines.push('**Busquedas:**');
+    lines.push(jobs.map(formatAdminJobLine).join('\n'));
+  }
+
+  return lines.join('\n');
+}
+
 export function adminStatsMessage({
   totalUsers,
   totalActiveJobs,

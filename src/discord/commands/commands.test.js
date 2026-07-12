@@ -59,6 +59,7 @@ test('command builders expose search CRUD commands with required options and fix
       'admin-pausar',
       'admin-reanudar',
       'admin-stats',
+      'admin-user-stats',
     ],
   );
   assert.equal(commandsByName.get('buscar'), buscarCommand);

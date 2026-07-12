@@ -9,7 +9,8 @@ import { adminDetenerCommand } from './admin-detener.js';
 import { adminPausarCommand } from './admin-pausar.js';
 import { adminReanudarCommand } from './admin-reanudar.js';
 import { adminStatsCommand } from './admin-stats.js';
-import { autocompleteAllJobs, autocompleteJobOwners } from './job-selection.js';
+import { adminUserStatsCommand } from './admin-user-stats.js';
+import { autocompleteAllJobs, autocompleteAllUsers, autocompleteJobOwners } from './job-selection.js';
 
 const FILTROS = {
   materiaCodigo: '3.1.050',
@@ -57,6 +58,7 @@ test('all admin commands are flagged adminOnly for the central interactions.js g
   assert.equal(adminPausarCommand.adminOnly, true);
   assert.equal(adminReanudarCommand.adminOnly, true);
   assert.equal(adminStatsCommand.adminOnly, true);
+  assert.equal(adminUserStatsCommand.adminOnly, true);
 });
 
 test('/admin-estado lists jobs from every account, not just the caller', async () => {
@@ -266,6 +268,75 @@ test('listAllJobs still backs /admin-estado with no filter (sanity check for the
     upsertUser(db, 'user-1');
     createJob(db, { discordUserId: 'user-1', filtros: FILTROS });
     assert.equal(listAllJobs(db).length, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test('/admin-user-stats reports one account\'s jobs, pause state, and command usage', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS, label: 'Fisica II' });
+    logCommandUsage(db, { discordUserId: 'user-1', commandName: 'buscar', guildId: 'guild-1' });
+    logCommandUsage(db, { discordUserId: 'user-1', commandName: 'buscar', guildId: 'guild-1' });
+    logCommandUsage(db, { discordUserId: 'user-2', commandName: 'estado', guildId: 'guild-1' });
+
+    const interaction = createInteraction({ options: { usuario: 'user-1' } });
+    await adminUserStatsCommand.execute(interaction, { db });
+
+    const content = interaction.calls[0][1].content;
+    assert.match(content, /Estadisticas de alice/);
+    assert.match(content, /Estado de la cuenta:\*\* activa/);
+    assert.match(content, /Busquedas activas:\*\* 1/);
+    assert.match(content, /Comandos ejecutados \(total\):\*\* 2/);
+    assert.match(content, /`\/buscar`: 2/);
+    assert.match(content, new RegExp(`#${job.id}`));
+    assert.equal(interaction.calls[0][1].ephemeral, true);
+  } finally {
+    db.close();
+  }
+});
+
+test('/admin-user-stats shows the pause reason for a paused account', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-2');
+    db.prepare("UPDATE users SET pause_reason = 'needs_credentials' WHERE discord_user_id = 'user-2'").run();
+
+    const interaction = createInteraction({ options: { usuario: 'user-2' } });
+    await adminUserStatsCommand.execute(interaction, { db });
+
+    assert.match(interaction.calls[0][1].content, /pausada \(needs_credentials\)/);
+  } finally {
+    db.close();
+  }
+});
+
+test('/admin-user-stats replies not-found for an unregistered account', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const interaction = createInteraction({ options: { usuario: 'nobody' } });
+    await adminUserStatsCommand.execute(interaction, { db });
+
+    assert.match(interaction.calls[0][1].content, /no esta registrada/i);
+  } finally {
+    db.close();
+  }
+});
+
+test('autocompleteAllUsers lists every registered account, even ones without jobs', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    upsertUser(db, 'user-2');
+
+    const interaction = createInteraction();
+    await autocompleteAllUsers(interaction, { db });
+
+    const choices = interaction.calls[0][1];
+    assert.equal(choices.length, 2);
+    assert.deepEqual(choices.map((c) => c.value).sort(), ['user-1', 'user-2']);
   } finally {
     db.close();
   }

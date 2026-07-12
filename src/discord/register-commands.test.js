@@ -34,6 +34,7 @@ test('registerCommands registers all commands only to the configured guild route
       'admin-pausar',
       'admin-reanudar',
       'admin-stats',
+      'admin-user-stats',
     ],
   );
 });
