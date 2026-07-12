@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { MessageFlags } from 'discord.js';
 import { createDatabase } from '../db/database.js';
 import { createJob, getJob } from '../db/jobs.repository.js';
 import { listCommandUsageByUser } from '../db/command-log.repository.js';
@@ -217,7 +218,7 @@ test('/buscar defers before async work and finishes with editReply(), publicly b
   });
 
   assert.equal(events[0][0], 'deferReply');
-  assert.deepEqual(events[0][1], { ephemeral: false });
+  assert.deepEqual(events[0][1], {});
   assert.equal(events.at(-1)[0], 'editReply');
 });
 
@@ -235,7 +236,7 @@ test('/buscar defers ephemerally when ephemeralReplies: true is set', async () =
     ephemeralReplies: true,
   });
 
-  assert.deepEqual(events[0], ['deferReply', { ephemeral: true }]);
+  assert.deepEqual(events[0], ['deferReply', { flags: MessageFlags.Ephemeral }]);
 });
 
 test('dispatcher routes a "Detener busqueda" button click to handleDetenerButton', async () => {

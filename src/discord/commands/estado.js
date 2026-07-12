@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { getUser } from '../../db/users.repository.js';
 import { listJobsByUser } from '../../db/jobs.repository.js';
@@ -12,14 +12,14 @@ export const estadoCommand = {
   async execute(interaction, { db = getDb() } = {}) {
     const jobs = listJobsByUser(db, interaction.user.id);
     if (jobs.length === 0) {
-      await interaction.reply({ content: noJobsMessage(), ephemeral: true });
+      await interaction.reply({ content: noJobsMessage(), flags: MessageFlags.Ephemeral });
       return;
     }
 
     const user = getUser(db, interaction.user.id);
     await interaction.reply({
       content: jobs.map((job) => formatJobStatusBlock(job, user)).join('\n\n'),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   },
 };

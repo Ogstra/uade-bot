@@ -1,8 +1,9 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
 import { getDb } from '../db/database.js';
 import { deleteJob } from '../db/jobs.repository.js';
 import { getOwnedJob } from './commands/job-selection.js';
 import { jobActionMessage, jobNotFoundMessage } from './messages.js';
+import { ephemeralFlags } from './reply-flags.js';
 import logger from '../logger.js';
 
 const DETENER_BUTTON_PREFIX = 'detener_job:';
@@ -55,12 +56,12 @@ export async function handleDetenerButton(interaction, { db = getDb(), ephemeral
   const job = getOwnedJob(db, jobId, interaction.user.id);
 
   if (!job) {
-    await interaction.reply({ content: jobNotFoundMessage(), ephemeral: true });
+    await interaction.reply({ content: jobNotFoundMessage(), flags: MessageFlags.Ephemeral });
     return;
   }
 
   deleteJob(db, job.id);
-  await interaction.reply({ content: jobActionMessage('detenida', job), ephemeral: ephemeralReplies });
+  await interaction.reply({ content: jobActionMessage('detenida', job), ...ephemeralFlags(ephemeralReplies) });
 
   if (job.channelId && job.channelId !== interaction.channelId) {
     try {

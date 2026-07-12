@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { updateJobStatus } from '../../db/jobs.repository.js';
 import { autocompleteAllJobs, getAnyJobFromInteraction } from './job-selection.js';
@@ -23,7 +23,7 @@ export const adminPausarCommand = {
   async execute(interaction, { db = getDb() } = {}) {
     const job = getAnyJobFromInteraction(db, interaction);
     if (!job) {
-      await interaction.reply({ content: adminJobNotFoundMessage(), ephemeral: true });
+      await interaction.reply({ content: adminJobNotFoundMessage(), flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -32,6 +32,6 @@ export const adminPausarCommand = {
       { event: 'admin_job_paused', jobId: job.id, targetUserId: job.discordUserId, adminUserId: interaction.user.id },
       'Admin paused a search belonging to another account',
     );
-    await interaction.reply({ content: adminJobActionMessage('pausada', job), ephemeral: true });
+    await interaction.reply({ content: adminJobActionMessage('pausada', job), flags: MessageFlags.Ephemeral });
   },
 };

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { test } from 'node:test';
+import { MessageFlags } from 'discord.js';
 import { createDatabase } from '../../db/database.js';
 import { getCredentials } from '../../db/credentials.repository.js';
 import { upsertUser } from '../../db/users.repository.js';
@@ -67,7 +68,7 @@ test('/credenciales is registered and stores all credential fields through DM', 
     assert.equal(commandsByName.get('credenciales'), credencialesCommand);
     await credencialesCommand.execute(interaction, { db, env: { CREDENTIALS_MASTER_KEY: masterKey }, getBrowserFn: noopGetBrowser });
 
-    assert.deepEqual(interaction.calls[0], ['deferReply', { ephemeral: true }]);
+    assert.deepEqual(interaction.calls[0], ['deferReply', { flags: MessageFlags.Ephemeral }]);
     assert.equal(interaction.calls.at(-1)[0], 'editReply');
     assert.match(String(interaction.calls.at(-1)[1]), /guardadas/i);
     const decrypted = decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1'));

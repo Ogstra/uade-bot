@@ -3,6 +3,7 @@ import { getDb } from '../../db/database.js';
 import { deleteJob } from '../../db/jobs.repository.js';
 import { autocompleteUserJobs, getOwnedJobFromInteraction, replyJobNotFound } from './job-selection.js';
 import { jobActionMessage } from '../messages.js';
+import { ephemeralFlags } from '../reply-flags.js';
 
 export const detenerCommand = {
   data: new SlashCommandBuilder()
@@ -26,6 +27,6 @@ export const detenerCommand = {
     }
 
     deleteJob(db, job.id);
-    await interaction.reply({ content: jobActionMessage('detenida', job), ephemeral: ephemeralReplies });
+    await interaction.reply({ content: jobActionMessage('detenida', job), ...ephemeralFlags(ephemeralReplies) });
   },
 };

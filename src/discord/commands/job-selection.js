@@ -1,3 +1,4 @@
+import { MessageFlags } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { getJob, listAllJobs, listDistinctJobOwnerIds, listJobsByUser } from '../../db/jobs.repository.js';
 import { getUser, listAllUserIds } from '../../db/users.repository.js';
@@ -158,5 +159,5 @@ export function getAnyJobFromInteraction(db, interaction) {
 }
 
 export async function replyJobNotFound(interaction) {
-  await interaction.reply({ content: jobNotFoundMessage(), ephemeral: true });
+  await interaction.reply({ content: jobNotFoundMessage(), flags: MessageFlags.Ephemeral });
 }

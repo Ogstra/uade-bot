@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { listAllJobs, listJobsByUser } from '../../db/jobs.repository.js';
 import { autocompleteJobOwners } from './job-selection.js';
@@ -22,6 +22,6 @@ export const adminEstadoCommand = {
   async execute(interaction, { db = getDb() } = {}) {
     const filterUserId = interaction.options.getString('usuario');
     const jobs = filterUserId ? listJobsByUser(db, filterUserId) : listAllJobs(db);
-    await interaction.reply({ content: adminJobListMessage(jobs), ephemeral: true });
+    await interaction.reply({ content: adminJobListMessage(jobs), flags: MessageFlags.Ephemeral });
   },
 };

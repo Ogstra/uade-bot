@@ -3,6 +3,7 @@ import { getDb } from '../../db/database.js';
 import { updateJobStatus } from '../../db/jobs.repository.js';
 import { autocompleteUserJobs, getOwnedJobFromInteraction, replyJobNotFound } from './job-selection.js';
 import { jobActionMessage } from '../messages.js';
+import { ephemeralFlags } from '../reply-flags.js';
 import logger from '../../logger.js';
 
 export const reanudarCommand = {
@@ -27,7 +28,7 @@ export const reanudarCommand = {
     }
 
     const resumedJob = updateJobStatus(db, job.id, 'active');
-    await interaction.reply({ content: jobActionMessage('reanudada', job), ephemeral: ephemeralReplies });
+    await interaction.reply({ content: jobActionMessage('reanudada', job), ...ephemeralFlags(ephemeralReplies) });
 
     if (onJobResumed) {
       try {

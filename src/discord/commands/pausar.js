@@ -3,6 +3,7 @@ import { getDb } from '../../db/database.js';
 import { updateJobStatus } from '../../db/jobs.repository.js';
 import { autocompleteUserJobs, getOwnedJobFromInteraction, replyJobNotFound } from './job-selection.js';
 import { jobActionMessage } from '../messages.js';
+import { ephemeralFlags } from '../reply-flags.js';
 
 export const pausarCommand = {
   data: new SlashCommandBuilder()
@@ -26,6 +27,6 @@ export const pausarCommand = {
     }
 
     updateJobStatus(db, job.id, 'paused_by_user');
-    await interaction.reply({ content: jobActionMessage('pausada', job), ephemeral: ephemeralReplies });
+    await interaction.reply({ content: jobActionMessage('pausada', job), ...ephemeralFlags(ephemeralReplies) });
   },
 };

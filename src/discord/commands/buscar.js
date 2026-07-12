@@ -7,6 +7,7 @@ import { getUser, upsertUser } from '../../db/users.repository.js';
 import { FiltrosSchema } from '../../schemas.js';
 import { runFullCredentialOnboarding } from '../credentials-flow.js';
 import { searchCreatedMessage, searchValidationError, tooManySearchesMessage } from '../messages.js';
+import { ephemeralFlags } from '../reply-flags.js';
 import { MAX_ACTIVE_SEARCHES_PER_USER } from './job-selection.js';
 import logger from '../../logger.js';
 
@@ -92,7 +93,7 @@ export const buscarCommand = {
       getBrowserFn,
     } = {},
   ) {
-    await interaction.deferReply({ ephemeral: ephemeralReplies });
+    await interaction.deferReply(ephemeralFlags(ephemeralReplies));
 
     let filtros;
     try {

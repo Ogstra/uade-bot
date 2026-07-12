@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { MessageFlags } from 'discord.js';
 import { createDatabase } from '../../db/database.js';
 import { createJob, getJob, listAllJobs } from '../../db/jobs.repository.js';
 import { logCommandUsage } from '../../db/command-log.repository.js';
@@ -73,7 +74,7 @@ test('/admin-estado lists jobs from every account, not just the caller', async (
     await adminEstadoCommand.execute(interaction, { db });
 
     const reply = interaction.calls[0][1];
-    assert.equal(reply.ephemeral, true);
+    assert.equal(reply.flags, MessageFlags.Ephemeral);
     assert.match(reply.content, new RegExp(`#${jobA.id}.*user-1`));
     assert.match(reply.content, new RegExp(`#${jobB.id}.*user-2`));
   } finally {
@@ -143,7 +144,7 @@ test('/admin-detener deletes another account\'s job and confirms which account i
     assert.equal(getJob(db, job.id), null);
     assert.match(interaction.calls[0][1].content, /Busqueda detenida \(admin\)/);
     assert.match(interaction.calls[0][1].content, /user-1/);
-    assert.equal(interaction.calls[0][1].ephemeral, true);
+    assert.equal(interaction.calls[0][1].flags, MessageFlags.Ephemeral);
   } finally {
     db.close();
   }
@@ -292,7 +293,7 @@ test('/admin-user-stats reports one account\'s jobs, pause state, and command us
     assert.match(content, /Comandos ejecutados \(total\):\*\* 2/);
     assert.match(content, /`\/buscar`: 2/);
     assert.match(content, new RegExp(`#${job.id}`));
-    assert.equal(interaction.calls[0][1].ephemeral, true);
+    assert.equal(interaction.calls[0][1].flags, MessageFlags.Ephemeral);
   } finally {
     db.close();
   }

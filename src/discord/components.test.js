@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ButtonStyle } from 'discord.js';
+import { ButtonStyle, MessageFlags } from 'discord.js';
 import { createDatabase } from '../db/database.js';
 import { createJob, getJob } from '../db/jobs.repository.js';
 import { upsertUser } from '../db/users.repository.js';
@@ -72,7 +72,7 @@ test('handleDetenerButton deletes the job and confirms when the clicker owns it'
     assert.equal(getJob(db, job.id), null);
     assert.equal(interaction.calls[0][0], 'reply');
     assert.match(interaction.calls[0][1].content, /Busqueda detenida/);
-    assert.equal(interaction.calls[0][1].ephemeral, false);
+    assert.equal(interaction.calls[0][1].flags, undefined);
     assert.equal(interaction.channelSends.length, 0);
   } finally {
     db.close();
@@ -88,7 +88,7 @@ test('handleDetenerButton confirms ephemerally when ephemeralReplies: true is se
 
     await handleDetenerButton(interaction, { db, ephemeralReplies: true });
 
-    assert.equal(interaction.calls[0][1].ephemeral, true);
+    assert.equal(interaction.calls[0][1].flags, MessageFlags.Ephemeral);
   } finally {
     db.close();
   }

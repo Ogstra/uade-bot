@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { MessageFlags } from 'discord.js';
 import { createDatabase } from '../../db/database.js';
 import { upsertCredentials } from '../../db/credentials.repository.js';
 import { createJob, getJob, listJobsByUser } from '../../db/jobs.repository.js';
@@ -110,7 +111,7 @@ test('/buscar validates locally, creates duplicate jobs, and never calls live se
       dias: ['LU', 'MI'],
       sedesExcluidas: ['Monserrat', 'Recoleta'],
     });
-    assert.deepEqual(interaction.calls[0], ['deferReply', { ephemeral: false }]);
+    assert.deepEqual(interaction.calls[0], ['deferReply', {}]);
     assert.match(String(interaction.calls.at(-1)[1]), /Busqueda creada/i);
   } finally {
     db.close();
@@ -122,25 +123,25 @@ test('/buscar, /detener, /pausar, and /reanudar default to public replies and ho
   try {
     const buscarInteraction = createInteraction();
     await buscarCommand.execute(buscarInteraction, { db });
-    assert.deepEqual(buscarInteraction.calls[0], ['deferReply', { ephemeral: false }]);
+    assert.deepEqual(buscarInteraction.calls[0], ['deferReply', {}]);
 
     const buscarEphemeral = createInteraction({ userId: 'user-2' });
     await buscarCommand.execute(buscarEphemeral, { db, ephemeralReplies: true });
-    assert.deepEqual(buscarEphemeral.calls[0], ['deferReply', { ephemeral: true }]);
+    assert.deepEqual(buscarEphemeral.calls[0], ['deferReply', { flags: MessageFlags.Ephemeral }]);
 
     const [job] = listJobsByUser(db, 'user-1');
 
     const pausarInteraction = createInteraction({ options: { busqueda: String(job.id) } });
     await pausarCommand.execute(pausarInteraction, { db });
-    assert.equal(pausarInteraction.calls[0][1].ephemeral, false);
+    assert.equal(pausarInteraction.calls[0][1].flags, undefined);
 
     const reanudarInteraction = createInteraction({ options: { busqueda: String(job.id) } });
     await reanudarCommand.execute(reanudarInteraction, { db, ephemeralReplies: true });
-    assert.equal(reanudarInteraction.calls[0][1].ephemeral, true);
+    assert.equal(reanudarInteraction.calls[0][1].flags, MessageFlags.Ephemeral);
 
     const detenerInteraction = createInteraction({ options: { busqueda: String(job.id) } });
     await detenerCommand.execute(detenerInteraction, { db });
-    assert.equal(detenerInteraction.calls[0][1].ephemeral, false);
+    assert.equal(detenerInteraction.calls[0][1].flags, undefined);
   } finally {
     db.close();
   }

@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { updateJobStatus } from '../../db/jobs.repository.js';
 import { autocompleteAllJobs, getAnyJobFromInteraction } from './job-selection.js';
@@ -23,7 +23,7 @@ export const adminReanudarCommand = {
   async execute(interaction, { db = getDb(), onJobResumed } = {}) {
     const job = getAnyJobFromInteraction(db, interaction);
     if (!job) {
-      await interaction.reply({ content: adminJobNotFoundMessage(), ephemeral: true });
+      await interaction.reply({ content: adminJobNotFoundMessage(), flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -32,7 +32,7 @@ export const adminReanudarCommand = {
       { event: 'admin_job_resumed', jobId: job.id, targetUserId: job.discordUserId, adminUserId: interaction.user.id },
       'Admin resumed a search belonging to another account',
     );
-    await interaction.reply({ content: adminJobActionMessage('reanudada', job), ephemeral: true });
+    await interaction.reply({ content: adminJobActionMessage('reanudada', job), flags: MessageFlags.Ephemeral });
 
     if (onJobResumed) {
       try {

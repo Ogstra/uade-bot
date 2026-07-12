@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { listAllJobs } from '../../db/jobs.repository.js';
 import { countUsers, listPausedAccounts } from '../../db/users.repository.js';
@@ -25,7 +25,7 @@ export const adminStatsCommand = {
         totalCommandUsage: countTotalCommandUsage(db),
         topCommands: countCommandUsageByCommand(db, { limit: 6 }),
       }),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   },
 };

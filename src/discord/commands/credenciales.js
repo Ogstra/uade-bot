@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { upsertUser } from '../../db/users.repository.js';
 import { runCredentialRotation } from '../credentials-flow.js';
@@ -26,7 +26,7 @@ export const credencialesCommand = {
     // already shows "The application did not respond" and the reply itself
     // fails with a stale-interaction error (10062), even though the DM flow
     // and credential save underneath completed successfully.
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     upsertUser(db, interaction.user.id);
     const result = await runCredentialRotation(interaction, { db, env, getBrowserFn });
     await interaction.editReply(result.message);

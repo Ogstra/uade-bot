@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { listJobsByUser } from '../../db/jobs.repository.js';
 import { getUser } from '../../db/users.repository.js';
@@ -25,7 +25,7 @@ export const adminUserStatsCommand = {
     const discordUserId = interaction.options.getString('usuario');
     const user = getUser(db, discordUserId);
     if (!user) {
-      await interaction.reply({ content: adminUserNotFoundMessage(), ephemeral: true });
+      await interaction.reply({ content: adminUserNotFoundMessage(), flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -41,7 +41,7 @@ export const adminUserStatsCommand = {
         totalCommandUsage: countCommandUsageForUser(db, discordUserId),
         topCommands: countCommandUsageByCommandForUser(db, discordUserId, { limit: 6 }),
       }),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   },
 };
