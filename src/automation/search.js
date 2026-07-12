@@ -435,8 +435,15 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
   // account); silently downgrading to `no_vacancies` instead would hide a
   // real vacancy behind a false negative -- the one outcome this bot's core
   // value promise ("avisame apenas se abre un lugar") cannot tolerate.
+  // 10s headroom (not the initial 5s) for a cold-started browser's first
+  // navigation on this account -- confirmed live 2026-07-12 that a fresh
+  // Chromium launch (queue.js's idle-close, browser.js) can take longer
+  // than 5s to settle on its very first postback, even though the site
+  // itself does reach networkidle (not persistent background chatter --
+  // later polls on the same warm browser settled well within 5s). The
+  // default POLL_INTERVAL_MS (25s) comfortably absorbs the extra margin.
   try {
-    await page.waitForLoadState('networkidle', { timeout: 5000 });
+    await page.waitForLoadState('networkidle', { timeout: 10000 });
   } catch (err) {
     logger.warn(
       { event: 'postback_settle_timeout', message: err.message },
