@@ -5,6 +5,7 @@ import {
   verifyPostbackMatchesQuery,
   resolveTurnoOptionValue,
   isStaleStartUrlSignal,
+  navigateToStartUrl,
 } from './search.js';
 
 const baseFiltros = {
@@ -125,4 +126,72 @@ test('extractMateriaNombreFromCells returns the name after the materia code', ()
     'Fisica II',
   );
   assert.equal(extractMateriaNombreFromCells(['5', '3.1.099'], '3.1.050'), null);
+});
+
+function fakePage(gotoImpl) {
+  return { goto: gotoImpl };
+}
+
+test('navigateToStartUrl succeeds on the first try without retrying', async () => {
+  let calls = 0;
+  const page = fakePage(async () => {
+    calls += 1;
+    return { status: () => 200 };
+  });
+  const sleeps = [];
+
+  const result = await navigateToStartUrl(page, 'https://example.com', { sleepFn: async (ms) => sleeps.push(ms) });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(sleeps, []);
+  assert.equal(result.response.status(), 200);
+});
+
+test('navigateToStartUrl retries once after a transient failure and succeeds', async () => {
+  let calls = 0;
+  const page = fakePage(async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new Error('net::ERR_CONNECTION_RESET at https://example.com');
+    }
+    return { status: () => 200 };
+  });
+  const sleeps = [];
+
+  const result = await navigateToStartUrl(page, 'https://example.com', {
+    retryDelayMs: 2000,
+    sleepFn: async (ms) => sleeps.push(ms),
+  });
+
+  assert.equal(calls, 2);
+  assert.deepEqual(sleeps, [2000]);
+  assert.equal(result.response.status(), 200);
+});
+
+test('navigateToStartUrl returns the error when both the first attempt and the retry fail', async () => {
+  let calls = 0;
+  const page = fakePage(async () => {
+    calls += 1;
+    throw new Error('net::ERR_CONNECTION_RESET at https://example.com');
+  });
+
+  const result = await navigateToStartUrl(page, 'https://example.com', { sleepFn: async () => {} });
+
+  assert.equal(calls, 2);
+  assert.match(result.error.message, /ERR_CONNECTION_RESET/);
+});
+
+test('navigateToStartUrl does not retry an auth-challenge error (retrying the same credentials won\'t fix it)', async () => {
+  let calls = 0;
+  const page = fakePage(async () => {
+    calls += 1;
+    throw new Error('401 unauthorized at https://example.com');
+  });
+  const sleeps = [];
+
+  const result = await navigateToStartUrl(page, 'https://example.com', { sleepFn: async (ms) => sleeps.push(ms) });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(sleeps, []);
+  assert.match(result.error.message, /401/);
 });

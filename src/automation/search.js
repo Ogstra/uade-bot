@@ -310,19 +310,65 @@ function isAuthChallengeError(err) {
   return /401|unauthorized|ERR_INVALID_AUTH_CREDENTIALS/i.test(message);
 }
 
+// A bare navigation failure (DNS blip, connection reset, brief network
+// hiccup) is usually transient -- one quick retry clears most of them
+// without making the user wait a full POLL_INTERVAL_MS (~25-30s) for the
+// next scheduled tick. Not retried for an auth-challenge error, since that's
+// a definite rejection retrying won't fix.
+const NAVIGATION_RETRY_DELAY_MS = 2000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Navigates `page` to `url`, retrying once after `retryDelayMs` if the first
+ * attempt throws a non-auth-challenge error. Exported standalone so the
+ * retry itself can be unit-tested without mocking the rest of `runSearch`'s
+ * page interactions.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} url
+ * @param {{ retryDelayMs?: number, sleepFn?: (ms: number) => Promise<void> }} [options]
+ * @returns {Promise<{ response: import('playwright').Response | null } | { error: Error }>}
+ */
+export async function navigateToStartUrl(page, url, { retryDelayMs = NAVIGATION_RETRY_DELAY_MS, sleepFn = sleep } = {}) {
+  const attempt = async () => {
+    try {
+      return { response: await page.goto(url, { waitUntil: 'domcontentloaded' }) };
+    } catch (err) {
+      return { error: err };
+    }
+  };
+
+  let result = await attempt();
+  if (result.error && !isAuthChallengeError(result.error)) {
+    logger.warn(
+      { event: 'start_url_navigation_retry', errorName: result.error.name },
+      'Navigation to start URL failed, retrying once after a short delay',
+    );
+    await sleepFn(retryDelayMs);
+    result = await attempt();
+  }
+
+  return result;
+}
+
 /**
  * Drives the live UADE search form for the given filtros and verifies the
  * postback matches the submitted query before trusting the response.
  *
  * @param {import('playwright').BrowserContext} context
  * @param {import('zod').infer<typeof FiltrosSchema>} filtros
- * @param {{ startUrl?: string }} [options] - per-call start URL (e.g. a
- *   per-user decrypted `uadeStartUrl`, Plan 02-02). Falls back to the
- *   process-global `UADE_START_URL` env var when omitted, preserving
- *   `src/cli.js`'s existing single-user call site unchanged.
+ * @param {{ startUrl?: string, navigationRetryDelayMs?: number, sleepFn?: (ms: number) => Promise<void> }} [options] - `startUrl`
+ *   is the per-call start URL (e.g. a per-user decrypted `uadeStartUrl`,
+ *   Plan 02-02). Falls back to the process-global `UADE_START_URL` env var
+ *   when omitted, preserving `src/cli.js`'s existing single-user call site
+ *   unchanged. `navigationRetryDelayMs`/`sleepFn` exist only so tests can
+ *   skip the real 2s wait.
  * @returns {Promise<{ status: 'invalid_credentials' } | { status: 'rate_limited' } | { status: 'stale_start_url' } | { status: 'search_failed', reason: string } | { status: 'verified', html: string, materiaNombre?: string }>}
  */
-export async function runSearch(context, filtros, { startUrl } = {}) {
+export async function runSearch(context, filtros, { startUrl, navigationRetryDelayMs, sleepFn } = {}) {
   const parsedFiltros = FiltrosSchema.parse(filtros);
   const resolvedStartUrl = startUrl ?? loadEnv().UADE_START_URL;
   if (!resolvedStartUrl) {
@@ -331,10 +377,12 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
 
   const page = await context.newPage();
 
-  let navigationResponse;
-  try {
-    navigationResponse = await page.goto(resolvedStartUrl, { waitUntil: 'domcontentloaded' });
-  } catch (err) {
+  const navigation = await navigateToStartUrl(page, resolvedStartUrl, {
+    retryDelayMs: navigationRetryDelayMs,
+    sleepFn,
+  });
+  if (navigation.error) {
+    const err = navigation.error;
     if (isAuthChallengeError(err)) {
       logger.info({ event: 'auth_challenge_error' }, 'Navigation failed with an auth challenge');
       return { status: 'invalid_credentials' };
@@ -350,6 +398,7 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
     );
     return { status: 'search_failed', reason: 'navigation_failed' };
   }
+  const navigationResponse = navigation.response;
 
   if (navigationResponse && navigationResponse.status() === 401) {
     logger.info({ event: 'auth_rejected', status: 401 }, 'Basic Auth challenge rejected by the UADE site');
