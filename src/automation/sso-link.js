@@ -116,6 +116,21 @@ export async function confirmInscripcionLink(context, page) {
     return null;
   }
 
+  // Diagnostic only, never sensitive: confirms the selector is really
+  // matching the InscripcionAsignatura link and not some other listing
+  // (e.g. MRI) that happens to share the .inscribite class -- doubted live
+  // 2026-07-12 when a materia catalog mismatch surfaced. tipolink/count are
+  // plain attribute values, not URLs or credentials.
+  const allInscribiteLinks = page.locator('a.inscribite');
+  const [totalInscribiteLinks, matchedTipolink] = await Promise.all([
+    allInscribiteLinks.count().catch(() => -1),
+    link.getAttribute('data-tipolink').catch(() => null),
+  ]);
+  logger.info(
+    { event: 'sso_inscripcion_link_selected', totalInscribiteLinks, matchedTipolink },
+    'Selected the inscripción link to click',
+  );
+
   const popupPromise = context.waitForEvent('page', { timeout: 5000 }).catch(() => null);
   await link.click({ timeout: 8000 }).catch((err) => {
     logger.info({ event: 'sso_inscripcion_link_click_failed', errorName: err.name }, 'Click on the inscripción link failed');
