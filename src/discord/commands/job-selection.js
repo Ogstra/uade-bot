@@ -1,16 +1,16 @@
 import { getDb } from '../../db/database.js';
 import { getJob, listJobsByUser } from '../../db/jobs.repository.js';
 import { getUser } from '../../db/users.repository.js';
-import { formatJobStatus, formatMateria, jobNotFoundMessage, parseLastOutcome } from '../messages.js';
+import { formatJobIdentity, formatJobStatus, jobNotFoundMessage, parseLastOutcome } from '../messages.js';
 
 // Discord rejects an autocomplete choice `name` longer than 100 characters.
 const AUTOCOMPLETE_NAME_MAX_LENGTH = 100;
 
 /**
- * Builds the autocomplete label for a job: label, materia code (plus the
- * scraped materia name once a poll has captured it), turno/dias, and
- * current status. Richer than the plain `jobDisplay` confirmation-message
- * format, so duplicate/similar searches (same label, D-07) stay
+ * Builds the autocomplete label for a job: full search identity (etiqueta
+ * only when one was set, so the materia code isn't shown twice — D-06/D-07),
+ * turno/dias, and current status. Richer than the plain `jobDisplay`
+ * confirmation-message format, so duplicate/similar searches stay
  * distinguishable in the `/detener`, `/pausar`, `/reanudar` picker.
  *
  * @param {import('zod').infer<typeof import('../../schemas.js').SearchJobSchema>} job
@@ -19,9 +19,9 @@ const AUTOCOMPLETE_NAME_MAX_LENGTH = 100;
  */
 export function buildJobDisplay(job, user = null) {
   const dias = job.filtros.dias.join('/');
-  const materia = formatMateria(job, parseLastOutcome(job.lastOutcome));
+  const identity = formatJobIdentity(job, parseLastOutcome(job.lastOutcome));
   const estado = formatJobStatus(job, user);
-  const display = `${job.label} · ${materia} · ${job.filtros.turno} ${dias} · ${estado}`;
+  const display = `${identity} · ${job.filtros.turno} ${dias} · ${estado}`;
 
   return display.length > AUTOCOMPLETE_NAME_MAX_LENGTH
     ? `${display.slice(0, AUTOCOMPLETE_NAME_MAX_LENGTH - 1)}…`
@@ -40,19 +40,21 @@ export async function autocompleteUserJobs(interaction, { db = getDb() } = {}) {
   await interaction.respond(choices);
 }
 
-export function getOwnedJobFromInteraction(db, interaction) {
-  const rawJobId = interaction.options.getString('busqueda');
-  const jobId = Number(rawJobId);
+export function getOwnedJob(db, jobId, discordUserId) {
   if (!Number.isInteger(jobId)) {
     return null;
   }
 
   const job = getJob(db, jobId);
-  if (!job || job.discordUserId !== interaction.user.id) {
+  if (!job || job.discordUserId !== discordUserId) {
     return null;
   }
 
   return job;
+}
+
+export function getOwnedJobFromInteraction(db, interaction) {
+  return getOwnedJob(db, Number(interaction.options.getString('busqueda')), interaction.user.id);
 }
 
 export async function replyJobNotFound(interaction) {

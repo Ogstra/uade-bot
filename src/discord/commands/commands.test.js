@@ -281,6 +281,22 @@ test('autocomplete choices include materia code, scraped materia name, and estad
   }
 });
 
+test('autocomplete does not repeat the materia code when no etiqueta was set', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    await buscarCommand.execute(createInteraction({ options: { ...VALID_OPTIONS, etiqueta: null } }), { db });
+
+    const interaction = createInteraction({ focused: '3.1.050' });
+    await pausarCommand.autocomplete(interaction, { db });
+
+    const choices = interaction.calls.at(-1)[1];
+    assert.equal(choices.length, 1);
+    assert.equal(choices[0].name.match(/3\.1\.050/g).length, 1);
+  } finally {
+    db.close();
+  }
+});
+
 test('autocomplete uses the default DB when commandContext has no db', async () => {
   const interaction = createInteraction({ focused: 'Fisica' });
   await assert.doesNotReject(() => pausarCommand.autocomplete(interaction, {}));

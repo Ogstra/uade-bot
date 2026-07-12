@@ -37,8 +37,10 @@ export function formatMateria(job, outcome = null) {
  * Full search identity for messages that otherwise only show `job.label`:
  * `codigo` or `codigo - nombre` (once a poll has captured it), prefixed
  * with the custom `etiqueta` when one was given (label !== materiaCodigo).
+ * Exported for reuse in autocomplete labels (job-selection.js), which
+ * would otherwise show the materia code twice when no etiqueta was set.
  */
-function formatJobIdentity(job, outcome = null) {
+export function formatJobIdentity(job, outcome = null) {
   const materia = formatMateria(job, outcome);
   return job.label === job.filtros.materiaCodigo ? materia : `${job.label} - ${materia}`;
 }
