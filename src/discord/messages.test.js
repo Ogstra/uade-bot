@@ -56,6 +56,18 @@ test('searchCreatedMessage includes filters and paused-account context without s
   assertNoSecrets(text);
 });
 
+test('searchCreatedMessage includes the cached materia nombre when provided', () => {
+  const text = searchCreatedMessage({
+    job: JOB,
+    filtros: FILTROS,
+    pauseReason: null,
+    requestedCredentials: false,
+    materiaNombre: 'FISICA II',
+  });
+
+  assert.match(text, /\*\*Materia:\*\* `3\.1\.050` - FISICA II/);
+});
+
 test('searchCreatedMessage omits sedes excluidas when none were excluded', () => {
   const text = searchCreatedMessage({
     job: { ...JOB, filtros: { ...FILTROS, sedesExcluidas: [] } },

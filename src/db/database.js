@@ -41,6 +41,17 @@ CREATE TABLE IF NOT EXISTS jobs (
   last_notified_cupos INTEGER,
   created_at INTEGER NOT NULL
 );
+
+-- Auto-populated cache of materia codigo -> nombre, filled in as real polls
+-- (any user's, any job's) scrape a name off the live site (poller.js). Not
+-- a full UADE catalog -- just what this bot has actually observed -- so
+-- /buscar's confirmation can show the name immediately for a
+-- previously-seen code instead of only after that job's own first poll.
+CREATE TABLE IF NOT EXISTS materias (
+  codigo TEXT PRIMARY KEY,
+  nombre TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
 
 const MIGRATIONS = [

@@ -53,10 +53,10 @@ function optionalSedesLine(sedesExcluidas) {
   return sedesExcluidas.length > 0 ? [`**Sedes excluidas:** ${formatSedes(sedesExcluidas)}`] : [];
 }
 
-export function searchCreatedMessage({ job, filtros, pauseReason, credentialResult, requestedCredentials }) {
+export function searchCreatedMessage({ job, filtros, pauseReason, credentialResult, requestedCredentials, materiaNombre }) {
   const base = [
     `**Busqueda creada:** ${job.label}`,
-    `**Materia:** \`${filtros.materiaCodigo}\``,
+    `**Materia:** \`${filtros.materiaCodigo}\`${materiaNombre ? ` - ${materiaNombre}` : ''}`,
     `**Turno:** ${filtros.turno}`,
     `**Ofrecimiento:** ${filtros.ofrecimiento}`,
     `**Dias:** ${filtros.dias.join(', ')}`,

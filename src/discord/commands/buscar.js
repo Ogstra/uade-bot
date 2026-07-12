@@ -2,6 +2,7 @@ import { SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { getCredentials } from '../../db/credentials.repository.js';
 import { createJob, listJobsByUser } from '../../db/jobs.repository.js';
+import { getMateriaNombre } from '../../db/materias.repository.js';
 import { getUser, upsertUser } from '../../db/users.repository.js';
 import { FiltrosSchema } from '../../schemas.js';
 import { runFullCredentialOnboarding } from '../credentials-flow.js';
@@ -127,6 +128,7 @@ export const buscarCommand = {
         pauseReason: user?.pauseReason,
         credentialResult,
         requestedCredentials: !hadCredentials,
+        materiaNombre: getMateriaNombre(db, filtros.materiaCodigo),
       }),
     );
 

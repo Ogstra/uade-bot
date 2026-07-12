@@ -1,6 +1,7 @@
 import { getJob, updateJobPollResult } from '../db/jobs.repository.js';
 import { getCredentials } from '../db/credentials.repository.js';
 import { getUser, updateAccountPauseState } from '../db/users.repository.js';
+import { upsertMateriaNombre } from '../db/materias.repository.js';
 import { decryptCredentials } from '../crypto/credentials-crypto.js';
 import { loadEnv } from '../config/env.js';
 import { withUadeContext } from '../automation/browser.js';
@@ -134,6 +135,10 @@ export async function pollOnce(db, jobId, { withUadeContextFn = withUadeContext,
   });
 
   updateJobPollResult(db, jobId, { lastPolledAt: Date.now(), lastOutcome: JSON.stringify(outcome) });
+
+  if (outcome.materiaNombre) {
+    upsertMateriaNombre(db, job.filtros.materiaCodigo, outcome.materiaNombre);
+  }
 
   // D-04: this single write pauses/resumes EVERY job tied to this account,
   // since queue.js's tick filter reads this same account-level state for

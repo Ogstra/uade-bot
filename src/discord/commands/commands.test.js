@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { createDatabase } from '../../db/database.js';
 import { upsertCredentials } from '../../db/credentials.repository.js';
 import { createJob, getJob, listJobsByUser } from '../../db/jobs.repository.js';
+import { upsertMateriaNombre } from '../../db/materias.repository.js';
 import { upsertUser } from '../../db/users.repository.js';
 import { buscarCommand } from './buscar.js';
 import { detenerCommand } from './detener.js';
@@ -210,6 +211,20 @@ test('/buscar returns a Spanish validation error without DB writes for invalid m
 
     assert.equal(listJobsByUser(db, 'user-1').length, 0);
     assert.match(String(interaction.calls.at(-1)[1]), /codigo de materia/i);
+  } finally {
+    db.close();
+  }
+});
+
+test('/buscar shows a previously-cached materia nombre immediately, without waiting for a poll', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertMateriaNombre(db, '3.1.050', 'FISICA II');
+    const interaction = createInteraction();
+
+    await buscarCommand.execute(interaction, { db });
+
+    assert.match(String(interaction.calls.at(-1)[1]), /\*\*Materia:\*\* `3\.1\.050` - FISICA II/);
   } finally {
     db.close();
   }

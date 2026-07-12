@@ -5,6 +5,7 @@ import { createDatabase } from '../db/database.js';
 import { upsertUser, getUser } from '../db/users.repository.js';
 import { upsertCredentials } from '../db/credentials.repository.js';
 import { createJob, getJob } from '../db/jobs.repository.js';
+import { getMateriaNombre } from '../db/materias.repository.js';
 import { encryptCredentials } from '../crypto/credentials-crypto.js';
 import { getBrowser } from '../automation/browser.js';
 import { pollOnce } from './poller.js';
@@ -71,6 +72,23 @@ test('pollOnce persists a no_vacancies outcome for a verified search with zero p
     const updated = getJob(db, job.id);
     assert.equal(updated.lastOutcome, JSON.stringify({ outcome: 'no_vacancies', materiaNombre: 'Fisica II' }));
     assert.ok(updated.lastPolledAt >= before);
+    assert.equal(getMateriaNombre(db, FILTROS.materiaCodigo), 'Fisica II');
+  } finally {
+    db.close();
+  }
+});
+
+test('pollOnce does not cache a materia name when the poll result carries none', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+
+    const runSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
+    const withUadeContextFn = async (creds, run) => run({});
+
+    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn });
+
+    assert.equal(getMateriaNombre(db, FILTROS.materiaCodigo), null);
   } finally {
     db.close();
   }
