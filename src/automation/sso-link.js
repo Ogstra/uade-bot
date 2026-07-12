@@ -227,10 +227,19 @@ export async function obtainStartUrl(context, { username, password }) {
 
     // AUTOLINK-02: still on a Microsoft login domain after the sign-in
     // attempt is the terminal signal for MFA/an extra verification step.
-    // Never retried or evaded within this same call.
+    // Never retried or evaded within this same call. Diagnostic-only, never
+    // sensitive: Microsoft's own displayed error text (e.g. "your account or
+    // password is incorrect", "verify your identity") -- never the password
+    // itself -- disambiguates a real extra-verification step from a mundane
+    // wrong-password/rate-limit error that also leaves the page stuck here.
     if (isStuckOnMicrosoftDomain(page.url())) {
+      const microsoftErrorText = await page
+        .locator('[role="alert"], .alert-error, #usernameError, #passwordError')
+        .first()
+        .innerText({ timeout: 2000 })
+        .catch(() => null);
       logger.info(
-        { event: 'sso_mfa_detected' },
+        { event: 'sso_mfa_detected', microsoftErrorText },
         'Still on a Microsoft login domain after the sign-in attempt -- treating as MFA/extra step required',
       );
       return { status: 'mfa_required' };
