@@ -2,6 +2,7 @@ import { getCredentials, upsertCredentials } from '../db/credentials.repository.
 import { upsertUser } from '../db/users.repository.js';
 import { encryptCredentials, decryptCredentials } from '../crypto/credentials-crypto.js';
 import { loadEnv } from '../config/env.js';
+import { getBrowser } from '../automation/browser.js';
 import logger from '../logger.js';
 import {
   credentialOnboardingFailedMessage,
@@ -13,6 +14,24 @@ import {
 } from './messages.js';
 
 const DEFAULT_TIMEOUT_MS = 120000;
+
+/**
+ * Fires off a shared-browser launch in the background right after
+ * credentials are saved/rotated, so the account's first real search
+ * doesn't pay Chromium's cold-start latency on top of its own postback
+ * settle wait. Not awaited -- must never delay the Discord reply. The
+ * browser closes itself on the next idle scheduler tick (queue.js) if
+ * nothing ends up polling it, so no explicit close-after-N-seconds timer
+ * is needed here.
+ */
+function warmBrowser(getBrowserFn) {
+  getBrowserFn().catch((err) => {
+    logger.error(
+      { event: 'browser_warm_failed', message: err.message },
+      'Failed to pre-warm the shared browser after credential submission',
+    );
+  });
+}
 
 async function ask(dm, message, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   await dm.send(message);
@@ -62,7 +81,7 @@ export function rotateCredentialValues(db, { discordUserId, masterKey, updates }
   });
 }
 
-export async function runFullCredentialOnboarding(interaction, { db, env } = {}) {
+export async function runFullCredentialOnboarding(interaction, { db, env, getBrowserFn = getBrowser } = {}) {
   let dm;
   try {
     dm = await interaction.user.createDM();
@@ -82,6 +101,7 @@ export async function runFullCredentialOnboarding(interaction, { db, env } = {})
       masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,
       values,
     });
+    warmBrowser(getBrowserFn);
     return { ok: true, message: credentialsSavedMessage() };
   } catch (err) {
     logger.warn(
@@ -95,7 +115,7 @@ export async function runFullCredentialOnboarding(interaction, { db, env } = {})
   }
 }
 
-export async function runCredentialRotation(interaction, { db, env } = {}) {
+export async function runCredentialRotation(interaction, { db, env, getBrowserFn = getBrowser } = {}) {
   let dm;
   try {
     dm = await interaction.user.createDM();
@@ -134,6 +154,7 @@ export async function runCredentialRotation(interaction, { db, env } = {}) {
       });
     }
 
+    warmBrowser(getBrowserFn);
     return { ok: true, message: mode === 'todo' ? credentialsSavedMessage() : credentialsUpdatedMessage() };
   } catch (err) {
     logger.warn(

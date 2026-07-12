@@ -8,6 +8,13 @@ import { decryptCredentials } from '../../crypto/credentials-crypto.js';
 import { credencialesCommand } from './credenciales.js';
 import { commandsByName } from './index.js';
 
+// Prevents these tests from launching a real Playwright browser (the
+// credential-save success path fires a fire-and-forget getBrowserFn() to
+// pre-warm the shared browser -- see credentials-flow.js's warmBrowser).
+async function noopGetBrowser() {
+  return {};
+}
+
 function createInteraction({ userId = 'user-1', modo = 'todo', values = ['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc'] } = {}) {
   const calls = [];
   const sent = [];
@@ -52,7 +59,7 @@ test('/credenciales is registered and stores all credential fields through DM', 
     const interaction = createInteraction();
 
     assert.equal(commandsByName.get('credenciales'), credencialesCommand);
-    await credencialesCommand.execute(interaction, { db, env: { CREDENTIALS_MASTER_KEY: masterKey } });
+    await credencialesCommand.execute(interaction, { db, env: { CREDENTIALS_MASTER_KEY: masterKey }, getBrowserFn: noopGetBrowser });
 
     assert.match(String(interaction.calls.at(-1)[1].content), /guardadas/i);
     const decrypted = decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1'));
@@ -72,13 +79,13 @@ test('/credenciales can update only the session link without echoing it', async 
   try {
     const masterKey = randomBytes(32).toString('hex');
     upsertUser(db, 'user-1');
-    await credencialesCommand.execute(createInteraction(), { db, env: { CREDENTIALS_MASTER_KEY: masterKey } });
+    await credencialesCommand.execute(createInteraction(), { db, env: { CREDENTIALS_MASTER_KEY: masterKey }, getBrowserFn: noopGetBrowser });
 
     const interaction = createInteraction({
       modo: 'link',
       values: ['https://inscripcionespia.uade.edu.ar/x?param=new'],
     });
-    await credencialesCommand.execute(interaction, { db, env: { CREDENTIALS_MASTER_KEY: masterKey } });
+    await credencialesCommand.execute(interaction, { db, env: { CREDENTIALS_MASTER_KEY: masterKey }, getBrowserFn: noopGetBrowser });
 
     assert.deepEqual(decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1')), {
       uadeUsername: 'usuario',

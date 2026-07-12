@@ -6,11 +6,23 @@ import { createInteractionHandler } from './discord/interactions.js';
 import { createNotificationDispatcher } from './discord/notifications.js';
 import { createScheduler } from './scheduler/queue.js';
 import { reconstructActiveJobs } from './scheduler/bootstrap.js';
+import { getBrowser } from './automation/browser.js';
 import logger from './logger.js';
 
 async function main() {
   const env = loadEnv();
   const db = getDb();
+
+  // Launch the shared Chromium browser right away, in parallel with the
+  // Discord client/login below, so it's already warm (or nearly so) by the
+  // time the first search runs instead of paying cold-start latency on
+  // that first poll. Not awaited -- must never delay bot startup. It
+  // closes itself on the next idle scheduler tick (queue.js) if nothing
+  // ends up polling it.
+  getBrowser().catch((err) => {
+    logger.error({ event: 'browser_warm_failed', message: err.message }, 'Failed to pre-warm the shared browser at startup');
+  });
+
   const client = createDiscordClient();
   const notifications = createNotificationDispatcher({ client, db });
   const scheduler = createScheduler({ db, onJobPolled: notifications.onJobPolled });

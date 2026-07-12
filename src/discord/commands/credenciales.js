@@ -19,9 +19,9 @@ export const credencialesCommand = {
         ),
     ),
 
-  async execute(interaction, { db = getDb(), env } = {}) {
+  async execute(interaction, { db = getDb(), env, getBrowserFn } = {}) {
     upsertUser(db, interaction.user.id);
-    const result = await runCredentialRotation(interaction, { db, env });
+    const result = await runCredentialRotation(interaction, { db, env, getBrowserFn });
     await interaction.reply({ content: result.message, ephemeral: true });
   },
 };

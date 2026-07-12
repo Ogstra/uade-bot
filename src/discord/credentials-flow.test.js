@@ -9,7 +9,26 @@ import {
   collectCredentialValues,
   saveCredentialValues,
   rotateCredentialValues,
+  runFullCredentialOnboarding,
+  runCredentialRotation,
 } from './credentials-flow.js';
+
+function createInteraction({ userId = 'user-1', dm, modo = null } = {}) {
+  return {
+    user: {
+      id: userId,
+      async createDM() {
+        if (!dm) {
+          throw new Error('no DM available');
+        }
+        return dm;
+      },
+    },
+    options: {
+      getString: (name) => (name === 'modo' ? modo : null),
+    },
+  };
+}
 
 function createDm(values) {
   const sent = [];
@@ -104,6 +123,140 @@ test('rotateCredentialValues supports password-only and start-url-only updates',
       uadePassword: 'new-pass',
       uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=new',
     });
+  } finally {
+    db.close();
+  }
+});
+
+test('runFullCredentialOnboarding warms the shared browser after a successful save', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const dm = createDm(['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc']);
+    const interaction = createInteraction({ dm });
+    let warmCalls = 0;
+    const getBrowserFn = async () => {
+      warmCalls += 1;
+      return {};
+    };
+
+    const result = await runFullCredentialOnboarding(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
+      getBrowserFn,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(warmCalls, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test('runFullCredentialOnboarding does not warm the browser when the DM cannot be opened', async () => {
+  const interaction = createInteraction({ dm: null });
+  let warmCalls = 0;
+  const getBrowserFn = async () => {
+    warmCalls += 1;
+    return {};
+  };
+
+  const result = await runFullCredentialOnboarding(interaction, { getBrowserFn });
+
+  assert.equal(result.ok, false);
+  assert.equal(warmCalls, 0);
+});
+
+test('runFullCredentialOnboarding does not warm the browser when credential collection fails', async () => {
+  const dm = createDm(['usuario']); // times out waiting for password/start URL
+  const interaction = createInteraction({ dm });
+  let warmCalls = 0;
+  const getBrowserFn = async () => {
+    warmCalls += 1;
+    return {};
+  };
+
+  const result = await runFullCredentialOnboarding(interaction, {
+    db: createDatabase(':memory:'),
+    env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
+    getBrowserFn,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(warmCalls, 0);
+});
+
+test('runFullCredentialOnboarding does not reject even if the background browser warm-up fails', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const dm = createDm(['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc']);
+    const interaction = createInteraction({ dm });
+    const getBrowserFn = async () => {
+      throw new Error('browser launch failed');
+    };
+
+    const result = await runFullCredentialOnboarding(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
+      getBrowserFn,
+    });
+
+    assert.equal(result.ok, true);
+  } finally {
+    db.close();
+  }
+});
+
+test('runCredentialRotation warms the shared browser after any successful mode', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const masterKey = randomBytes(32).toString('hex');
+    upsertUser(db, 'user-1');
+    saveCredentialValues(db, {
+      discordUserId: 'user-1',
+      masterKey,
+      values: {
+        uadeUsername: 'old-user',
+        uadePassword: 'old-pass',
+        uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=old',
+      },
+    });
+
+    const dm = createDm(['https://inscripcionespia.uade.edu.ar/x?param=new']);
+    const interaction = createInteraction({ dm, modo: 'link' });
+    let warmCalls = 0;
+    const getBrowserFn = async () => {
+      warmCalls += 1;
+      return {};
+    };
+
+    const result = await runCredentialRotation(interaction, { db, env: { CREDENTIALS_MASTER_KEY: masterKey }, getBrowserFn });
+
+    assert.equal(result.ok, true);
+    assert.equal(warmCalls, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test('runCredentialRotation does not warm the browser when rotation fails', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const dm = createDm([]); // no queued values -- ask() times out immediately
+    const interaction = createInteraction({ dm, modo: 'link' });
+    let warmCalls = 0;
+    const getBrowserFn = async () => {
+      warmCalls += 1;
+      return {};
+    };
+
+    const result = await runCredentialRotation(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
+      getBrowserFn,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(warmCalls, 0);
   } finally {
     db.close();
   }
