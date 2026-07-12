@@ -3,6 +3,7 @@ import { getDb } from './db/database.js';
 import { createDiscordClient } from './discord/client.js';
 import { commandsByName } from './discord/commands/index.js';
 import { createInteractionHandler } from './discord/interactions.js';
+import { createNotificationDispatcher } from './discord/notifications.js';
 import { createScheduler } from './scheduler/queue.js';
 import { reconstructActiveJobs } from './scheduler/bootstrap.js';
 import logger from './logger.js';
@@ -11,7 +12,8 @@ async function main() {
   const env = loadEnv();
   const db = getDb();
   const client = createDiscordClient();
-  const scheduler = createScheduler({ db });
+  const notifications = createNotificationDispatcher({ client, db });
+  const scheduler = createScheduler({ db, onJobPolled: notifications.onJobPolled });
 
   client.on('interactionCreate', createInteractionHandler({ commandsByName, env, logger }));
   client.once('ready', async () => {
