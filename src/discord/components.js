@@ -50,7 +50,7 @@ export function isDetenerButton(interaction) {
  * the confirmation is also echoed to `job.channelId` so anyone watching
  * the original channel sees the search was stopped, not just the DM.
  */
-export async function handleDetenerButton(interaction, { db = getDb() } = {}) {
+export async function handleDetenerButton(interaction, { db = getDb(), ephemeralReplies = false } = {}) {
   const jobId = parsePrefixedJobId(DETENER_BUTTON_PREFIX, interaction.customId);
   const job = getOwnedJob(db, jobId, interaction.user.id);
 
@@ -60,7 +60,7 @@ export async function handleDetenerButton(interaction, { db = getDb() } = {}) {
   }
 
   deleteJob(db, job.id);
-  await interaction.reply({ content: jobActionMessage('detenida', job), ephemeral: true });
+  await interaction.reply({ content: jobActionMessage('detenida', job), ephemeral: ephemeralReplies });
 
   if (job.channelId && job.channelId !== interaction.channelId) {
     try {

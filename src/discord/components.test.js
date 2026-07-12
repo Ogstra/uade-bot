@@ -72,8 +72,23 @@ test('handleDetenerButton deletes the job and confirms when the clicker owns it'
     assert.equal(getJob(db, job.id), null);
     assert.equal(interaction.calls[0][0], 'reply');
     assert.match(interaction.calls[0][1].content, /Busqueda detenida/);
-    assert.equal(interaction.calls[0][1].ephemeral, true);
+    assert.equal(interaction.calls[0][1].ephemeral, false);
     assert.equal(interaction.channelSends.length, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('handleDetenerButton confirms ephemerally when ephemeralReplies: true is set', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS, label: 'Fisica II' });
+    const interaction = createButtonInteraction({ userId: 'user-1', customId: `detener_job:${job.id}` });
+
+    await handleDetenerButton(interaction, { db, ephemeralReplies: true });
+
+    assert.equal(interaction.calls[0][1].ephemeral, true);
   } finally {
     db.close();
   }
