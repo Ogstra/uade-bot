@@ -31,7 +31,7 @@ test('loadEnv() fails naming missing Discord variables without leaking values', 
   process.env.DISCORD_BOT_TOKEN = 'secret-discord-token';
 
   assert.throws(
-    () => loadEnv(),
+    () => loadEnv({ loadDotenvFile: false }),
     (err) => {
       assert.match(err.message, /DISCORD_CLIENT_ID/);
       assert.match(err.message, /DISCORD_GUILD_ID/);
@@ -49,7 +49,7 @@ test('loadEnv() returns Discord variables alongside prior Phase 1 and 2 variable
   process.env.POLL_INTERVAL_MS = '30000';
   process.env.SCHEDULER_CONCURRENCY = '2';
 
-  const env = loadEnv();
+  const env = loadEnv({ loadDotenvFile: false });
 
   assert.equal(env.UADE_USERNAME, 'uade-user');
   assert.equal(env.UADE_PASSWORD, 'uade-pass');

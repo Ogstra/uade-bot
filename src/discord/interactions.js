@@ -23,6 +23,7 @@ export function createInteractionHandler({
   commandsByName,
   env,
   logger: handlerLogger = logger,
+  commandContext = {},
 } = {}) {
   return async function handleInteraction(interaction) {
     if (!isDispatchableInteraction(interaction)) {
@@ -52,7 +53,7 @@ export function createInteractionHandler({
       }
 
       if (interaction.isChatInputCommand?.()) {
-        await command.execute(interaction);
+        await command.execute(interaction, commandContext);
       }
     } catch (err) {
       handlerLogger.error(

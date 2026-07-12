@@ -15,7 +15,17 @@ async function main() {
   const notifications = createNotificationDispatcher({ client, db });
   const scheduler = createScheduler({ db, onJobPolled: notifications.onJobPolled });
 
-  client.on('interactionCreate', createInteractionHandler({ commandsByName, env, logger }));
+  client.on(
+    'interactionCreate',
+    createInteractionHandler({
+      commandsByName,
+      env,
+      logger,
+      commandContext: {
+        onJobCreated: scheduler.pollJobNow,
+      },
+    }),
+  );
   client.once('ready', async () => {
     await reconstructActiveJobs(db, scheduler);
     scheduler.start();

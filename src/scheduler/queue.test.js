@@ -125,6 +125,33 @@ test('createScheduler calls onJobPolled with the selected job and poll outcome',
   }
 });
 
+test('scheduler.pollJobNow enqueues a specific job immediately through the notification hook', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS });
+    const hookCalls = [];
+    const scheduler = createScheduler({
+      db,
+      intervalMs: 1000000,
+      concurrency: 1,
+      pollOnceFn: async () => ({ outcome: 'no_vacancies' }),
+      onJobPolled: async (selectedJob, outcome) => {
+        hookCalls.push({ selectedJob, outcome });
+      },
+    });
+
+    assert.equal(scheduler.pollJobNow(job), true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(hookCalls.length, 1);
+    assert.equal(hookCalls[0].selectedJob.id, job.id);
+    assert.deepEqual(hookCalls[0].outcome, { outcome: 'no_vacancies' });
+  } finally {
+    db.close();
+  }
+});
+
 test('createScheduler does not call onJobPolled when pollOnceFn rejects', async () => {
   const db = createDatabase(':memory:');
   try {

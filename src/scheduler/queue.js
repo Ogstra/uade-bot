@@ -119,6 +119,37 @@ export function createScheduler({
   // the same discordUserId.
   const inFlightAccountIds = new Set();
 
+  function enqueuePoll(job, { event = 'scheduled' } = {}) {
+    if (inFlightAccountIds.has(job.discordUserId)) {
+      return false;
+    }
+
+    inFlightAccountIds.add(job.discordUserId);
+    pQueue
+      .add(async () => {
+        const outcome = await pollOnceFn(db, job.id);
+        try {
+          await onJobPolled(job, outcome);
+        } catch (err) {
+          logger.error(
+            { event: 'notification_hook_failed', jobId: job.id, message: err.message },
+            'Notification hook failed for job',
+          );
+        }
+      })
+      .catch((err) => {
+        logger.error(
+          { event: 'poll_job_failed', jobId: job.id, message: err.message },
+          'pollOnce failed for job',
+        );
+      })
+      .finally(() => {
+        inFlightAccountIds.delete(job.discordUserId);
+      });
+    logger.info({ event: 'scheduler_job_enqueued', jobId: job.id, source: event }, 'Scheduler job enqueued');
+    return true;
+  }
+
   function tick() {
     const activeJobs = listActiveJobs(db).filter((job) => !isAccountPaused(db, job.discordUserId));
     const jobsByAccount = groupActiveJobsByAccount(activeJobs);
@@ -128,31 +159,7 @@ export function createScheduler({
     logger.info({ event: 'scheduler_tick', selectedCount: selected.length }, 'Scheduler tick');
 
     for (const job of selected) {
-      if (inFlightAccountIds.has(job.discordUserId)) {
-        continue;
-      }
-      inFlightAccountIds.add(job.discordUserId);
-      pQueue
-        .add(async () => {
-          const outcome = await pollOnceFn(db, job.id);
-          try {
-            await onJobPolled(job, outcome);
-          } catch (err) {
-            logger.error(
-              { event: 'notification_hook_failed', jobId: job.id, message: err.message },
-              'Notification hook failed for job',
-            );
-          }
-        })
-        .catch((err) => {
-          logger.error(
-            { event: 'poll_job_failed', jobId: job.id, message: err.message },
-            'pollOnce failed for job',
-          );
-        })
-        .finally(() => {
-          inFlightAccountIds.delete(job.discordUserId);
-        });
+      enqueuePoll(job);
     }
   }
 
@@ -183,6 +190,13 @@ export function createScheduler({
      */
     isRegistered(jobId) {
       return registeredJobIds.has(jobId);
+    },
+    /**
+     * @param {import('zod').infer<typeof import('../schemas.js').SearchJobSchema>} job
+     * @returns {boolean}
+     */
+    pollJobNow(job) {
+      return enqueuePoll(job, { event: 'immediate' });
     },
   };
 }

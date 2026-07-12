@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createDatabase } from '../../db/database.js';
+import { upsertCredentials } from '../../db/credentials.repository.js';
 import { getJob, listJobsByUser } from '../../db/jobs.repository.js';
 import { upsertUser } from '../../db/users.repository.js';
 import { buscarCommand } from './buscar.js';
@@ -97,6 +98,52 @@ test('/buscar validates locally, creates duplicate jobs, and never calls live se
     });
     assert.deepEqual(interaction.calls[0], ['deferReply', { ephemeral: true }]);
     assert.match(String(interaction.calls.at(-1)[1]), /Busqueda creada/i);
+  } finally {
+    db.close();
+  }
+});
+
+test('/buscar enqueues an immediate poll after creating a job when credentials already exist', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    upsertCredentials(db, {
+      discordUserId: 'user-1',
+      ciphertext: 'ciphertext',
+      iv: 'iv',
+      authTag: 'auth-tag',
+    });
+    const enqueued = [];
+
+    await buscarCommand.execute(createInteraction(), {
+      db,
+      onJobCreated: async (job) => {
+        enqueued.push(job);
+      },
+    });
+
+    assert.equal(enqueued.length, 1);
+    assert.equal(enqueued[0].label, 'Fisica II');
+    assert.equal(enqueued[0].discordUserId, 'user-1');
+  } finally {
+    db.close();
+  }
+});
+
+test('/buscar does not enqueue an immediate poll if first-run credential onboarding fails', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    let enqueued = 0;
+
+    await buscarCommand.execute(createInteraction(), {
+      db,
+      credentialOnboarding: async () => ({ ok: false, message: 'No pude abrirte DM.' }),
+      onJobCreated: async () => {
+        enqueued += 1;
+      },
+    });
+
+    assert.equal(enqueued, 0);
   } finally {
     db.close();
   }

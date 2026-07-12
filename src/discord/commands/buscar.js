@@ -6,6 +6,7 @@ import { getUser, upsertUser } from '../../db/users.repository.js';
 import { FiltrosSchema } from '../../schemas.js';
 import { runFullCredentialOnboarding } from '../credentials-flow.js';
 import { searchCreatedMessage, searchValidationError } from '../messages.js';
+import logger from '../../logger.js';
 
 const TURNO_CHOICES = ['Mañana', 'Tarde', 'Noche', 'Intensivo', 'Online'];
 const OFRECIMIENTO_CHOICES = [
@@ -78,7 +79,10 @@ export const buscarCommand = {
         .setRequired(false),
     ),
 
-  async execute(interaction, { db = getDb(), env, credentialOnboarding = runFullCredentialOnboarding } = {}) {
+  async execute(
+    interaction,
+    { db = getDb(), env, credentialOnboarding = runFullCredentialOnboarding, onJobCreated } = {},
+  ) {
     await interaction.deferReply({ ephemeral: true });
 
     let filtros;
@@ -113,5 +117,16 @@ export const buscarCommand = {
         requestedCredentials: !hadCredentials,
       }),
     );
+
+    if ((hadCredentials || credentialResult?.ok) && onJobCreated) {
+      try {
+        await Promise.resolve(onJobCreated(job));
+      } catch (err) {
+        logger.error(
+          { event: 'immediate_poll_enqueue_failed', jobId: job.id, message: err.message },
+          'Immediate poll enqueue failed',
+        );
+      }
+    }
   },
 };

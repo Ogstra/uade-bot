@@ -48,8 +48,10 @@ const EnvSchema = z.object({
  *
  * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string | undefined, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string, DISCORD_BOT_TOKEN: string, DISCORD_CLIENT_ID: string, DISCORD_GUILD_ID: string, POLL_INTERVAL_MS: number, SCHEDULER_CONCURRENCY: number }}
  */
-export function loadEnv() {
-  loadDotenv();
+export function loadEnv({ loadDotenvFile = true } = {}) {
+  if (loadDotenvFile) {
+    loadDotenv();
+  }
 
   const result = EnvSchema.safeParse(process.env);
 
