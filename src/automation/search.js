@@ -425,15 +425,24 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
   // asynchronously afterward. Reading page.content() immediately risks a
   // race where the results table hasn't been swapped in yet, misreading a
   // genuine `found` result as `no_vacancies`. Give the DOM a bounded window
-  // to settle first; a timeout here is not fatal -- read the DOM as-is
-  // rather than failing the whole poll over a settle-wait timeout.
+  // to settle first.
+  //
+  // Deliberately NOT best-effort: if the settle wait times out, we have no
+  // positive confirmation the results table finished rendering, so we must
+  // NOT fall through to reading (and possibly misreading, as empty) the
+  // DOM. A `search_failed` here just costs one extra polling cycle
+  // (backoffSignalFromStatus maps it to 'success', so it never pauses the
+  // account); silently downgrading to `no_vacancies` instead would hide a
+  // real vacancy behind a false negative -- the one outcome this bot's core
+  // value promise ("avisame apenas se abre un lugar") cannot tolerate.
   try {
     await page.waitForLoadState('networkidle', { timeout: 5000 });
   } catch (err) {
     logger.warn(
       { event: 'postback_settle_timeout', message: err.message },
-      'Page did not reach networkidle after postback within timeout; reading DOM as-is',
+      'Page did not reach networkidle after postback within timeout; refusing to read possibly-stale results',
     );
+    return { status: 'search_failed', reason: 'postback_settle_timeout' };
   }
 
   const reflectedState = await readReflectedFormState(page, parsedFiltros.materiaCodigo);
