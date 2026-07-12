@@ -16,7 +16,23 @@ async function noopGetBrowser() {
   return {};
 }
 
-function createInteraction({ userId = 'user-1', modo = 'todo', values = ['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc'] } = {}) {
+// Fase 3.1: collectCredentialValues/runCredentialRotation now try to obtain
+// the inscripción link automatically before ever asking for it by DM --
+// stub withPlainContextFn/obtainStartUrlFn so these tests never launch a
+// real browser or hit the real UADE/Microsoft site.
+async function noopWithPlainContext(run) {
+  return run({});
+}
+
+function fakeObtainStartUrlSuccess(startUrl) {
+  return async () => ({ status: 'success', startUrl });
+}
+
+function fakeObtainStartUrlMfaRequired() {
+  return async () => ({ status: 'mfa_required' });
+}
+
+function createInteraction({ userId = 'user-1', modo = 'todo', values = ['usuario', 'password'] } = {}) {
   const calls = [];
   const sent = [];
   const queue = [...values];
@@ -59,14 +75,20 @@ function createInteraction({ userId = 'user-1', modo = 'todo', values = ['usuari
   };
 }
 
-test('/credenciales is registered and stores all credential fields through DM', async () => {
+test('/credenciales is registered and obtains the link automatically without asking for it', async () => {
   const db = createDatabase(':memory:');
   try {
     const masterKey = randomBytes(32).toString('hex');
     const interaction = createInteraction();
 
     assert.equal(commandsByName.get('credenciales'), credencialesCommand);
-    await credencialesCommand.execute(interaction, { db, env: { CREDENTIALS_MASTER_KEY: masterKey }, getBrowserFn: noopGetBrowser });
+    await credencialesCommand.execute(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: masterKey },
+      getBrowserFn: noopGetBrowser,
+      withPlainContextFn: noopWithPlainContext,
+      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=abc'),
+    });
 
     assert.deepEqual(interaction.calls[0], ['deferReply', { flags: MessageFlags.Ephemeral }]);
     assert.equal(interaction.calls.at(-1)[0], 'editReply');
@@ -77,24 +99,89 @@ test('/credenciales is registered and stores all credential fields through DM', 
       uadePassword: 'password',
       uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=abc',
     });
+    // Only 2 DM prompts (username, password) -- the link was never asked for.
+    assert.equal(interaction.sent.length, 2);
     assert.equal(JSON.stringify(interaction.calls).includes('password'), false);
   } finally {
     db.close();
   }
 });
 
-test('/credenciales can update only the session link without echoing it', async () => {
+test('/credenciales falls back to asking for the link by DM when auto-obtain hits MFA', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const masterKey = randomBytes(32).toString('hex');
+    const interaction = createInteraction({
+      values: ['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=manual'],
+    });
+
+    await credencialesCommand.execute(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: masterKey },
+      getBrowserFn: noopGetBrowser,
+      withPlainContextFn: noopWithPlainContext,
+      obtainStartUrlFn: fakeObtainStartUrlMfaRequired(),
+    });
+
+    const decrypted = decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1'));
+    assert.equal(decrypted.uadeStartUrl, 'https://inscripcionespia.uade.edu.ar/x?param=manual');
+    // 3 DM prompts this time: username, password, and the fallback link ask.
+    assert.equal(interaction.sent.length, 3);
+  } finally {
+    db.close();
+  }
+});
+
+test('/credenciales modo:usuario_password also (re-)obtains the link, fixing the bug where it was left missing', async () => {
   const db = createDatabase(':memory:');
   try {
     const masterKey = randomBytes(32).toString('hex');
     upsertUser(db, 'user-1');
-    await credencialesCommand.execute(createInteraction(), { db, env: { CREDENTIALS_MASTER_KEY: masterKey }, getBrowserFn: noopGetBrowser });
+    const interaction = createInteraction({ modo: 'usuario_password', values: ['nuevo-usuario', 'nuevo-password'] });
+
+    await credencialesCommand.execute(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: masterKey },
+      getBrowserFn: noopGetBrowser,
+      withPlainContextFn: noopWithPlainContext,
+      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=refreshed'),
+    });
+
+    const decrypted = decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1'));
+    assert.deepEqual(decrypted, {
+      uadeUsername: 'nuevo-usuario',
+      uadePassword: 'nuevo-password',
+      uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=refreshed',
+    });
+  } finally {
+    db.close();
+  }
+});
+
+test('/credenciales can update only the session link without echoing it (modo:link stays manual-only)', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const masterKey = randomBytes(32).toString('hex');
+    upsertUser(db, 'user-1');
+    await credencialesCommand.execute(createInteraction(), {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: masterKey },
+      getBrowserFn: noopGetBrowser,
+      withPlainContextFn: noopWithPlainContext,
+      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=abc'),
+    });
 
     const interaction = createInteraction({
       modo: 'link',
       values: ['https://inscripcionespia.uade.edu.ar/x?param=new'],
     });
-    await credencialesCommand.execute(interaction, { db, env: { CREDENTIALS_MASTER_KEY: masterKey }, getBrowserFn: noopGetBrowser });
+    await credencialesCommand.execute(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: masterKey },
+      getBrowserFn: noopGetBrowser,
+      withPlainContextFn: noopWithPlainContext,
+      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://should-not-be-used.example/'),
+    });
 
     assert.deepEqual(decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1')), {
       uadeUsername: 'usuario',

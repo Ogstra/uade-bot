@@ -188,9 +188,14 @@ export function jobActionMessage(action, job) {
 export const credentialPrompts = {
   username: 'Mandame tu **usuario** de UADE.',
   password: 'Mandame tu **password** de UADE.',
+  // Only shown as a FALLBACK now (Fase 3.1) -- the bot tries to obtener el
+  // link de inscripción solo, automatizando el login de Microsoft/Azure AD.
+  // Este prompt aparece únicamente si eso falla (típicamente: la cuenta
+  // tiene verificación en dos pasos y el bot no puede completarla).
   startUrl:
-    'Mandame el **link de inscripcion** de UADE (el que te lleva directo al buscador, ya logueado). ' +
-    'Algo asi: `https://inscripcionespia.uade.edu.ar/...?param=xxxxx`.',
+    'No pude conseguir tu link de inscripción automáticamente (puede que tu cuenta tenga verificación en dos pasos, ' +
+    'u otro paso extra que el bot no puede completar solo). Mandámelo vos: el **link de inscripcion** de UADE ' +
+    '(el que te lleva directo al buscador, ya logueado). Algo asi: `https://inscripcionespia.uade.edu.ar/...?param=xxxxx`.',
   newUsername: 'Mandame tu **nuevo usuario** de UADE.',
   newPassword: 'Mandame tu **nuevo password** de UADE.',
   newStartUrl:

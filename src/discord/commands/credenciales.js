@@ -19,7 +19,7 @@ export const credencialesCommand = {
         ),
     ),
 
-  async execute(interaction, { db = getDb(), env, getBrowserFn } = {}) {
+  async execute(interaction, { db = getDb(), env, getBrowserFn, withPlainContextFn, obtainStartUrlFn } = {}) {
     // Must ack within Discord's 3s interaction window -- runCredentialRotation
     // waits on real human DM replies (up to DEFAULT_TIMEOUT_MS = 120s each),
     // so a bare `interaction.reply()` after that wait is way too late: Discord
@@ -28,7 +28,7 @@ export const credencialesCommand = {
     // and credential save underneath completed successfully.
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     upsertUser(db, interaction.user.id);
-    const result = await runCredentialRotation(interaction, { db, env, getBrowserFn });
+    const result = await runCredentialRotation(interaction, { db, env, getBrowserFn, withPlainContextFn, obtainStartUrlFn });
     await interaction.editReply(result.message);
   },
 };

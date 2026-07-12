@@ -2,7 +2,8 @@ import { getCredentials, upsertCredentials } from '../db/credentials.repository.
 import { upsertUser } from '../db/users.repository.js';
 import { encryptCredentials, decryptCredentials } from '../crypto/credentials-crypto.js';
 import { loadEnv } from '../config/env.js';
-import { getBrowser } from '../automation/browser.js';
+import { getBrowser, withPlainContext } from '../automation/browser.js';
+import { obtainStartUrl } from '../automation/sso-link.js';
 import logger from '../logger.js';
 import {
   credentialOnboardingFailedMessage,
@@ -58,10 +59,32 @@ async function ask(dm, message, { timeoutMs = DEFAULT_TIMEOUT_MS, userId } = {})
   return response.content.trim();
 }
 
+/**
+ * Fase 3.1: the bot tries to obtain the inscripción link itself first,
+ * automating the Microsoft/Azure AD login with the credentials just
+ * collected -- the user is only asked to paste a link manually as a
+ * fallback, when that automated attempt can't complete (typically: the
+ * account has MFA/2FA, which this bot deliberately never tries to bypass).
+ *
+ * @param {import('discord.js').DMChannel} dm
+ * @param {{ userId: string, username: string, password: string, withPlainContextFn?: typeof withPlainContext, obtainStartUrlFn?: typeof obtainStartUrl }} options
+ * @returns {Promise<string>}
+ */
+async function obtainOrAskStartUrl(
+  dm,
+  { userId, username, password, withPlainContextFn = withPlainContext, obtainStartUrlFn = obtainStartUrl },
+) {
+  const result = await withPlainContextFn((context) => obtainStartUrlFn(context, { username, password }));
+  if (result.status === 'success') {
+    return result.startUrl;
+  }
+  return ask(dm, credentialPrompts.startUrl, { userId });
+}
+
 export async function collectCredentialValues(dm, options = {}) {
   const uadeUsername = await ask(dm, credentialPrompts.username, options);
   const uadePassword = await ask(dm, credentialPrompts.password, options);
-  const uadeStartUrl = await ask(dm, credentialPrompts.startUrl, options);
+  const uadeStartUrl = await obtainOrAskStartUrl(dm, { ...options, username: uadeUsername, password: uadePassword });
   return { uadeUsername, uadePassword, uadeStartUrl };
 }
 
@@ -96,7 +119,10 @@ export function rotateCredentialValues(db, { discordUserId, masterKey, updates }
   });
 }
 
-export async function runFullCredentialOnboarding(interaction, { db, env, getBrowserFn = getBrowser } = {}) {
+export async function runFullCredentialOnboarding(
+  interaction,
+  { db, env, getBrowserFn = getBrowser, withPlainContextFn = withPlainContext, obtainStartUrlFn = obtainStartUrl } = {},
+) {
   let dm;
   try {
     dm = await interaction.user.createDM();
@@ -109,7 +135,7 @@ export async function runFullCredentialOnboarding(interaction, { db, env, getBro
   }
 
   try {
-    const values = await collectCredentialValues(dm, { userId: interaction.user.id });
+    const values = await collectCredentialValues(dm, { userId: interaction.user.id, withPlainContextFn, obtainStartUrlFn });
     const resolvedEnv = env ?? loadEnv();
     saveCredentialValues(db, {
       discordUserId: interaction.user.id,
@@ -130,7 +156,10 @@ export async function runFullCredentialOnboarding(interaction, { db, env, getBro
   }
 }
 
-export async function runCredentialRotation(interaction, { db, env, getBrowserFn = getBrowser } = {}) {
+export async function runCredentialRotation(
+  interaction,
+  { db, env, getBrowserFn = getBrowser, withPlainContextFn = withPlainContext, obtainStartUrlFn = obtainStartUrl } = {},
+) {
   let dm;
   try {
     dm = await interaction.user.createDM();
@@ -148,10 +177,23 @@ export async function runCredentialRotation(interaction, { db, env, getBrowserFn
     if (mode === 'usuario_password') {
       const uadeUsername = await ask(dm, credentialPrompts.newUsername, { userId: interaction.user.id });
       const uadePassword = await ask(dm, credentialPrompts.newPassword, { userId: interaction.user.id });
+      // Fase 3.1: re-obtain the link too when username/password change --
+      // otherwise an account that never had a link stored (or whose old one
+      // no longer matches the new credentials) silently ends up with a
+      // missing/stale uadeStartUrl (confirmed live 2026-07-12: navigation_failed
+      // on every subsequent poll). Same auto-obtain-first, ask-as-fallback
+      // path as full onboarding.
+      const uadeStartUrl = await obtainOrAskStartUrl(dm, {
+        userId: interaction.user.id,
+        username: uadeUsername,
+        password: uadePassword,
+        withPlainContextFn,
+        obtainStartUrlFn,
+      });
       rotateCredentialValues(db, {
         discordUserId: interaction.user.id,
         masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,
-        updates: { uadeUsername, uadePassword },
+        updates: { uadeUsername, uadePassword, uadeStartUrl },
       });
     } else if (mode === 'link') {
       const uadeStartUrl = await ask(dm, credentialPrompts.newStartUrl, { userId: interaction.user.id });
@@ -161,7 +203,7 @@ export async function runCredentialRotation(interaction, { db, env, getBrowserFn
         updates: { uadeStartUrl },
       });
     } else {
-      const values = await collectCredentialValues(dm, { userId: interaction.user.id });
+      const values = await collectCredentialValues(dm, { userId: interaction.user.id, withPlainContextFn, obtainStartUrlFn });
       saveCredentialValues(db, {
         discordUserId: interaction.user.id,
         masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,

@@ -13,6 +13,22 @@ import {
   runCredentialRotation,
 } from './credentials-flow.js';
 
+// Fase 3.1: collectCredentialValues tries to obtain the inscripción link
+// automatically before ever asking for it by DM. Stub withPlainContextFn/
+// obtainStartUrlFn in every test that exercises that path so none of them
+// launch a real Playwright browser or hit the real UADE/Microsoft site.
+async function noopWithPlainContext(run) {
+  return run({});
+}
+
+function fakeObtainStartUrlSuccess(startUrl) {
+  return async () => ({ status: 'success', startUrl });
+}
+
+function fakeObtainStartUrlMfaRequired() {
+  return async () => ({ status: 'mfa_required' });
+}
+
 function createInteraction({ userId = 'user-1', dm, modo = null } = {}) {
   return {
     user: {
@@ -61,29 +77,57 @@ function createDm(values, { userId = 'user-1', botUserId = 'bot-1' } = {}) {
   };
 }
 
-test('collectCredentialValues asks username, password, and start URL sequentially', async () => {
-  const dm = createDm(['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc']);
+test('collectCredentialValues asks username and password, then obtains the link automatically (no third DM prompt)', async () => {
+  const dm = createDm(['usuario', 'password']);
 
-  const values = await collectCredentialValues(dm, { userId: 'user-1' });
+  const values = await collectCredentialValues(dm, {
+    userId: 'user-1',
+    withPlainContextFn: noopWithPlainContext,
+    obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=abc'),
+  });
 
   assert.deepEqual(values, {
     uadeUsername: 'usuario',
     uadePassword: 'password',
     uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=abc',
   });
-  assert.equal(dm.sent.length, 3);
+  assert.equal(dm.sent.length, 2);
   assert.match(dm.sent[0], /usuario/i);
   assert.match(dm.sent[1], /password/i);
+});
+
+test('collectCredentialValues falls back to asking for the link by DM when auto-obtain hits MFA', async () => {
+  const dm = createDm(['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=manual']);
+
+  const values = await collectCredentialValues(dm, {
+    userId: 'user-1',
+    withPlainContextFn: noopWithPlainContext,
+    obtainStartUrlFn: fakeObtainStartUrlMfaRequired(),
+  });
+
+  assert.deepEqual(values, {
+    uadeUsername: 'usuario',
+    uadePassword: 'password',
+    uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=manual',
+  });
+  assert.equal(dm.sent.length, 3);
   assert.match(dm.sent[2], /link/i);
 });
 
 test('collectCredentialValues ignores the bot\'s own just-sent prompt and only accepts a reply from userId', async () => {
+  // Forces the MFA fallback so the self-echo filter is exercised on all
+  // three DM prompts (username, password, and the fallback link ask), not
+  // just the first two.
   const dm = createDm(['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc'], {
     userId: 'user-1',
     botUserId: 'bot-1',
   });
 
-  const values = await collectCredentialValues(dm, { userId: 'user-1' });
+  const values = await collectCredentialValues(dm, {
+    userId: 'user-1',
+    withPlainContextFn: noopWithPlainContext,
+    obtainStartUrlFn: fakeObtainStartUrlMfaRequired(),
+  });
 
   assert.notEqual(values.uadeUsername, '(bot echo -- must never be collected as a reply)');
   assert.deepEqual(values, {
@@ -169,7 +213,7 @@ test('rotateCredentialValues supports password-only and start-url-only updates',
 test('runFullCredentialOnboarding warms the shared browser after a successful save', async () => {
   const db = createDatabase(':memory:');
   try {
-    const dm = createDm(['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc']);
+    const dm = createDm(['usuario', 'password']);
     const interaction = createInteraction({ dm });
     let warmCalls = 0;
     const getBrowserFn = async () => {
@@ -181,6 +225,8 @@ test('runFullCredentialOnboarding warms the shared browser after a successful sa
       db,
       env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
       getBrowserFn,
+      withPlainContextFn: noopWithPlainContext,
+      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=abc'),
     });
 
     assert.equal(result.ok, true);
@@ -226,7 +272,7 @@ test('runFullCredentialOnboarding does not warm the browser when credential coll
 test('runFullCredentialOnboarding does not reject even if the background browser warm-up fails', async () => {
   const db = createDatabase(':memory:');
   try {
-    const dm = createDm(['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc']);
+    const dm = createDm(['usuario', 'password']);
     const interaction = createInteraction({ dm });
     const getBrowserFn = async () => {
       throw new Error('browser launch failed');
@@ -236,6 +282,8 @@ test('runFullCredentialOnboarding does not reject even if the background browser
       db,
       env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
       getBrowserFn,
+      withPlainContextFn: noopWithPlainContext,
+      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=abc'),
     });
 
     assert.equal(result.ok, true);
@@ -295,6 +343,39 @@ test('runCredentialRotation does not warm the browser when rotation fails', asyn
 
     assert.equal(result.ok, false);
     assert.equal(warmCalls, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('runCredentialRotation modo:usuario_password also obtains the link, fixing an account left with no usable uadeStartUrl', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const masterKey = randomBytes(32).toString('hex');
+    upsertUser(db, 'user-1');
+    // No pre-existing credentials row -- this account never had a link at
+    // all, the exact scenario confirmed live 2026-07-12 to leave polls
+    // failing with navigation_failed once rotateCredentialValues's
+    // require-all-three-fields-for-a-fresh-account guard silently... didn't
+    // apply, because uadeStartUrl was never asked for at all under the old
+    // behavior.
+    const dm = createDm(['nuevo-usuario', 'nuevo-password']);
+    const interaction = createInteraction({ dm, modo: 'usuario_password' });
+
+    const result = await runCredentialRotation(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: masterKey },
+      getBrowserFn: async () => ({}),
+      withPlainContextFn: noopWithPlainContext,
+      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=refreshed'),
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1')), {
+      uadeUsername: 'nuevo-usuario',
+      uadePassword: 'nuevo-password',
+      uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=refreshed',
+    });
   } finally {
     db.close();
   }
