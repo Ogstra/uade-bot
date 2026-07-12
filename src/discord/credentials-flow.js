@@ -35,6 +35,27 @@ function warmBrowser(getBrowserFn) {
 }
 
 /**
+ * Fires an immediate poll for every active job belonging to `discordUserId`
+ * right after their credentials are saved/rotated, instead of leaving them
+ * to wait up to POLL_INTERVAL_MS for the next scheduled tick -- same
+ * immediacy `/reanudar`'s `onJobResumed` already gives a single job.
+ * Fire-and-forget, same reasoning as `warmBrowser`: must never delay the
+ * Discord reply, and a failure here shouldn't fail the credential save
+ * itself (the jobs simply get polled on the next normal tick instead).
+ */
+function pollActiveJobsNow(onCredentialsUpdated, discordUserId) {
+  if (!onCredentialsUpdated) {
+    return;
+  }
+  Promise.resolve(onCredentialsUpdated(discordUserId)).catch((err) => {
+    logger.error(
+      { event: 'credentials_updated_poll_failed', discordUserId, message: err.message },
+      'Failed to trigger an immediate poll after a credential update',
+    );
+  });
+}
+
+/**
  * @param {import('discord.js').DMChannel} dm
  * @param {string} message
  * @param {{ timeoutMs?: number, userId: string }} options - `userId` is
@@ -121,7 +142,14 @@ export function rotateCredentialValues(db, { discordUserId, masterKey, updates }
 
 export async function runFullCredentialOnboarding(
   interaction,
-  { db, env, getBrowserFn = getBrowser, withPlainContextFn = withPlainContext, obtainStartUrlFn = obtainStartUrl } = {},
+  {
+    db,
+    env,
+    getBrowserFn = getBrowser,
+    withPlainContextFn = withPlainContext,
+    obtainStartUrlFn = obtainStartUrl,
+    onCredentialsUpdated,
+  } = {},
 ) {
   let dm;
   try {
@@ -143,6 +171,7 @@ export async function runFullCredentialOnboarding(
       values,
     });
     warmBrowser(getBrowserFn);
+    pollActiveJobsNow(onCredentialsUpdated, interaction.user.id);
     return { ok: true, message: credentialsSavedMessage() };
   } catch (err) {
     logger.warn(
@@ -158,7 +187,14 @@ export async function runFullCredentialOnboarding(
 
 export async function runCredentialRotation(
   interaction,
-  { db, env, getBrowserFn = getBrowser, withPlainContextFn = withPlainContext, obtainStartUrlFn = obtainStartUrl } = {},
+  {
+    db,
+    env,
+    getBrowserFn = getBrowser,
+    withPlainContextFn = withPlainContext,
+    obtainStartUrlFn = obtainStartUrl,
+    onCredentialsUpdated,
+  } = {},
 ) {
   let dm;
   try {
@@ -212,6 +248,7 @@ export async function runCredentialRotation(
     }
 
     warmBrowser(getBrowserFn);
+    pollActiveJobsNow(onCredentialsUpdated, interaction.user.id);
     return { ok: true, message: mode === 'todo' ? credentialsSavedMessage() : credentialsUpdatedMessage() };
   } catch (err) {
     logger.warn(

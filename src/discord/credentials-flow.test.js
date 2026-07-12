@@ -380,3 +380,75 @@ test('runCredentialRotation modo:usuario_password also obtains the link, fixing 
     db.close();
   }
 });
+
+test('runFullCredentialOnboarding triggers onCredentialsUpdated with the discord user id after a successful save', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const dm = createDm(['usuario', 'password']);
+    const interaction = createInteraction({ dm });
+    const calls = [];
+
+    const result = await runFullCredentialOnboarding(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
+      getBrowserFn: async () => ({}),
+      withPlainContextFn: noopWithPlainContext,
+      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=abc'),
+      onCredentialsUpdated: (discordUserId) => calls.push(discordUserId),
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls, ['user-1']);
+  } finally {
+    db.close();
+  }
+});
+
+test('runFullCredentialOnboarding does not call onCredentialsUpdated when the save fails', async () => {
+  const dm = createDm(['usuario']); // times out waiting for password
+  const interaction = createInteraction({ dm });
+  const calls = [];
+
+  const result = await runFullCredentialOnboarding(interaction, {
+    db: createDatabase(':memory:'),
+    env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
+    getBrowserFn: async () => ({}),
+    onCredentialsUpdated: (discordUserId) => calls.push(discordUserId),
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(calls, []);
+});
+
+test('runCredentialRotation triggers onCredentialsUpdated after a successful modo:link rotation', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const masterKey = randomBytes(32).toString('hex');
+    upsertUser(db, 'user-1');
+    saveCredentialValues(db, {
+      discordUserId: 'user-1',
+      masterKey,
+      values: {
+        uadeUsername: 'old-user',
+        uadePassword: 'old-pass',
+        uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=old',
+      },
+    });
+
+    const dm = createDm(['https://inscripcionespia.uade.edu.ar/x?param=new']);
+    const interaction = createInteraction({ dm, modo: 'link' });
+    const calls = [];
+
+    const result = await runCredentialRotation(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: masterKey },
+      getBrowserFn: async () => ({}),
+      onCredentialsUpdated: (discordUserId) => calls.push(discordUserId),
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls, ['user-1']);
+  } finally {
+    db.close();
+  }
+});

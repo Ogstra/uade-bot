@@ -1,5 +1,6 @@
 import { loadEnv } from './config/env.js';
 import { getDb } from './db/database.js';
+import { listJobsByUser } from './db/jobs.repository.js';
 import { createDiscordClient } from './discord/client.js';
 import { commandsByName } from './discord/commands/index.js';
 import { createInteractionHandler } from './discord/interactions.js';
@@ -36,6 +37,16 @@ async function main() {
       commandContext: {
         onJobCreated: scheduler.pollJobNow,
         onJobResumed: scheduler.pollJobNow,
+        // After /credenciales saves/rotates credentials (Fase 3.1), poll
+        // every one of that account's ACTIVE jobs immediately instead of
+        // leaving them to wait up to POLL_INTERVAL_MS for the next
+        // scheduled tick -- same immediacy onJobResumed already gives a
+        // single job via /reanudar. Paused jobs are left alone; credential
+        // changes don't implicitly resume them.
+        onCredentialsUpdated: (discordUserId) => {
+          const activeJobs = listJobsByUser(db, discordUserId).filter((job) => job.status === 'active');
+          activeJobs.forEach((job) => scheduler.pollJobNow(job));
+        },
         ephemeralReplies: env.DISCORD_EPHEMERAL_REPLIES,
       },
     }),
