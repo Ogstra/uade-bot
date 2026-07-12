@@ -12,7 +12,7 @@ import { reanudarCommand } from './reanudar.js';
 import { commands, commandsByName } from './index.js';
 
 const VALID_OPTIONS = {
-  materia: '3.1.050',
+  cod_materia: '3.1.050',
   turno: 'Mañana',
   ofrecimiento: 'curricular',
   dias: 'LU,MI',
@@ -53,7 +53,7 @@ test('command builders expose search CRUD commands with required options and fix
   const buscarJson = buscarCommand.data.toJSON();
   assert.deepEqual(
     buscarJson.options.map((option) => option.name),
-    ['materia', 'turno', 'ofrecimiento', 'dias', 'sedes_excluidas', 'etiqueta'],
+    ['cod_materia', 'turno', 'ofrecimiento', 'dias', 'sedes_excluidas', 'etiqueta'],
   );
 
   const turno = buscarJson.options.find((option) => option.name === 'turno');
@@ -181,7 +181,7 @@ test('/buscar does not enqueue an immediate poll if first-run credential onboard
 test('/buscar returns a Spanish validation error without DB writes for invalid materia format', async () => {
   const db = createDatabase(':memory:');
   try {
-    const interaction = createInteraction({ options: { ...VALID_OPTIONS, materia: 'fisica' } });
+    const interaction = createInteraction({ options: { ...VALID_OPTIONS, cod_materia: 'fisica' } });
 
     await buscarCommand.execute(interaction, { db });
 
@@ -233,7 +233,7 @@ test('autocomplete returns at most 25 caller-owned job choices and filters by la
   try {
     for (let index = 0; index < 30; index += 1) {
       await buscarCommand.execute(
-        createInteraction({ options: { ...VALID_OPTIONS, materia: '3.1.050', etiqueta: `Fisica ${index}` } }),
+        createInteraction({ options: { ...VALID_OPTIONS, cod_materia: '3.1.050', etiqueta: `Fisica ${index}` } }),
         { db },
       );
     }

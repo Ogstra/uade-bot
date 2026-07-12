@@ -28,7 +28,7 @@ function parseDias(value) {
 
 function parseFiltrosFromOptions(options) {
   return FiltrosSchema.parse({
-    materiaCodigo: options.getString('materia'),
+    materiaCodigo: options.getString('cod_materia'),
     turno: options.getString('turno'),
     ofrecimiento: options.getString('ofrecimiento'),
     dias: parseDias(options.getString('dias')).filter((dia) => VALID_DIAS.has(dia)),
@@ -42,7 +42,7 @@ export const buscarCommand = {
     .setDescription('Crear una busqueda de vacantes en UADE')
     .addStringOption((option) =>
       option
-        .setName('materia')
+        .setName('cod_materia')
         .setDescription('Codigo de materia, por ejemplo 3.1.050')
         .setRequired(true),
     )

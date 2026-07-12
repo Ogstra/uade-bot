@@ -22,7 +22,7 @@ function createInteraction(overrides = {}) {
     options: {
       getString(name) {
         const values = {
-          materia: '3.1.050',
+          cod_materia: '3.1.050',
           turno: 'Noche',
           ofrecimiento: 'curricular',
           dias: 'LU,MI',

@@ -12,7 +12,7 @@ test('/buscar exports a SlashCommandBuilder with the expected options and fixed 
 
   const optionNames = json.options.map((option) => option.name);
   assert.deepEqual(optionNames, [
-    'materia',
+    'cod_materia',
     'turno',
     'ofrecimiento',
     'dias',
