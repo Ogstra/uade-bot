@@ -5,6 +5,7 @@ import {
   credentialPrompts,
   credentialsSavedMessage,
   credentialsUpdatedMessage,
+  formatJobStatusBlock,
   pauseNotificationMessage,
   searchCreatedMessage,
   vacancyNotificationMessage,
@@ -95,4 +96,32 @@ test('vacancy and pause notification copy is Spanish and contains vacancy fields
   assert.match(vacancyText, /3 cupos/);
   assert.match(pauseText, /\/credenciales/);
   assertNoSecrets(`${vacancyText}\n${pauseText}`);
+});
+
+test('formatJobStatusBlock renders poll state without raw epoch or JSON', () => {
+  const text = formatJobStatusBlock(
+    {
+      ...JOB,
+      status: 'active',
+      lastPolledAt: 1783837905670,
+      lastOutcome: JSON.stringify({
+        outcome: 'found',
+        vacancies: [
+          {
+            turno: 'MAÑANA',
+            sede: 'MONSERRAT',
+            horario: '07:45 11:45',
+            dias: ['MI'],
+            cupos: 18,
+          },
+        ],
+      }),
+    },
+    null,
+  );
+
+  assert.match(text, /Ultimo sondeo: /);
+  assert.match(text, /vacante encontrada \(18 cupos\)/);
+  assert.doesNotMatch(text, /1783837905670/);
+  assert.doesNotMatch(text, /\{"outcome"/);
 });

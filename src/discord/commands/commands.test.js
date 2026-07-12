@@ -189,8 +189,10 @@ test('/estado lists only the caller jobs with filters, status, pause reason, and
     assert.match(reply, /Monserrat/);
     assert.match(reply, /pausada/i);
     assert.match(reply, /needs_credentials/);
-    assert.match(reply, /12345/);
-    assert.match(reply, /no_vacancies/);
+    assert.match(reply, /Ultimo sondeo:/);
+    assert.match(reply, /sin vacantes/);
+    assert.doesNotMatch(reply, /12345/);
+    assert.doesNotMatch(reply, /no_vacancies/);
     assert.doesNotMatch(reply, /Otra/);
   } finally {
     db.close();

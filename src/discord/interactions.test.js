@@ -95,6 +95,30 @@ test('dispatcher allows DM chat commands without an extra membership check', asy
   assert.deepEqual(executed, ['ok']);
 });
 
+test('dispatcher passes commandContext to autocomplete handlers', async () => {
+  const seenContexts = [];
+  const commandContext = { db: 'db-context' };
+  const command = {
+    autocomplete: async (_interaction, context) => {
+      seenContexts.push(context);
+    },
+  };
+  const interaction = createInteraction({
+    isChatInputCommand: () => false,
+    isAutocomplete: () => true,
+  });
+  const handler = createInteractionHandler({
+    commandsByName: new Map([['buscar', command]]),
+    env: { DISCORD_GUILD_ID: 'guild-1' },
+    logger: createLogger(),
+    commandContext,
+  });
+
+  await handler(interaction);
+
+  assert.deepEqual(seenContexts, [commandContext]);
+});
+
 test('/buscar defers ephemerally before async work and finishes with editReply()', async () => {
   const events = [];
   const interaction = createInteraction({

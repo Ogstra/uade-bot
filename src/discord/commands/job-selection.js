@@ -5,7 +5,7 @@ export function buildJobDisplay(job) {
   return jobDisplay(job);
 }
 
-export async function autocompleteUserJobs(interaction, { db }) {
+export async function autocompleteUserJobs(interaction, { db } = {}) {
   const focused = String(interaction.options.getFocused() ?? '').toLowerCase();
   const jobs = listJobsByUser(db, interaction.user.id);
   const choices = jobs

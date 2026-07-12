@@ -54,10 +54,53 @@ export function formatJobStatus(job, user) {
   return 'activa';
 }
 
-export function formatJobStatusBlock(job, user) {
-  const lastPoll = job.lastPolledAt ?? 'sin sondeos';
-  const lastOutcome = job.lastOutcome ?? 'sin resultado';
+export function formatLastPoll(lastPolledAt) {
+  if (!lastPolledAt) {
+    return 'sin sondeos';
+  }
 
+  return new Intl.DateTimeFormat('es-AR', {
+    dateStyle: 'short',
+    timeStyle: 'medium',
+  }).format(new Date(lastPolledAt));
+}
+
+export function formatLastOutcome(lastOutcome) {
+  if (!lastOutcome) {
+    return 'sin resultado';
+  }
+
+  let outcome;
+  try {
+    outcome = JSON.parse(lastOutcome);
+  } catch {
+    outcome = { outcome: lastOutcome };
+  }
+
+  if (outcome.outcome === 'found') {
+    const vacancies = Array.isArray(outcome.vacancies) ? outcome.vacancies : [];
+    const total = vacancies.reduce((sum, vacancy) => sum + Number(vacancy.cupos ?? 0), 0);
+    return vacancies.length === 1
+      ? `vacante encontrada (${total} cupos)`
+      : `vacantes encontradas (${vacancies.length} cursos, ${total} cupos)`;
+  }
+
+  if (outcome.outcome === 'no_vacancies') {
+    return 'sin vacantes';
+  }
+
+  if (outcome.outcome === 'invalid_credentials') {
+    return 'credenciales invalidas';
+  }
+
+  if (outcome.outcome === 'search_failed') {
+    return outcome.reason ? `fallo la busqueda: ${outcome.reason}` : 'fallo la busqueda';
+  }
+
+  return String(outcome.outcome ?? lastOutcome);
+}
+
+export function formatJobStatusBlock(job, user) {
   return [
     `**${job.label}**`,
     `Materia: ${job.filtros.materiaCodigo}`,
@@ -65,8 +108,8 @@ export function formatJobStatusBlock(job, user) {
     `Dias: ${job.filtros.dias.join(', ')}`,
     `Sedes excluidas: ${formatSedes(job.filtros.sedesExcluidas)}`,
     `Estado: ${formatJobStatus(job, user)}`,
-    `Ultimo sondeo: ${lastPoll}`,
-    `Ultimo resultado: ${lastOutcome}`,
+    `Ultimo sondeo: ${formatLastPoll(job.lastPolledAt)}`,
+    `Ultimo resultado: ${formatLastOutcome(job.lastOutcome)}`,
   ].join('\n');
 }
 

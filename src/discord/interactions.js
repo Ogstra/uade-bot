@@ -45,7 +45,7 @@ export function createInteractionHandler({
     try {
       if (interaction.isAutocomplete?.()) {
         if (command.autocomplete) {
-          await command.autocomplete(interaction);
+          await command.autocomplete(interaction, commandContext);
         } else {
           await interaction.respond([]);
         }
