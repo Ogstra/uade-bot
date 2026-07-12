@@ -418,6 +418,24 @@ export async function runSearch(context, filtros, { startUrl } = {}) {
     return { status: 'rate_limited' };
   }
 
+  // SEARCH-04: `page.waitForResponse` above resolves once the partial-postback
+  // HTTP response is RECEIVED, not once the page's own JS (ASP.NET
+  // UpdatePanel / jQuery) has finished applying that response's HTML
+  // fragment into the results table's DOM -- that application runs
+  // asynchronously afterward. Reading page.content() immediately risks a
+  // race where the results table hasn't been swapped in yet, misreading a
+  // genuine `found` result as `no_vacancies`. Give the DOM a bounded window
+  // to settle first; a timeout here is not fatal -- read the DOM as-is
+  // rather than failing the whole poll over a settle-wait timeout.
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 5000 });
+  } catch (err) {
+    logger.warn(
+      { event: 'postback_settle_timeout', message: err.message },
+      'Page did not reach networkidle after postback within timeout; reading DOM as-is',
+    );
+  }
+
   const reflectedState = await readReflectedFormState(page, parsedFiltros.materiaCodigo);
   const matches = verifyPostbackMatchesQuery(reflectedState, parsedFiltros);
 
