@@ -43,6 +43,12 @@ function createInteraction({ userId = 'user-1', modo = 'todo', values = ['usuari
     async reply(payload) {
       calls.push(['reply', payload]);
     },
+    async deferReply(payload) {
+      calls.push(['deferReply', payload]);
+    },
+    async editReply(payload) {
+      calls.push(['editReply', payload]);
+    },
     get calls() {
       return calls;
     },
@@ -61,7 +67,9 @@ test('/credenciales is registered and stores all credential fields through DM', 
     assert.equal(commandsByName.get('credenciales'), credencialesCommand);
     await credencialesCommand.execute(interaction, { db, env: { CREDENTIALS_MASTER_KEY: masterKey }, getBrowserFn: noopGetBrowser });
 
-    assert.match(String(interaction.calls.at(-1)[1].content), /guardadas/i);
+    assert.deepEqual(interaction.calls[0], ['deferReply', { ephemeral: true }]);
+    assert.equal(interaction.calls.at(-1)[0], 'editReply');
+    assert.match(String(interaction.calls.at(-1)[1]), /guardadas/i);
     const decrypted = decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1'));
     assert.deepEqual(decrypted, {
       uadeUsername: 'usuario',

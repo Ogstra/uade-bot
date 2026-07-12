@@ -20,8 +20,15 @@ export const credencialesCommand = {
     ),
 
   async execute(interaction, { db = getDb(), env, getBrowserFn } = {}) {
+    // Must ack within Discord's 3s interaction window -- runCredentialRotation
+    // waits on real human DM replies (up to DEFAULT_TIMEOUT_MS = 120s each),
+    // so a bare `interaction.reply()` after that wait is way too late: Discord
+    // already shows "The application did not respond" and the reply itself
+    // fails with a stale-interaction error (10062), even though the DM flow
+    // and credential save underneath completed successfully.
+    await interaction.deferReply({ ephemeral: true });
     upsertUser(db, interaction.user.id);
     const result = await runCredentialRotation(interaction, { db, env, getBrowserFn });
-    await interaction.reply({ content: result.message, ephemeral: true });
+    await interaction.editReply(result.message);
   },
 };
