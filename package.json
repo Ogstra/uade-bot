@@ -8,12 +8,15 @@
     "node": ">=24"
   },
   "scripts": {
+    "bot": "node src/bot.js",
+    "discord:register": "node src/discord/register-commands.js",
     "search": "node src/cli.js",
     "test": "node --test src"
   },
   "license": "MIT",
   "dependencies": {
     "better-sqlite3": "^12.11.1",
+    "discord.js": "^14.26.5",
     "dotenv": "^17.4.2",
     "p-queue": "^9.3.1",
     "pino": "^9.14.0",

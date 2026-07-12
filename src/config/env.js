@@ -23,6 +23,11 @@ const EnvSchema = z.object({
   // `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
   // Never logged; on failure only the variable name is named, never its value.
   CREDENTIALS_MASTER_KEY: z.string().regex(/^[0-9a-f]{64}$/i, 'CREDENTIALS_MASTER_KEY'),
+  // Discord bot credentials/config. Required for the bot and command
+  // registration entrypoints; errors name only these variable names.
+  DISCORD_BOT_TOKEN: z.string().min(1, 'DISCORD_BOT_TOKEN'),
+  DISCORD_CLIENT_ID: z.string().min(1, 'DISCORD_CLIENT_ID'),
+  DISCORD_GUILD_ID: z.string().min(1, 'DISCORD_GUILD_ID'),
   // How often the scheduler ticks (D-01: ~20-30s), a single global value
   // shared by every job (D-02: not configurable per-search).
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(25000),
@@ -41,7 +46,7 @@ const EnvSchema = z.object({
  * variable name(s) — never the attempted value, to avoid leaking a partial
  * credential into a stack trace or console output.
  *
- * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string | undefined, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string, POLL_INTERVAL_MS: number, SCHEDULER_CONCURRENCY: number }}
+ * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string | undefined, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string, DISCORD_BOT_TOKEN: string, DISCORD_CLIENT_ID: string, DISCORD_GUILD_ID: string, POLL_INTERVAL_MS: number, SCHEDULER_CONCURRENCY: number }}
  */
 export function loadEnv() {
   loadDotenv();
