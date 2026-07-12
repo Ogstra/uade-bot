@@ -4,8 +4,13 @@ export function isGuildInteraction(interaction) {
   return typeof interaction?.guildId === 'string' && interaction.guildId.length > 0;
 }
 
-export function isFromAuthorizedGuild(interaction, authorizedGuildId) {
-  return isGuildInteraction(interaction) && interaction.guildId === authorizedGuildId;
+/**
+ * @param {import('discord.js').Interaction} interaction
+ * @param {string[]} authorizedGuildIds
+ * @returns {boolean}
+ */
+export function isFromAuthorizedGuild(interaction, authorizedGuildIds) {
+  return isGuildInteraction(interaction) && authorizedGuildIds.includes(interaction.guildId);
 }
 
 /**

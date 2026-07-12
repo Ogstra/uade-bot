@@ -53,7 +53,7 @@ export function createInteractionHandler({
 
     if (
       isGuildInteraction(interaction) &&
-      !isFromAuthorizedGuild(interaction, env.DISCORD_GUILD_ID)
+      !isFromAuthorizedGuild(interaction, env.DISCORD_GUILD_IDS)
     ) {
       return;
     }

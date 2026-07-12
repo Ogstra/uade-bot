@@ -60,7 +60,7 @@ test('dispatcher silently ignores guild chat commands from another server', asyn
   const interaction = createInteraction({ guildId: 'other-guild' });
   const handler = createInteractionHandler({
     commandsByName: new Map([['buscar', buscarCommand]]),
-    env: { DISCORD_GUILD_ID: 'guild-1' },
+    env: { DISCORD_GUILD_IDS: ['guild-1'] },
     logger: createLogger(),
   });
 
@@ -77,7 +77,35 @@ test('dispatcher silently ignores guild autocomplete from another server', async
   });
   const handler = createInteractionHandler({
     commandsByName: new Map([['buscar', buscarCommand]]),
-    env: { DISCORD_GUILD_ID: 'guild-1' },
+    env: { DISCORD_GUILD_IDS: ['guild-1'] },
+    logger: createLogger(),
+  });
+
+  await handler(interaction);
+
+  assert.deepEqual(interaction.calls, []);
+});
+
+test('dispatcher allows chat commands from any guild in a multi-guild DISCORD_GUILD_IDS list', async () => {
+  const executed = [];
+  const command = { ...buscarCommand, execute: async () => executed.push('ok') };
+  const interaction = createInteraction({ guildId: 'guild-2' });
+  const handler = createInteractionHandler({
+    commandsByName: new Map([['buscar', command]]),
+    env: { DISCORD_GUILD_IDS: ['guild-1', 'guild-2'] },
+    logger: createLogger(),
+  });
+
+  await handler(interaction);
+
+  assert.deepEqual(executed, ['ok']);
+});
+
+test('dispatcher still ignores a guild not present in a multi-guild DISCORD_GUILD_IDS list', async () => {
+  const interaction = createInteraction({ guildId: 'guild-3' });
+  const handler = createInteractionHandler({
+    commandsByName: new Map([['buscar', buscarCommand]]),
+    env: { DISCORD_GUILD_IDS: ['guild-1', 'guild-2'] },
     logger: createLogger(),
   });
 
@@ -97,7 +125,7 @@ test('dispatcher allows DM chat commands without an extra membership check', asy
   const interaction = createInteraction({ guildId: null });
   const handler = createInteractionHandler({
     commandsByName: new Map([['buscar', command]]),
-    env: { DISCORD_GUILD_ID: 'guild-1' },
+    env: { DISCORD_GUILD_IDS: ['guild-1'] },
     logger: createLogger(),
   });
 
@@ -113,7 +141,7 @@ test('dispatcher logs chat-input command usage to command_log', async () => {
     const interaction = createInteraction({ guildId: 'guild-1' });
     const handler = createInteractionHandler({
       commandsByName: new Map([['buscar', command]]),
-      env: { DISCORD_GUILD_ID: 'guild-1' },
+      env: { DISCORD_GUILD_IDS: ['guild-1'] },
       logger: createLogger(),
       commandContext: { db },
     });
@@ -138,7 +166,7 @@ test('dispatcher does not log autocomplete or button interactions to command_log
     });
     const handler = createInteractionHandler({
       commandsByName: new Map([['buscar', command]]),
-      env: { DISCORD_GUILD_ID: 'guild-1' },
+      env: { DISCORD_GUILD_IDS: ['guild-1'] },
       logger: createLogger(),
       commandContext: { db },
     });
@@ -165,7 +193,7 @@ test('dispatcher passes commandContext to autocomplete handlers', async () => {
   });
   const handler = createInteractionHandler({
     commandsByName: new Map([['buscar', command]]),
-    env: { DISCORD_GUILD_ID: 'guild-1' },
+    env: { DISCORD_GUILD_IDS: ['guild-1'] },
     logger: createLogger(),
     commandContext,
   });
@@ -225,7 +253,7 @@ test('dispatcher routes a "Detener busqueda" button click to handleDetenerButton
     });
     const handler = createInteractionHandler({
       commandsByName: new Map([['buscar', buscarCommand]]),
-      env: { DISCORD_GUILD_ID: 'guild-1' },
+      env: { DISCORD_GUILD_IDS: ['guild-1'] },
       logger: createLogger(),
       commandContext: { db },
     });
@@ -256,7 +284,7 @@ test('dispatcher silently ignores button clicks from another server', async () =
     });
     const handler = createInteractionHandler({
       commandsByName: new Map([['buscar', buscarCommand]]),
-      env: { DISCORD_GUILD_ID: 'guild-1' },
+      env: { DISCORD_GUILD_IDS: ['guild-1'] },
       logger: createLogger(),
       commandContext: { db },
     });
@@ -289,7 +317,7 @@ test('dispatcher never throws when both the command handler and the fallback err
     });
     const handler = createInteractionHandler({
       commandsByName: new Map([['buscar', command]]),
-      env: { DISCORD_GUILD_ID: 'guild-1' },
+      env: { DISCORD_GUILD_IDS: ['guild-1'] },
       logger: errorLogger,
       commandContext: { db },
     });
@@ -311,7 +339,7 @@ test('dispatcher rejects a non-admin invoking an adminOnly command with a not-au
   const interaction = createInteraction({ commandName: 'admin-stats', memberPermissions: fakePermissions(false) });
   const handler = createInteractionHandler({
     commandsByName: new Map([['admin-stats', command]]),
-    env: { DISCORD_GUILD_ID: 'guild-1' },
+    env: { DISCORD_GUILD_IDS: ['guild-1'] },
     logger: createLogger(),
   });
 
@@ -336,7 +364,7 @@ test('dispatcher lets an admin invoke an adminOnly command', async () => {
   try {
     const handler = createInteractionHandler({
       commandsByName: new Map([['admin-stats', command]]),
-      env: { DISCORD_GUILD_ID: 'guild-1' },
+      env: { DISCORD_GUILD_IDS: ['guild-1'] },
       logger: createLogger(),
       commandContext: { db },
     });
@@ -362,7 +390,7 @@ test('dispatcher silently empties autocomplete for a non-admin on an adminOnly c
   });
   const handler = createInteractionHandler({
     commandsByName: new Map([['admin-detener', command]]),
-    env: { DISCORD_GUILD_ID: 'guild-1' },
+    env: { DISCORD_GUILD_IDS: ['guild-1'] },
     logger: createLogger(),
   });
 

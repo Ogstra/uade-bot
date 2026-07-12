@@ -58,8 +58,20 @@ test('loadEnv() returns Discord variables alongside prior Phase 1 and 2 variable
   assert.equal(env.DISCORD_BOT_TOKEN, 'discord-token');
   assert.equal(env.DISCORD_CLIENT_ID, 'discord-client-id');
   assert.equal(env.DISCORD_GUILD_ID, 'discord-guild-id');
+  assert.deepEqual(env.DISCORD_GUILD_IDS, ['discord-guild-id']);
   assert.equal(env.POLL_INTERVAL_MS, 30000);
   assert.equal(env.SCHEDULER_CONCURRENCY, 2);
+});
+
+test('loadEnv() parses a comma-separated DISCORD_GUILD_ID into DISCORD_GUILD_IDS, trimming whitespace', () => {
+  setBaseEnv();
+  process.env.DISCORD_BOT_TOKEN = 'discord-token';
+  process.env.DISCORD_CLIENT_ID = 'discord-client-id';
+  process.env.DISCORD_GUILD_ID = 'guild-1, guild-2,guild-3';
+
+  const env = loadEnv({ loadDotenvFile: false });
+
+  assert.deepEqual(env.DISCORD_GUILD_IDS, ['guild-1', 'guild-2', 'guild-3']);
 });
 
 test('loadEnv() defaults DISCORD_EPHEMERAL_REPLIES to false (public replies) when unset', () => {
