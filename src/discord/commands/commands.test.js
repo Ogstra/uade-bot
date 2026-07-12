@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createDatabase } from '../../db/database.js';
 import { upsertCredentials } from '../../db/credentials.repository.js';
-import { getJob, listJobsByUser } from '../../db/jobs.repository.js';
+import { createJob, getJob, listJobsByUser } from '../../db/jobs.repository.js';
 import { upsertUser } from '../../db/users.repository.js';
 import { buscarCommand } from './buscar.js';
 import { detenerCommand } from './detener.js';
@@ -246,6 +246,12 @@ test('/estado lists only the caller jobs with filters, status, pause reason, and
     assert.doesNotMatch(reply, /12345/);
     assert.doesNotMatch(reply, /no_vacancies/);
     assert.doesNotMatch(reply, /Otra/);
+
+    const [row] = interaction.calls.at(-1)[1].components.map((r) => r.toJSON());
+    assert.equal(row.components.length, 2);
+    assert.equal(row.components[0].custom_id, `toggle_pause_job:${job.id}`);
+    assert.match(row.components[0].label, /^Reanudar /);
+    assert.equal(row.components[1].custom_id, `detener_job:${job.id}`);
   } finally {
     db.close();
   }
@@ -254,11 +260,22 @@ test('/estado lists only the caller jobs with filters, status, pause reason, and
 test('autocomplete returns at most 25 caller-owned job choices and filters by label', async () => {
   const db = createDatabase(':memory:');
   try {
+    // Seeded directly via the repository (30 jobs) to exercise autocomplete's
+    // own defensive 25-choice slice independently of /buscar's active-search
+    // cap (MAX_ACTIVE_SEARCHES_PER_USER), which is covered separately below.
+    upsertUser(db, 'user-1');
     for (let index = 0; index < 30; index += 1) {
-      await buscarCommand.execute(
-        createInteraction({ options: { ...VALID_OPTIONS, cod_materia: '3.1.050', etiqueta: `Fisica ${index}` } }),
-        { db },
-      );
+      createJob(db, {
+        discordUserId: 'user-1',
+        filtros: {
+          materiaCodigo: '3.1.050',
+          turno: 'Mañana',
+          ofrecimiento: 'curricular',
+          dias: ['LU'],
+          sedesExcluidas: [],
+        },
+        label: `Fisica ${index}`,
+      });
     }
     await buscarCommand.execute(createInteraction({ userId: 'user-2', options: { ...VALID_OPTIONS, etiqueta: 'Fisica ajena' } }), { db });
 
@@ -268,6 +285,42 @@ test('autocomplete returns at most 25 caller-owned job choices and filters by la
     const choices = interaction.calls.at(-1)[1];
     assert.equal(choices.length, 25);
     assert.equal(choices.some((choice) => choice.name.includes('ajena')), false);
+  } finally {
+    db.close();
+  }
+});
+
+test('/buscar refuses to create an 11th active search and does not touch the DB or onJobCreated', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    for (let index = 0; index < 10; index += 1) {
+      createJob(db, {
+        discordUserId: 'user-1',
+        filtros: {
+          materiaCodigo: '3.1.050',
+          turno: 'Mañana',
+          ofrecimiento: 'curricular',
+          dias: ['LU'],
+          sedesExcluidas: [],
+        },
+        label: `Fisica ${index}`,
+      });
+    }
+
+    let enqueued = 0;
+    const interaction = createInteraction({ options: { ...VALID_OPTIONS, etiqueta: 'Undecima' } });
+    await buscarCommand.execute(interaction, {
+      db,
+      onJobCreated: async () => {
+        enqueued += 1;
+      },
+    });
+
+    assert.equal(listJobsByUser(db, 'user-1').length, 10);
+    assert.equal(listJobsByUser(db, 'user-1').some((job) => job.label === 'Undecima'), false);
+    assert.equal(enqueued, 0);
+    assert.match(String(interaction.calls.at(-1)[1]), /10 busquedas activas/);
   } finally {
     db.close();
   }

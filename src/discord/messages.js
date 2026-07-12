@@ -11,6 +11,10 @@ export function searchValidationError(err) {
   return 'No pude validar esos filtros. Revisa **materia**, **dias**, **turno** y **ofrecimiento**.';
 }
 
+export function tooManySearchesMessage(max) {
+  return `Ya tenes ${max} busquedas activas, el maximo por cuenta. Detene alguna con \`/detener\` antes de crear otra.`;
+}
+
 export function formatSedes(sedesExcluidas) {
   return sedesExcluidas.length > 0 ? sedesExcluidas.join(', ') : 'ninguna';
 }

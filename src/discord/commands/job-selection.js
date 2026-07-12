@@ -6,6 +6,12 @@ import { formatJobIdentity, formatJobStatus, jobNotFoundMessage, parseLastOutcom
 // Discord rejects an autocomplete choice `name` longer than 100 characters.
 const AUTOCOMPLETE_NAME_MAX_LENGTH = 100;
 
+// Caps how many active/paused searches a single account can hold at once.
+// Chosen so /estado can attach a Pausar-or-Reanudar + Detener button pair
+// per search (2 buttons/job, 2 jobs/row) and still fit Discord's hard limit
+// of 5 action rows / 25 buttons per message, with headroom to spare.
+export const MAX_ACTIVE_SEARCHES_PER_USER = 10;
+
 /**
  * Builds the autocomplete label for a job: full search identity (etiqueta
  * only when one was set, so the materia code isn't shown twice — D-06/D-07),

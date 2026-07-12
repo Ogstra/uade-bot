@@ -1,11 +1,12 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
 import { getCredentials } from '../../db/credentials.repository.js';
-import { createJob } from '../../db/jobs.repository.js';
+import { createJob, listJobsByUser } from '../../db/jobs.repository.js';
 import { getUser, upsertUser } from '../../db/users.repository.js';
 import { FiltrosSchema } from '../../schemas.js';
 import { runFullCredentialOnboarding } from '../credentials-flow.js';
-import { searchCreatedMessage, searchValidationError } from '../messages.js';
+import { searchCreatedMessage, searchValidationError, tooManySearchesMessage } from '../messages.js';
+import { MAX_ACTIVE_SEARCHES_PER_USER } from './job-selection.js';
 import logger from '../../logger.js';
 
 const TURNO_CHOICES = ['Mañana', 'Tarde', 'Noche', 'Intensivo', 'Online'];
@@ -96,6 +97,11 @@ export const buscarCommand = {
       filtros = parseFiltrosFromOptions(interaction.options);
     } catch (err) {
       await interaction.editReply(searchValidationError(err));
+      return;
+    }
+
+    if (listJobsByUser(db, interaction.user.id).length >= MAX_ACTIVE_SEARCHES_PER_USER) {
+      await interaction.editReply(tooManySearchesMessage(MAX_ACTIVE_SEARCHES_PER_USER));
       return;
     }
 
