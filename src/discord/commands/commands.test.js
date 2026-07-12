@@ -178,6 +178,29 @@ test('/buscar does not enqueue an immediate poll if first-run credential onboard
   }
 });
 
+test('/reanudar enqueues an immediate poll via onJobResumed after reactivating the job', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    await buscarCommand.execute(createInteraction(), { db });
+    const [job] = listJobsByUser(db, 'user-1');
+    db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('paused_by_user', job.id);
+
+    const enqueued = [];
+    await reanudarCommand.execute(createInteraction({ options: { busqueda: String(job.id) } }), {
+      db,
+      onJobResumed: async (resumedJob) => {
+        enqueued.push(resumedJob);
+      },
+    });
+
+    assert.equal(enqueued.length, 1);
+    assert.equal(enqueued[0].id, job.id);
+    assert.equal(enqueued[0].status, 'active');
+  } finally {
+    db.close();
+  }
+});
+
 test('/buscar returns a Spanish validation error without DB writes for invalid materia format', async () => {
   const db = createDatabase(':memory:');
   try {

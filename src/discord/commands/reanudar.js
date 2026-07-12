@@ -3,6 +3,7 @@ import { getDb } from '../../db/database.js';
 import { updateJobStatus } from '../../db/jobs.repository.js';
 import { autocompleteUserJobs, getOwnedJobFromInteraction, replyJobNotFound } from './job-selection.js';
 import { jobActionMessage } from '../messages.js';
+import logger from '../../logger.js';
 
 export const reanudarCommand = {
   data: new SlashCommandBuilder()
@@ -18,14 +19,25 @@ export const reanudarCommand = {
 
   autocomplete: autocompleteUserJobs,
 
-  async execute(interaction, { db = getDb(), ephemeralReplies = false } = {}) {
+  async execute(interaction, { db = getDb(), ephemeralReplies = false, onJobResumed } = {}) {
     const job = getOwnedJobFromInteraction(db, interaction);
     if (!job) {
       await replyJobNotFound(interaction);
       return;
     }
 
-    updateJobStatus(db, job.id, 'active');
+    const resumedJob = updateJobStatus(db, job.id, 'active');
     await interaction.reply({ content: jobActionMessage('reanudada', job), ephemeral: ephemeralReplies });
+
+    if (onJobResumed) {
+      try {
+        await Promise.resolve(onJobResumed(resumedJob));
+      } catch (err) {
+        logger.error(
+          { event: 'immediate_poll_enqueue_failed', jobId: resumedJob.id, message: err.message },
+          'Immediate poll enqueue failed',
+        );
+      }
+    }
   },
 };
