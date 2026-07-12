@@ -87,6 +87,18 @@ export function listAllJobs(db) {
 }
 
 /**
+ * Distinct account ids that currently own at least one job (active or
+ * paused) -- backs the `/admin-estado` `usuario` filter's autocomplete.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @returns {string[]}
+ */
+export function listDistinctJobOwnerIds(db) {
+  const rows = db.prepare('SELECT DISTINCT discord_user_id FROM jobs ORDER BY discord_user_id ASC').all();
+  return rows.map((row) => row.discord_user_id);
+}
+
+/**
  * @param {import('better-sqlite3').Database} db
  * @param {string} discordUserId
  * @returns {import('zod').infer<typeof SearchJobSchema>[]}

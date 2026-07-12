@@ -1,19 +1,19 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { getDb } from '../../db/database.js';
-import { deleteJob } from '../../db/jobs.repository.js';
+import { updateJobStatus } from '../../db/jobs.repository.js';
 import { autocompleteAllJobs, getAnyJobFromInteraction } from './job-selection.js';
 import { adminJobActionMessage, adminJobNotFoundMessage } from '../messages.js';
 import logger from '../../logger.js';
 
-export const adminDetenerCommand = {
+export const adminPausarCommand = {
   adminOnly: true,
   data: new SlashCommandBuilder()
-    .setName('admin-detener')
-    .setDescription('[Admin] Detener la busqueda de cualquier usuario')
+    .setName('admin-pausar')
+    .setDescription('[Admin] Pausar la busqueda de cualquier usuario')
     .addStringOption((option) =>
       option
         .setName('busqueda')
-        .setDescription('Busqueda a detener (de cualquier cuenta)')
+        .setDescription('Busqueda a pausar (de cualquier cuenta)')
         .setRequired(true)
         .setAutocomplete(true),
     ),
@@ -27,11 +27,11 @@ export const adminDetenerCommand = {
       return;
     }
 
-    deleteJob(db, job.id);
+    updateJobStatus(db, job.id, 'paused_by_user');
     logger.warn(
-      { event: 'admin_job_stopped', jobId: job.id, targetUserId: job.discordUserId, adminUserId: interaction.user.id },
-      'Admin stopped a search belonging to another account',
+      { event: 'admin_job_paused', jobId: job.id, targetUserId: job.discordUserId, adminUserId: interaction.user.id },
+      'Admin paused a search belonging to another account',
     );
-    await interaction.reply({ content: adminJobActionMessage('detenida', job), ephemeral: true });
+    await interaction.reply({ content: adminJobActionMessage('pausada', job), ephemeral: true });
   },
 };

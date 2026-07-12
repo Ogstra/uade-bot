@@ -1,5 +1,5 @@
 import { getDb } from '../../db/database.js';
-import { getJob, listAllJobs, listJobsByUser } from '../../db/jobs.repository.js';
+import { getJob, listAllJobs, listDistinctJobOwnerIds, listJobsByUser } from '../../db/jobs.repository.js';
 import { getUser } from '../../db/users.repository.js';
 import { formatJobIdentity, formatJobStatus, jobNotFoundMessage, parseLastOutcome } from '../messages.js';
 
@@ -47,19 +47,67 @@ export async function autocompleteUserJobs(interaction, { db = getDb() } = {}) {
 }
 
 /**
+ * Resolves a Discord user id to a human-readable name for autocomplete
+ * labels. Autocomplete choice names are plain text -- unlike message
+ * content, `<@id>` mentions do NOT get resolved to a display name there --
+ * so admin pickers need an actual REST fetch to show something recognizable.
+ * Falls back to the raw id if the fetch fails (unreachable account, etc.).
+ *
+ * @param {import('discord.js').Client} client
+ * @param {string} discordUserId
+ * @returns {Promise<string>}
+ */
+async function resolveDisplayName(client, discordUserId) {
+  try {
+    const user = await client.users.fetch(discordUserId);
+    return user.globalName || user.username || discordUserId;
+  } catch {
+    return discordUserId;
+  }
+}
+
+/**
  * Admin-only autocomplete: every account's jobs, not just the caller's own
- * (unlike `autocompleteUserJobs`). The job id itself is prefixed into the
- * label since duplicate labels across *different* accounts are far more
- * likely than within one account.
+ * (unlike `autocompleteUserJobs`). Each label is prefixed with the job id
+ * and the owning account's resolved display name, since duplicate labels
+ * across *different* accounts are far more likely than within one account,
+ * and the job id alone doesn't tell an admin whose search it is.
  */
 export async function autocompleteAllJobs(interaction, { db = getDb() } = {}) {
   const focused = String(interaction.options.getFocused() ?? '').toLowerCase();
   const jobs = listAllJobs(db);
+  const uniqueOwnerIds = [...new Set(jobs.map((job) => job.discordUserId))];
+  const nameByOwnerId = new Map(
+    await Promise.all(
+      uniqueOwnerIds.map(async (id) => [id, await resolveDisplayName(interaction.client, id)]),
+    ),
+  );
+
   const choices = jobs
     .map((job) => ({
-      name: `#${job.id} · ${buildJobDisplay(job, getUser(db, job.discordUserId))}`.slice(0, 100),
+      name: `#${job.id} · ${nameByOwnerId.get(job.discordUserId)} · ${buildJobDisplay(job, getUser(db, job.discordUserId))}`.slice(0, 100),
       value: String(job.id),
     }))
+    .filter((choice) => choice.name.toLowerCase().includes(focused))
+    .slice(0, 25);
+
+  await interaction.respond(choices);
+}
+
+/**
+ * Backs the `/admin-estado` `usuario` filter: one choice per account that
+ * currently has at least one job, showing the account's resolved display
+ * name (value is the raw discord user id used to filter).
+ */
+export async function autocompleteJobOwners(interaction, { db = getDb() } = {}) {
+  const focused = String(interaction.options.getFocused() ?? '').toLowerCase();
+  const ownerIds = listDistinctJobOwnerIds(db);
+  const entries = await Promise.all(
+    ownerIds.map(async (id) => ({ id, name: await resolveDisplayName(interaction.client, id) })),
+  );
+
+  const choices = entries
+    .map((entry) => ({ name: `${entry.name} (${entry.id})`.slice(0, 100), value: entry.id }))
     .filter((choice) => choice.name.toLowerCase().includes(focused))
     .slice(0, 25);
 

@@ -281,8 +281,13 @@ export function adminJobNotFoundMessage() {
   return 'No encontre ninguna busqueda (de nadie) con ese id.';
 }
 
-export function adminJobStoppedMessage(job) {
-  return `**Busqueda detenida (admin):** #${job.id} de <@${job.discordUserId}> — ${jobDisplay(job)}.`;
+/**
+ * Shared confirmation for every admin job-action command (`/admin-detener`,
+ * `/admin-pausar`, `/admin-reanudar`) -- always names the owning account
+ * (`<@discordUserId>`) since these act on searches the admin doesn't own.
+ */
+export function adminJobActionMessage(action, job) {
+  return `**Busqueda ${action} (admin):** #${job.id} de <@${job.discordUserId}> — ${jobDisplay(job)}.`;
 }
 
 export function adminStatsMessage({
