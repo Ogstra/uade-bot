@@ -98,6 +98,53 @@ test('createScheduler.start() calls pollOnceFn on active jobs and stop() halts f
   }
 });
 
+test('createScheduler.start({ immediate: true }) polls active jobs immediately without waiting for the first interval', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    createJob(db, { discordUserId: 'user-1', filtros: FILTROS });
+
+    let callCount = 0;
+    const pollOnceFn = async () => {
+      callCount += 1;
+    };
+
+    const scheduler = createScheduler({ db, intervalMs: 200, concurrency: 2, pollOnceFn });
+    scheduler.start({ immediate: true });
+
+    // Well before the first 200ms interval would fire.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    scheduler.stop();
+
+    assert.ok(callCount >= 1, 'expected an immediate poll before the first interval elapsed');
+  } finally {
+    db.close();
+  }
+});
+
+test('createScheduler.start() without immediate does not poll before the first interval elapses', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    createJob(db, { discordUserId: 'user-1', filtros: FILTROS });
+
+    let callCount = 0;
+    const pollOnceFn = async () => {
+      callCount += 1;
+    };
+
+    const scheduler = createScheduler({ db, intervalMs: 200, concurrency: 2, pollOnceFn });
+    scheduler.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    scheduler.stop();
+
+    assert.equal(callCount, 0);
+  } finally {
+    db.close();
+  }
+});
+
 test('createScheduler calls onJobPolled with the selected job and poll outcome', async () => {
   const db = createDatabase(':memory:');
   try {

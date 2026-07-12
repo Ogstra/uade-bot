@@ -28,7 +28,7 @@ async function main() {
   );
   client.once('ready', async () => {
     await reconstructActiveJobs(db, scheduler);
-    scheduler.start();
+    scheduler.start({ immediate: true });
     logger.info({ event: 'discord_bot_ready', userId: client.user?.id }, 'Discord bot ready');
   });
 

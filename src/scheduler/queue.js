@@ -98,7 +98,7 @@ function isAccountPaused(db, discordUserId) {
  *   pollOnceFn?: typeof pollOnce,
  *   onJobPolled?: (job: object, outcome: object) => Promise<void> | void,
  * }} params
- * @returns {{ start: () => void, stop: () => void }}
+ * @returns {{ start: (options?: { immediate?: boolean }) => void, stop: () => void }}
  */
 export function createScheduler({
   db,
@@ -164,7 +164,10 @@ export function createScheduler({
   }
 
   return {
-    start() {
+    start({ immediate = false } = {}) {
+      if (immediate) {
+        tick();
+      }
       intervalHandle = setInterval(tick, intervalMs);
     },
     stop() {

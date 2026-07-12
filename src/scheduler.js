@@ -20,7 +20,7 @@ async function main() {
 
   await reconstructActiveJobs(db, scheduler);
 
-  scheduler.start();
+  scheduler.start({ immediate: true });
 
   logger.info({ event: 'scheduler_started' }, 'Scheduler started');
 }
