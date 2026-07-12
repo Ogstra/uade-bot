@@ -4,14 +4,7 @@ import { ButtonStyle } from 'discord.js';
 import { createDatabase } from '../db/database.js';
 import { createJob, getJob } from '../db/jobs.repository.js';
 import { upsertUser } from '../db/users.repository.js';
-import {
-  buildEstadoActionRows,
-  buildVacancyActionRow,
-  handleDetenerButton,
-  handleTogglePauseButton,
-  isDetenerButton,
-  isTogglePauseButton,
-} from './components.js';
+import { buildVacancyActionRow, handleDetenerButton, isDetenerButton } from './components.js';
 
 const FILTROS = {
   materiaCodigo: '3.1.050',
@@ -165,99 +158,3 @@ test('handleDetenerButton replies not-found for an already-deleted or bogus job 
   }
 });
 
-test('isTogglePauseButton recognizes only well-formed toggle_pause_job custom ids', () => {
-  assert.equal(isTogglePauseButton(createButtonInteraction({ customId: 'toggle_pause_job:5' })), true);
-  assert.equal(isTogglePauseButton(createButtonInteraction({ customId: 'toggle_pause_job:abc' })), false);
-  assert.equal(isTogglePauseButton(createButtonInteraction({ customId: 'detener_job:5' })), false);
-  assert.equal(isDetenerButton(createButtonInteraction({ customId: 'toggle_pause_job:5' })), false);
-});
-
-test('buildEstadoActionRows packs 2 jobs per row, 2 buttons per job, labeled by status', () => {
-  const jobs = [
-    { id: 1, label: 'Fisica II', status: 'active' },
-    { id: 2, label: 'Quimica', status: 'paused_by_user' },
-    { id: 3, label: 'Analisis', status: 'active' },
-  ];
-
-  const rows = buildEstadoActionRows(jobs).map((row) => row.toJSON());
-
-  assert.equal(rows.length, 2);
-  assert.equal(rows[0].components.length, 4);
-  assert.equal(rows[1].components.length, 2);
-
-  const [job1Toggle, job1Detener, job2Toggle, job2Detener] = rows[0].components;
-  assert.equal(job1Toggle.custom_id, 'toggle_pause_job:1');
-  assert.match(job1Toggle.label, /^Pausar Fisica II$/);
-  assert.equal(job1Toggle.style, ButtonStyle.Secondary);
-  assert.equal(job1Detener.custom_id, 'detener_job:1');
-  assert.equal(job1Detener.style, ButtonStyle.Danger);
-
-  assert.equal(job2Toggle.custom_id, 'toggle_pause_job:2');
-  assert.match(job2Toggle.label, /^Reanudar Quimica$/);
-
-  const [job3Toggle] = rows[1].components;
-  assert.equal(job3Toggle.custom_id, 'toggle_pause_job:3');
-});
-
-test('buildEstadoActionRows truncates long labels to Discord\'s 80-char button limit', () => {
-  const jobs = [{ id: 1, label: 'X'.repeat(90), status: 'active' }];
-
-  const [row] = buildEstadoActionRows(jobs).map((r) => r.toJSON());
-
-  assert.ok(row.components[0].label.length <= 80);
-  assert.ok(row.components[1].label.length <= 80);
-});
-
-test('handleTogglePauseButton pauses an active job without enqueuing a poll', async () => {
-  const db = createDatabase(':memory:');
-  try {
-    upsertUser(db, 'user-1');
-    const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS, label: 'Fisica II' });
-    const interaction = createButtonInteraction({ userId: 'user-1', customId: `toggle_pause_job:${job.id}` });
-    let enqueued = 0;
-
-    await handleTogglePauseButton(interaction, { db, onJobResumed: async () => { enqueued += 1; } });
-
-    assert.equal(getJob(db, job.id).status, 'paused_by_user');
-    assert.match(interaction.calls[0][1].content, /Busqueda pausada/);
-    assert.equal(enqueued, 0);
-  } finally {
-    db.close();
-  }
-});
-
-test('handleTogglePauseButton resumes a paused job and enqueues an immediate poll', async () => {
-  const db = createDatabase(':memory:');
-  try {
-    upsertUser(db, 'user-1');
-    const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS, label: 'Fisica II' });
-    db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('paused_by_user', job.id);
-    const interaction = createButtonInteraction({ userId: 'user-1', customId: `toggle_pause_job:${job.id}` });
-    const enqueued = [];
-
-    await handleTogglePauseButton(interaction, { db, onJobResumed: async (resumedJob) => { enqueued.push(resumedJob); } });
-
-    assert.equal(getJob(db, job.id).status, 'active');
-    assert.match(interaction.calls[0][1].content, /Busqueda reanudada/);
-    assert.equal(enqueued.length, 1);
-    assert.equal(enqueued[0].id, job.id);
-  } finally {
-    db.close();
-  }
-});
-
-test('handleTogglePauseButton treats a click from a non-owner as not-found and does not change status', async () => {
-  const db = createDatabase(':memory:');
-  try {
-    upsertUser(db, 'user-1');
-    const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS, label: 'Fisica II' });
-    const interaction = createButtonInteraction({ userId: 'user-2', customId: `toggle_pause_job:${job.id}` });
-
-    await handleTogglePauseButton(interaction, { db });
-
-    assert.equal(getJob(db, job.id).status, 'active');
-    assert.match(interaction.calls[0][1].content, /No encontre/i);
-  } finally {
-    db.close();
-  }
-});

@@ -3,7 +3,6 @@ import { getDb } from '../../db/database.js';
 import { getUser } from '../../db/users.repository.js';
 import { listJobsByUser } from '../../db/jobs.repository.js';
 import { formatJobStatusBlock, noJobsMessage } from '../messages.js';
-import { buildEstadoActionRows } from '../components.js';
 
 export const estadoCommand = {
   data: new SlashCommandBuilder()
@@ -20,7 +19,6 @@ export const estadoCommand = {
     const user = getUser(db, interaction.user.id);
     await interaction.reply({
       content: jobs.map((job) => formatJobStatusBlock(job, user)).join('\n\n'),
-      components: buildEstadoActionRows(jobs),
       ephemeral: true,
     });
   },

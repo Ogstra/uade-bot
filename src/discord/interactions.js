@@ -1,5 +1,5 @@
 import { isFromAuthorizedGuild, isGuildInteraction } from './access-control.js';
-import { handleDetenerButton, handleTogglePauseButton, isDetenerButton, isTogglePauseButton } from './components.js';
+import { handleDetenerButton, isDetenerButton } from './components.js';
 import logger from '../logger.js';
 import { genericInteractionErrorMessage } from './messages.js';
 
@@ -42,8 +42,6 @@ export function createInteractionHandler({
       if (interaction.isButton?.()) {
         if (isDetenerButton(interaction)) {
           await handleDetenerButton(interaction, commandContext);
-        } else if (isTogglePauseButton(interaction)) {
-          await handleTogglePauseButton(interaction, commandContext);
         }
         return;
       }

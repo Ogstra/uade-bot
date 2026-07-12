@@ -246,12 +246,6 @@ test('/estado lists only the caller jobs with filters, status, pause reason, and
     assert.doesNotMatch(reply, /12345/);
     assert.doesNotMatch(reply, /no_vacancies/);
     assert.doesNotMatch(reply, /Otra/);
-
-    const [row] = interaction.calls.at(-1)[1].components.map((r) => r.toJSON());
-    assert.equal(row.components.length, 2);
-    assert.equal(row.components[0].custom_id, `toggle_pause_job:${job.id}`);
-    assert.match(row.components[0].label, /^Reanudar /);
-    assert.equal(row.components[1].custom_id, `detener_job:${job.id}`);
   } finally {
     db.close();
   }
