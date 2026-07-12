@@ -96,6 +96,7 @@ function isAccountPaused(db, discordUserId) {
  *   intervalMs?: number,
  *   concurrency?: number,
  *   pollOnceFn?: typeof pollOnce,
+ *   onJobPolled?: (job: object, outcome: object) => Promise<void> | void,
  * }} params
  * @returns {{ start: () => void, stop: () => void }}
  */
@@ -104,6 +105,7 @@ export function createScheduler({
   intervalMs = loadEnv().POLL_INTERVAL_MS,
   concurrency = loadEnv().SCHEDULER_CONCURRENCY,
   pollOnceFn = pollOnce,
+  onJobPolled = async () => {},
 } = {}) {
   const pQueue = new PQueue({ concurrency });
   let pointers = new Map();
@@ -131,7 +133,17 @@ export function createScheduler({
       }
       inFlightAccountIds.add(job.discordUserId);
       pQueue
-        .add(() => pollOnceFn(db, job.id))
+        .add(async () => {
+          const outcome = await pollOnceFn(db, job.id);
+          try {
+            await onJobPolled(job, outcome);
+          } catch (err) {
+            logger.error(
+              { event: 'notification_hook_failed', jobId: job.id, message: err.message },
+              'Notification hook failed for job',
+            );
+          }
+        })
         .catch((err) => {
           logger.error(
             { event: 'poll_job_failed', jobId: job.id, message: err.message },

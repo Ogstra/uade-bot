@@ -98,6 +98,95 @@ test('createScheduler.start() calls pollOnceFn on active jobs and stop() halts f
   }
 });
 
+test('createScheduler calls onJobPolled with the selected job and poll outcome', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS });
+    const outcome = { outcome: 'no_vacancies' };
+    const hookCalls = [];
+
+    const pollOnceFn = async () => outcome;
+    const onJobPolled = async (selectedJob, selectedOutcome) => {
+      hookCalls.push({ selectedJob, selectedOutcome });
+    };
+
+    const scheduler = createScheduler({ db, intervalMs: 20, concurrency: 1, pollOnceFn, onJobPolled });
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    scheduler.stop();
+
+    assert.ok(hookCalls.length >= 1);
+    assert.equal(hookCalls[0].selectedJob.id, job.id);
+    assert.equal(hookCalls[0].selectedJob.discordUserId, 'user-1');
+    assert.equal(hookCalls[0].selectedOutcome, outcome);
+  } finally {
+    db.close();
+  }
+});
+
+test('createScheduler does not call onJobPolled when pollOnceFn rejects', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    createJob(db, { discordUserId: 'user-1', filtros: FILTROS });
+    let hookCalls = 0;
+
+    const scheduler = createScheduler({
+      db,
+      intervalMs: 20,
+      concurrency: 1,
+      pollOnceFn: async () => {
+        throw new Error('poll failed');
+      },
+      onJobPolled: async () => {
+        hookCalls += 1;
+      },
+    });
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 45));
+    scheduler.stop();
+
+    assert.equal(hookCalls, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('createScheduler logs onJobPolled failures and continues later ticks', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    createJob(db, { discordUserId: 'user-1', filtros: FILTROS });
+    let pollCalls = 0;
+    let hookCalls = 0;
+
+    const scheduler = createScheduler({
+      db,
+      intervalMs: 20,
+      concurrency: 1,
+      pollOnceFn: async () => {
+        pollCalls += 1;
+        return { outcome: 'no_vacancies' };
+      },
+      onJobPolled: async () => {
+        hookCalls += 1;
+        if (hookCalls === 1) {
+          throw new Error('send failed');
+        }
+      },
+    });
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    scheduler.stop();
+
+    assert.ok(pollCalls >= 2);
+    assert.ok(hookCalls >= 2);
+  } finally {
+    db.close();
+  }
+});
+
 test('a PQueue with concurrency N never lets .pending exceed N', async () => {
   const queue = new PQueue({ concurrency: 2 });
   let maxPending = 0;
