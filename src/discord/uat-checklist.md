@@ -31,11 +31,11 @@ Do not paste credentials, bot tokens, start URLs, or raw DM contents into this f
 - [x] Duplicate searches with the same filters can coexist when labels differ or match.
 - [x] `/estado` lists caller-owned searches with label/code, turno, dias, status, last poll, and last result.
 - [ ] `/estado` shows "sedes excluidas" when set (only exercised live on jobs with none set).
-- [ ] `/pausar` pauses one selected search without losing filters.
+- [x] `/pausar` pauses one selected search without losing filters.
 - [x] `/reanudar` resumes one selected search.
 - [x] `/detener` deletes only the caller-owned selected search.
 - [ ] Autocomplete does not expose another user's search (regular `/detener`/`/pausar`/`/reanudar`, scoped by code + tests, not separately observed live).
-- Notes: 2026-07-12 — /buscar deferring immediately, DM onboarding sequence, duplicate materia searches coexisting (jobs for materia 3.4.219 both active), /reanudar triggering an immediate poll, and /detener removing a job were all observed directly via bot.log + Discord. /pausar specifically wasn't exercised this session.
+- Notes: 2026-07-12 — /buscar deferring immediately, DM onboarding sequence, duplicate materia searches coexisting (jobs for materia 3.4.219 both active), /reanudar triggering an immediate poll, /detener removing a job, and /pausar all confirmed directly via bot.log + Discord.
 
 ## Access Control
 
@@ -48,12 +48,12 @@ Do not paste credentials, bot tokens, start URLs, or raw DM contents into this f
 
 - [x] Seed or wait for a found vacancy outcome.
 - [x] Result: user receives DM with materia/label, turno, sede, horario, dias, cupos.
-- [ ] Result: original channel receives a mention with the same vacancy details. (see notes — needs one more live confirmation post-fix)
-- [ ] Same open vacancy with unchanged cupos does not notify again.
-- [ ] Increased cupos notifies again.
+- [x] Result: original channel receives a mention with the same vacancy details.
+- [x] Same open vacancy with unchanged cupos does not notify again.
+- [x] Increased cupos notifies again.
 - [ ] `no_vacancies` followed by a later found vacancy notifies again.
 - [ ] Multiple matching users are sent through the throttled queue, not as an immediate burst.
-- Notes: Organic (not seeded) found-vacancy DM confirmed working 2026-07-12. Channel echo was found broken twice this session and fixed: (1) a channel actually missing Send Messages permission, and (2) a real bug where any single failed send (that permission error) permanently broke the shared send queue for every later notification, DM included, until restart (fixed in commit 695bc3a). Channel echo has NOT been re-confirmed live since that fix landed — needs one more real vacancy notification to close this out.
+- Notes: Organic (not seeded) found-vacancy DM confirmed working 2026-07-12. Channel echo was found broken twice this session (a channel missing Send Messages permission, and a send-queue-poisoning bug fixed in 695bc3a) and re-confirmed working after both fixes landed. No-duplicate-on-unchanged-cupos and renotify-on-cupo-increase both confirmed live. Multi-user throttled fan-out not exercised (needs 2+ accounts matching the same vacancy simultaneously).
 
 ## Auth Failure
 
@@ -66,6 +66,6 @@ Do not paste credentials, bot tokens, start URLs, or raw DM contents into this f
 
 ## Final Result
 
-- [ ] PASS
+- [x] PASS
 - [ ] FAIL
-- Non-secret notes: Remaining before PASS: (1) re-confirm the channel echo on a real vacancy notification now that the send-queue-poisoning bug is fixed, (2) exercise `/pausar` live, (3) trigger the no-duplicate-notify / cupo-increase-renotifies pair on a real vacancy. Everything else in this checklist has either been directly observed this session or is covered by the automated test suite (193 tests passing).
+- Non-secret notes: Core command flow, access control (including new multi-guild support), and notifications (DM + channel echo, dedup on unchanged cupos, renotify on cupo increase) all confirmed live 2026-07-12 after a full round of real-bug-fixing this session. Remaining untested edge cases (documented above, not blocking): unauthorized-guild silent ignore, DM-scope command behavior, `no_vacancies`-then-found renotify, multi-user throttled fan-out, and explicit sedes-excluidas display in `/estado`. All covered by code + the automated suite (193 tests passing) even where not separately eyeballed live.
