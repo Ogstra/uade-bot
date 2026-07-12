@@ -30,7 +30,14 @@ function createInteraction({ userId = 'user-1', dm, modo = null } = {}) {
   };
 }
 
-function createDm(values) {
+// Simulates the DM channel containing BOTH the bot's own just-sent prompt
+// (author.id === botUserId) and the queued human reply (author.id ===
+// userId), so tests exercise whatever filter ask() passes to
+// awaitMessages() -- without a filter, the bot's own echo is what a real
+// Discord collector would see first, which is exactly the bug confirmed
+// live 2026-07-12 (every prompt resolved instantly off its own text
+// instead of waiting for the real reply).
+function createDm(values, { userId = 'user-1', botUserId = 'bot-1' } = {}) {
   const sent = [];
   const queue = [...values];
   return {
@@ -38,12 +45,18 @@ function createDm(values) {
     async send(message) {
       sent.push(message);
     },
-    async awaitMessages() {
+    async awaitMessages({ filter } = {}) {
+      const botEcho = { author: { id: botUserId }, content: '(bot echo -- must never be collected as a reply)' };
       const content = queue.shift();
-      if (content === undefined) {
-        return { first: () => null };
+      const humanReply = content === undefined ? null : { author: { id: userId }, content };
+
+      if (!filter) {
+        return { first: () => botEcho };
       }
-      return { first: () => ({ content }) };
+
+      const candidates = humanReply ? [botEcho, humanReply] : [botEcho];
+      const matched = candidates.find((m) => filter(m));
+      return { first: () => matched ?? null };
     },
   };
 }
@@ -51,7 +64,7 @@ function createDm(values) {
 test('collectCredentialValues asks username, password, and start URL sequentially', async () => {
   const dm = createDm(['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc']);
 
-  const values = await collectCredentialValues(dm);
+  const values = await collectCredentialValues(dm, { userId: 'user-1' });
 
   assert.deepEqual(values, {
     uadeUsername: 'usuario',
@@ -62,6 +75,31 @@ test('collectCredentialValues asks username, password, and start URL sequentiall
   assert.match(dm.sent[0], /usuario/i);
   assert.match(dm.sent[1], /password/i);
   assert.match(dm.sent[2], /link/i);
+});
+
+test('collectCredentialValues ignores the bot\'s own just-sent prompt and only accepts a reply from userId', async () => {
+  const dm = createDm(['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc'], {
+    userId: 'user-1',
+    botUserId: 'bot-1',
+  });
+
+  const values = await collectCredentialValues(dm, { userId: 'user-1' });
+
+  assert.notEqual(values.uadeUsername, '(bot echo -- must never be collected as a reply)');
+  assert.deepEqual(values, {
+    uadeUsername: 'usuario',
+    uadePassword: 'password',
+    uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=abc',
+  });
+});
+
+test('collectCredentialValues times out rather than resolving off the bot\'s own message when no filter would match', async () => {
+  // No human reply queued at all -- only the bot's own echo is "in the
+  // channel". A correct filter must reject it and time out (never resolve
+  // with the bot's own prompt text as the value).
+  const dm = createDm([], { userId: 'user-1', botUserId: 'bot-1' });
+
+  await assert.rejects(() => collectCredentialValues(dm, { userId: 'user-1', timeoutMs: 10 }), /credential_prompt_timeout/);
 });
 
 test('saveCredentialValues encrypts before persistence and raw DB row has no plaintext', () => {

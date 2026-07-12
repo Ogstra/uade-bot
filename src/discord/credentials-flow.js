@@ -33,9 +33,24 @@ function warmBrowser(getBrowserFn) {
   });
 }
 
-async function ask(dm, message, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+/**
+ * @param {import('discord.js').DMChannel} dm
+ * @param {string} message
+ * @param {{ timeoutMs?: number, userId: string }} options - `userId` is
+ *   required: without a filter, `awaitMessages` collects ANY new message in
+ *   the DM channel, including the prompt this function itself just sent via
+ *   `dm.send()` -- that self-collection resolved instantly with the bot's
+ *   own prompt text as the "reply", never actually waiting for the human
+ *   (confirmed live 2026-07-12: every prompt fired back-to-back with no
+ *   real wait).
+ */
+async function ask(dm, message, { timeoutMs = DEFAULT_TIMEOUT_MS, userId } = {}) {
   await dm.send(message);
-  const collected = await dm.awaitMessages({ max: 1, time: timeoutMs });
+  const collected = await dm.awaitMessages({
+    max: 1,
+    time: timeoutMs,
+    filter: (m) => m.author?.id === userId,
+  });
   const response = collected.first();
   if (!response?.content) {
     throw new Error('credential_prompt_timeout');
@@ -94,7 +109,7 @@ export async function runFullCredentialOnboarding(interaction, { db, env, getBro
   }
 
   try {
-    const values = await collectCredentialValues(dm);
+    const values = await collectCredentialValues(dm, { userId: interaction.user.id });
     const resolvedEnv = env ?? loadEnv();
     saveCredentialValues(db, {
       discordUserId: interaction.user.id,
@@ -131,22 +146,22 @@ export async function runCredentialRotation(interaction, { db, env, getBrowserFn
   try {
     const resolvedEnv = env ?? loadEnv();
     if (mode === 'usuario_password') {
-      const uadeUsername = await ask(dm, credentialPrompts.newUsername);
-      const uadePassword = await ask(dm, credentialPrompts.newPassword);
+      const uadeUsername = await ask(dm, credentialPrompts.newUsername, { userId: interaction.user.id });
+      const uadePassword = await ask(dm, credentialPrompts.newPassword, { userId: interaction.user.id });
       rotateCredentialValues(db, {
         discordUserId: interaction.user.id,
         masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,
         updates: { uadeUsername, uadePassword },
       });
     } else if (mode === 'link') {
-      const uadeStartUrl = await ask(dm, credentialPrompts.newStartUrl);
+      const uadeStartUrl = await ask(dm, credentialPrompts.newStartUrl, { userId: interaction.user.id });
       rotateCredentialValues(db, {
         discordUserId: interaction.user.id,
         masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,
         updates: { uadeStartUrl },
       });
     } else {
-      const values = await collectCredentialValues(dm);
+      const values = await collectCredentialValues(dm, { userId: interaction.user.id });
       saveCredentialValues(db, {
         discordUserId: interaction.user.id,
         masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,
