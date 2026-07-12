@@ -1,6 +1,6 @@
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { toMicrosoftEmail, isStuckOnMicrosoftDomain, isValidStartUrl, extractInscripcionLink } from './sso-link.js';
+import { toMicrosoftEmail, isStuckOnMicrosoftDomain, isValidStartUrl, extractInscripcionLink, confirmInscripcionLink } from './sso-link.js';
 import { getBrowser } from './browser.js';
 
 // extractInscripcionLink() reuses the shared headless Chromium instance --
@@ -108,6 +108,71 @@ describe('extractInscripcionLink', () => {
 
       const linkId = await extractInscripcionLink(page);
       assert.equal(linkId, null);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+describe('confirmInscripcionLink', () => {
+  // Reproduces the real markup's shape: an href="#" target="_blank" link
+  // whose click handler shows a bootbox-style confirm modal first, and only
+  // opens the real destination in a new page once that modal is confirmed --
+  // this is the "activation" side effect that reading data-linkid alone
+  // skips (confirmed live 2026-07-12, see obtainStartUrl's docstring).
+  const PAGE_WITH_BOOTBOX_GATE = `<!DOCTYPE html><html><body>
+    <a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura"
+       data-linkid="https://inscripcionespia.uade.edu.ar/x?param=secret123"
+       href="#" target="_blank" onclick="document.getElementById('modal').style.display='block'; return false;">¡INSCRIBITE!</a>
+    <div id="modal" class="bootbox" style="display:none;">
+      <button class="btn-primary" onclick="window.open(document.querySelector('.inscribite').getAttribute('data-linkid'), '_blank'); document.getElementById('modal').style.display='none';">Confirmar</button>
+    </div>
+  </body></html>`;
+
+  test('clicks the link, confirms the bootbox modal, and returns the popup URL', async () => {
+    const browser = await getBrowser();
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.setContent(PAGE_WITH_BOOTBOX_GATE);
+
+      const startUrl = await confirmInscripcionLink(context, page);
+
+      assert.equal(startUrl, 'https://inscripcionespia.uade.edu.ar/x?param=secret123');
+    } finally {
+      await context.close();
+    }
+  });
+
+  test('falls back to reading data-linkid when the click opens no popup and no modal appears', async () => {
+    const browser = await getBrowser();
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.setContent(`<!DOCTYPE html><html><body>
+        <a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura"
+           data-linkid="https://inscripcionespia.uade.edu.ar/x?param=fallback-secret"
+           href="#" onclick="return false;">¡INSCRIBITE!</a>
+      </body></html>`);
+
+      const startUrl = await confirmInscripcionLink(context, page);
+
+      assert.equal(startUrl, 'https://inscripcionespia.uade.edu.ar/x?param=fallback-secret');
+    } finally {
+      await context.close();
+    }
+  });
+
+  test('returns null when no InscripcionAsignatura link is present', async () => {
+    const browser = await getBrowser();
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.setContent('<!DOCTYPE html><html><body><p>sin links de inscripción</p></body></html>');
+
+      const startUrl = await confirmInscripcionLink(context, page);
+
+      assert.equal(startUrl, null);
     } finally {
       await context.close();
     }

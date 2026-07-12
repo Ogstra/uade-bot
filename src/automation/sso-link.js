@@ -23,6 +23,12 @@ const SELECTORS = {
   microsoftPassword: 'input[name="passwd"], #i0118',
   bootstrapTab: 'a[data-toggle="tab"][href="#menu3"]',
   inscripcionLink: 'a.inscribite[data-tipolink="InscripcionAsignatura"]',
+  // The link's own click handler shows a bootbox.js confirmation before
+  // doing anything -- confirmed live 2026-07-12 (a bootbox modal intercepted
+  // the click). bootbox renders its primary/confirm button with this class;
+  // best-effort broadened with a text fallback since the exact bootbox
+  // config (button label) hasn't been observed directly yet.
+  bootboxConfirmButton: '.bootbox .btn-primary, .bootbox .btn-confirm',
 };
 
 /**
@@ -71,10 +77,14 @@ export function isValidStartUrl(candidate) {
 
 /**
  * Reads the `data-linkid` attribute off the `InscripcionAsignatura`
- * "¡INSCRIBITE!" link -- never clicks it (a bootbox modal intercepts that
- * click, and the full target URL is already sitting in the attribute).
- * Returns `null` when that specific link isn't present, even if other
- * `data-tipolink` links (e.g. the MRI modality) are on the page.
+ * "¡INSCRIBITE!" link without clicking it. `data-linkid` always carries a
+ * syntactically complete param= URL, but confirmed live 2026-07-12 that
+ * using it directly (skipping the click) produces a search session where
+ * the materias dialog never populates the expected row (`form_drive_failed`,
+ * a `locator.check` timeout) -- the link's own click handler likely performs
+ * a server-side "activation" step (behind the bootbox confirmation) that
+ * this attribute-only read skips. Kept as a last-resort fallback inside
+ * `confirmInscripcionLink`, not as the primary path.
  *
  * @param {import('playwright').Page} page
  * @returns {Promise<string | null>}
@@ -86,6 +96,54 @@ export async function extractInscripcionLink(page) {
     return null;
   }
   return link.getAttribute('data-linkid');
+}
+
+/**
+ * Clicks the `InscripcionAsignatura` "¡INSCRIBITE!" link and confirms the
+ * bootbox modal its handler shows, since the resulting search session only
+ * works when the click's own (likely server-side activation) side effect
+ * has actually run -- reading `data-linkid` alone is not equivalent (see
+ * `extractInscripcionLink`'s docstring). The link carries `target="_blank"`,
+ * so the real destination is expected to open in a new page/tab.
+ *
+ * @param {import('playwright').BrowserContext} context
+ * @param {import('playwright').Page} page
+ * @returns {Promise<string | null>}
+ */
+export async function confirmInscripcionLink(context, page) {
+  const link = page.locator(SELECTORS.inscripcionLink).first();
+  if ((await link.count()) === 0) {
+    return null;
+  }
+
+  const popupPromise = context.waitForEvent('page', { timeout: 5000 }).catch(() => null);
+  await link.click({ timeout: 8000 }).catch((err) => {
+    logger.info({ event: 'sso_inscripcion_link_click_failed', errorName: err.name }, 'Click on the inscripción link failed');
+  });
+
+  try {
+    await page.waitForSelector('.bootbox', { timeout: 5000 });
+    await page.locator(SELECTORS.bootboxConfirmButton).first().click({ timeout: 5000 });
+    logger.info({ event: 'sso_bootbox_confirmed' }, 'Confirmed the bootbox modal shown by the inscripción link');
+  } catch {
+    // No modal appeared (or it already resolved) -- continue either way.
+  }
+
+  const popup = await popupPromise;
+  if (popup) {
+    await popup.waitForLoadState('domcontentloaded').catch(() => {});
+    const popupUrl = popup.url();
+    await popup.close().catch(() => {});
+    if (isValidStartUrl(popupUrl)) {
+      return popupUrl;
+    }
+  }
+
+  // No popup opened (or it didn't land on a param= URL) -- fall back to the
+  // attribute read. Still gives the "click + confirm" side effect a chance
+  // to have already run before this read, even though it's not itself the
+  // activation trigger.
+  return extractInscripcionLink(page);
 }
 
 /**
@@ -188,7 +246,7 @@ export async function obtainStartUrl(context, { username, password }) {
       );
     }
 
-    const startUrl = await extractInscripcionLink(page);
+    const startUrl = await confirmInscripcionLink(context, page);
     if (!isValidStartUrl(startUrl)) {
       logger.info(
         { event: 'sso_link_not_found' },
