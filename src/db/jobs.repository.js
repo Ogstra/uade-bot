@@ -21,6 +21,8 @@ function rowToJob(row) {
     status: row.status,
     lastPolledAt: row.last_polled_at,
     lastOutcome: row.last_outcome,
+    lastNotifiedState: row.last_notified_state,
+    lastNotifiedCupos: row.last_notified_cupos,
     createdAt: row.created_at,
   });
 }
@@ -132,6 +134,24 @@ export function updateJobPollResult(db, jobId, { lastPolledAt, lastOutcome }) {
   );
 
   logger.info({ event: 'job_poll_result_update', jobId, lastOutcome }, 'Job poll result updated');
+
+  return getJob(db, jobId);
+}
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @param {number} jobId
+ * @param {{ lastNotifiedState: string | null, lastNotifiedCupos: number | null }} state
+ * @returns {import('zod').infer<typeof SearchJobSchema>}
+ */
+export function updateJobNotifiedState(db, jobId, { lastNotifiedState, lastNotifiedCupos }) {
+  db.prepare('UPDATE jobs SET last_notified_state = ?, last_notified_cupos = ? WHERE id = ?').run(
+    lastNotifiedState,
+    lastNotifiedCupos,
+    jobId,
+  );
+
+  logger.info({ event: 'job_notified_state_update', jobId }, 'Job notification state updated');
 
   return getJob(db, jobId);
 }

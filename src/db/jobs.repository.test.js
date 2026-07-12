@@ -11,10 +11,15 @@ import {
   getJob,
   listActiveJobs,
   listJobsByUser,
+  updateJobNotifiedState,
   updateJobPollResult,
   updateJobStatus,
 } from './jobs.repository.js';
-import { upsertUser } from './users.repository.js';
+import {
+  clearPauseNotificationState,
+  markPauseNotificationSent,
+  upsertUser,
+} from './users.repository.js';
 
 const FILTROS = {
   materiaCodigo: '3.1.050',
@@ -91,6 +96,43 @@ test('listJobsByUser returns only active and paused jobs for that user with poll
   }
 });
 
+test('updateJobNotifiedState persists dedup metadata independently from lastOutcome', () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const job = createJob(db, {
+      discordUserId: 'user-1',
+      filtros: FILTROS,
+      channelId: 'channel-1',
+      label: 'Fisica II',
+    });
+
+    updateJobPollResult(db, job.id, {
+      lastPolledAt: 12345,
+      lastOutcome: JSON.stringify({ outcome: 'found' }),
+    });
+    const updated = updateJobNotifiedState(db, job.id, {
+      lastNotifiedState: 'open',
+      lastNotifiedCupos: 4,
+    });
+
+    assert.equal(updated.lastOutcome, JSON.stringify({ outcome: 'found' }));
+    assert.equal(updated.lastNotifiedState, 'open');
+    assert.equal(updated.lastNotifiedCupos, 4);
+
+    const closed = updateJobNotifiedState(db, job.id, {
+      lastNotifiedState: null,
+      lastNotifiedCupos: null,
+    });
+
+    assert.equal(closed.lastOutcome, JSON.stringify({ outcome: 'found' }));
+    assert.equal(closed.lastNotifiedState, null);
+    assert.equal(closed.lastNotifiedCupos, null);
+  } finally {
+    db.close();
+  }
+});
+
 test('updateJobStatus preserves filtros and listActiveJobs still excludes paused jobs', () => {
   const db = createDatabase(':memory:');
   try {
@@ -143,7 +185,7 @@ test('deleteJob removes a job row and createJob still enforces users foreign key
   }
 });
 
-test('createDatabase migrates existing jobs tables with channel_id and label columns', () => {
+test('createDatabase migrates existing jobs tables with command and notification columns', () => {
   const dir = mkdtempSync(join(tmpdir(), 'uade-bot-jobs-'));
   const dbPath = join(dir, 'old.db');
   const oldDb = new Database(dbPath);
@@ -177,14 +219,34 @@ test('createDatabase migrates existing jobs tables with channel_id and label col
     const columns = db.prepare("PRAGMA table_info('jobs')").all().map((column) => column.name);
     assert.equal(columns.includes('channel_id'), true);
     assert.equal(columns.includes('label'), true);
+    assert.equal(columns.includes('last_notified_state'), true);
+    assert.equal(columns.includes('last_notified_cupos'), true);
 
     upsertUser(db, 'user-1');
     const job = createJob(db, { discordUserId: 'user-1', filtros: FILTROS, channelId: 'channel-1' });
 
     assert.equal(job.channelId, 'channel-1');
     assert.equal(job.label, FILTROS.materiaCodigo);
+    assert.equal(job.lastNotifiedState, null);
+    assert.equal(job.lastNotifiedCupos, null);
   } finally {
     db.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('users repository marks and clears transition-only pause notification state', () => {
+  const db = createDatabase(':memory:');
+  try {
+    const user = upsertUser(db, 'user-1');
+    assert.equal(user.lastPauseNotifiedReason, null);
+
+    const marked = markPauseNotificationSent(db, 'user-1', 'needs_credentials');
+    assert.equal(marked.lastPauseNotifiedReason, 'needs_credentials');
+
+    const cleared = clearPauseNotificationState(db, 'user-1');
+    assert.equal(cleared.lastPauseNotifiedReason, null);
+  } finally {
+    db.close();
   }
 });

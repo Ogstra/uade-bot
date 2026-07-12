@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
   pause_reason TEXT,
   pause_until INTEGER,
   backoff_attempt INTEGER NOT NULL DEFAULT 0,
+  last_pause_notified_reason TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -36,6 +37,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   status TEXT NOT NULL DEFAULT 'active',
   last_polled_at INTEGER,
   last_outcome TEXT,
+  last_notified_state TEXT,
+  last_notified_cupos INTEGER,
   created_at INTEGER NOT NULL
 );
 `;
@@ -43,6 +46,13 @@ CREATE TABLE IF NOT EXISTS jobs (
 const MIGRATIONS = [
   { table: 'jobs', column: 'channel_id', sql: 'ALTER TABLE jobs ADD COLUMN channel_id TEXT' },
   { table: 'jobs', column: 'label', sql: 'ALTER TABLE jobs ADD COLUMN label TEXT' },
+  { table: 'jobs', column: 'last_notified_state', sql: 'ALTER TABLE jobs ADD COLUMN last_notified_state TEXT' },
+  { table: 'jobs', column: 'last_notified_cupos', sql: 'ALTER TABLE jobs ADD COLUMN last_notified_cupos INTEGER' },
+  {
+    table: 'users',
+    column: 'last_pause_notified_reason',
+    sql: 'ALTER TABLE users ADD COLUMN last_pause_notified_reason TEXT',
+  },
 ];
 
 /** @type {import('better-sqlite3').Database | undefined} */

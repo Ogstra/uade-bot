@@ -52,6 +52,7 @@ export const UserRecordSchema = z.object({
   pauseReason: z.enum(['needs_credentials', 'needs_new_start_url', 'rate_limited']).nullable(),
   pauseUntil: z.number().int().nullable(),
   backoffAttempt: z.number().int().nonnegative(),
+  lastPauseNotifiedReason: z.enum(['needs_credentials', 'needs_new_start_url', 'rate_limited']).nullable(),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
 });
@@ -86,6 +87,8 @@ export const SearchJobSchema = z.object({
   status: z.enum(['active', 'paused_by_user']),
   lastPolledAt: z.number().int().nullable(),
   lastOutcome: z.string().nullable(),
+  lastNotifiedState: z.string().nullable(),
+  lastNotifiedCupos: z.number().int().nonnegative().nullable(),
   createdAt: z.number().int(),
 });
 

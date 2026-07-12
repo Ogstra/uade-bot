@@ -15,6 +15,7 @@ function rowToUser(row) {
     pauseReason: row.pause_reason,
     pauseUntil: row.pause_until,
     backoffAttempt: row.backoff_attempt,
+    lastPauseNotifiedReason: row.last_pause_notified_reason,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
@@ -69,6 +70,45 @@ export function updateAccountPauseState(db, discordUserId, { pauseReason, pauseU
   ).run(pauseReason, pauseUntil, backoffAttempt, now, discordUserId);
 
   logger.info({ event: 'user_pause_state_update', discordUserId }, 'Account pause state updated');
+
+  return getUser(db, discordUserId);
+}
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} discordUserId
+ * @param {'needs_credentials' | 'needs_new_start_url' | 'rate_limited'} reason
+ * @returns {import('zod').infer<typeof UserRecordSchema>}
+ */
+export function markPauseNotificationSent(db, discordUserId, reason) {
+  const now = Date.now();
+
+  db.prepare(
+    `UPDATE users
+     SET last_pause_notified_reason = ?, updated_at = ?
+     WHERE discord_user_id = ?`,
+  ).run(reason, now, discordUserId);
+
+  logger.info({ event: 'user_pause_notification_marked', discordUserId, reason }, 'Pause notification marked');
+
+  return getUser(db, discordUserId);
+}
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} discordUserId
+ * @returns {import('zod').infer<typeof UserRecordSchema>}
+ */
+export function clearPauseNotificationState(db, discordUserId) {
+  const now = Date.now();
+
+  db.prepare(
+    `UPDATE users
+     SET last_pause_notified_reason = NULL, updated_at = ?
+     WHERE discord_user_id = ?`,
+  ).run(now, discordUserId);
+
+  logger.info({ event: 'user_pause_notification_cleared', discordUserId }, 'Pause notification cleared');
 
   return getUser(db, discordUserId);
 }
