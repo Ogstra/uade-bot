@@ -47,10 +47,10 @@ test('searchCreatedMessage includes filters and paused-account context without s
     credentialResult: { ok: true, message: credentialsSavedMessage(), values: SECRET_VALUES },
   });
 
-  assert.match(text, /Busqueda creada: Fisica II/);
-  assert.match(text, /Materia: 3\.1\.050/);
-  assert.match(text, /Turno: Noche/);
-  assert.match(text, /Sedes excluidas: Monserrat/);
+  assert.match(text, /\*\*Busqueda creada:\*\* Fisica II/);
+  assert.match(text, /\*\*Materia:\*\* `3\.1\.050`/);
+  assert.match(text, /\*\*Turno:\*\* Noche/);
+  assert.match(text, /\*\*Sedes excluidas:\*\* Monserrat/);
   assert.match(text, /Quedo creada pausada/);
   assertNoSecrets(text);
 });
@@ -132,8 +132,8 @@ test('formatJobStatusBlock renders poll state without raw epoch or JSON', () => 
     null,
   );
 
-  assert.match(text, /Ultimo sondeo: /);
-  assert.match(text, /Materia: 3\.1\.050 - Fisica II/);
+  assert.match(text, /\*\*Ultimo sondeo:\*\* /);
+  assert.match(text, /\*\*Materia:\*\* 3\.1\.050 - Fisica II/);
   assert.match(text, /vacante encontrada \(18 cupos\)/);
   assert.doesNotMatch(text, /1783837905670/);
   assert.doesNotMatch(text, /\{"outcome"/);
@@ -154,5 +154,5 @@ test('vacancyNotificationMessage renders extracted materia name when present', (
     ],
   });
 
-  assert.match(text, /Materia: 3\.1\.050 - Fisica II/);
+  assert.match(text, /\*\*Materia:\*\* 3\.1\.050 - Fisica II/);
 });
