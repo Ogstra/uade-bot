@@ -52,6 +52,17 @@ CREATE TABLE IF NOT EXISTS materias (
   nombre TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- Audit trail of slash-command usage: who ran what, where, when. Command
+-- name only -- never the command's option values, so a future option
+-- addition can't accidentally start logging something sensitive.
+CREATE TABLE IF NOT EXISTS command_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  discord_user_id TEXT NOT NULL,
+  command_name TEXT NOT NULL,
+  guild_id TEXT,
+  created_at INTEGER NOT NULL
+);
 `;
 
 const MIGRATIONS = [

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createDatabase } from '../db/database.js';
 import { createJob, getJob } from '../db/jobs.repository.js';
+import { listCommandUsageByUser } from '../db/command-log.repository.js';
 import { upsertUser } from '../db/users.repository.js';
 import { buscarCommand } from './commands/buscar.js';
 import { createInteractionHandler } from './interactions.js';
@@ -103,6 +104,51 @@ test('dispatcher allows DM chat commands without an extra membership check', asy
   await handler(interaction);
 
   assert.deepEqual(executed, ['ok']);
+});
+
+test('dispatcher logs chat-input command usage to command_log', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const command = { ...buscarCommand, execute: async () => {} };
+    const interaction = createInteraction({ guildId: 'guild-1' });
+    const handler = createInteractionHandler({
+      commandsByName: new Map([['buscar', command]]),
+      env: { DISCORD_GUILD_ID: 'guild-1' },
+      logger: createLogger(),
+      commandContext: { db },
+    });
+
+    await handler(interaction);
+
+    const [entry] = listCommandUsageByUser(db, 'user-1');
+    assert.equal(entry.commandName, 'buscar');
+    assert.equal(entry.guildId, 'guild-1');
+  } finally {
+    db.close();
+  }
+});
+
+test('dispatcher does not log autocomplete or button interactions to command_log', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const command = { autocomplete: async (interaction) => interaction.respond([]) };
+    const interaction = createInteraction({
+      isChatInputCommand: () => false,
+      isAutocomplete: () => true,
+    });
+    const handler = createInteractionHandler({
+      commandsByName: new Map([['buscar', command]]),
+      env: { DISCORD_GUILD_ID: 'guild-1' },
+      logger: createLogger(),
+      commandContext: { db },
+    });
+
+    await handler(interaction);
+
+    assert.deepEqual(listCommandUsageByUser(db, 'user-1'), []);
+  } finally {
+    db.close();
+  }
 });
 
 test('dispatcher passes commandContext to autocomplete handlers', async () => {

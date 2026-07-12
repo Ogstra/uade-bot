@@ -1,5 +1,7 @@
 import { isFromAuthorizedGuild, isGuildInteraction } from './access-control.js';
 import { handleDetenerButton, isDetenerButton } from './components.js';
+import { getDb } from '../db/database.js';
+import { logCommandUsage } from '../db/command-log.repository.js';
 import logger from '../logger.js';
 import { genericInteractionErrorMessage } from './messages.js';
 
@@ -61,6 +63,11 @@ export function createInteractionHandler({
       }
 
       if (interaction.isChatInputCommand?.()) {
+        logCommandUsage(commandContext.db ?? getDb(), {
+          discordUserId: interaction.user.id,
+          commandName: interaction.commandName,
+          guildId: interaction.guildId ?? null,
+        });
         await command.execute(interaction, commandContext);
       }
     } catch (err) {
