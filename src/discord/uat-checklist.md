@@ -4,22 +4,22 @@ Do not paste credentials, bot tokens, start URLs, or raw DM contents into this f
 
 ## Setup
 
-- [ ] `.env` has `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `DATABASE_PATH`, `CREDENTIALS_MASTER_KEY`, and scheduler settings.
-- [ ] Bot is invited to the authorized guild with `applications.commands` and `bot` scopes.
+- [x] `.env` has `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `DATABASE_PATH`, `CREDENTIALS_MASTER_KEY`, and scheduler settings.
+- [x] Bot is invited to the authorized guild with `applications.commands` and `bot` scopes.
 - [ ] Bot can send messages in the test channel.
-- [ ] Test user allows DMs from the server.
+- [x] Test user allows DMs from the server.
 
 ## Command Registration
 
-- [ ] Run `npm run discord:register`.
-- [ ] Result: commands are visible in the authorized guild only.
-- Notes:
+- [x] Run `npm run discord:register`.
+- [x] Result: commands are visible in the authorized guild only.
+- Notes: 6 commands registered via `Routes.applicationGuildCommands`, guild-scoped only (no global registration code path exists).
 
 ## Startup
 
-- [ ] Run `npm run bot`.
-- [ ] Result: bot logs readiness, reconstructs active jobs once, and starts scheduler in the same process.
-- Notes:
+- [x] Run `npm run bot`.
+- [x] Result: bot logs readiness, reconstructs active jobs once, and starts scheduler in the same process.
+- Notes: Verified across two restarts (2026-07-12), including the `scheduler.start({ immediate: true })` change — reconstructed jobs get their first poll right away instead of waiting a full interval.
 
 ## Command Flow
 
@@ -44,23 +44,23 @@ Do not paste credentials, bot tokens, start URLs, or raw DM contents into this f
 
 ## Notifications
 
-- [ ] Seed or wait for a found vacancy outcome.
-- [ ] Result: user receives DM with materia/label, turno, sede, horario, dias, cupos.
+- [x] Seed or wait for a found vacancy outcome.
+- [x] Result: user receives DM with materia/label, turno, sede, horario, dias, cupos.
 - [ ] Result: original channel receives a mention with the same vacancy details.
 - [ ] Same open vacancy with unchanged cupos does not notify again.
 - [ ] Increased cupos notifies again.
 - [ ] `no_vacancies` followed by a later found vacancy notifies again.
 - [ ] Multiple matching users are sent through the throttled queue, not as an immediate burst.
-- Notes:
+- Notes: Organic (not seeded) found-vacancy DM confirmed working 2026-07-12.
 
 ## Auth Failure
 
-- [ ] Simulate or trigger invalid credentials.
-- [ ] Result: account/searches pause and the user receives one DM asking to run `/credenciales`.
+- [x] Simulate or trigger invalid credentials.
+- [x] Result: account/searches pause and the user receives one DM asking to run `/credenciales`.
 - [ ] Repeated invalid-credential polls do not send repeated DMs for the same pause.
 - [ ] After successful credential update/recovery, a future real pause can notify again.
 - [ ] Simulate stale session link and verify the DM asks for `/credenciales modo:link`.
-- Notes:
+- Notes: Organic trigger (not simulated) — a real `navigation_failed` on the stale session link paused the account and the pause DM was confirmed received 2026-07-12.
 
 ## Final Result
 
