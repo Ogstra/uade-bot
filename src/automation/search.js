@@ -161,7 +161,25 @@ async function driveSearchForm(page, filtros) {
 
   await page.locator(SELECTORS.materiasDialogTrigger).click();
 
-  await materiaCheckboxLocator(page, filtros.materiaCodigo).check();
+  try {
+    await materiaCheckboxLocator(page, filtros.materiaCodigo).check();
+  } catch (err) {
+    // Diagnostic only, never sensitive: how many materia checkboxes exist
+    // in the dialog AT ALL, regardless of which one we were looking for.
+    // Distinguishes "dialog came up genuinely empty" (0) from "dialog has a
+    // different catalog than expected" (>0, just missing this materiaCodigo)
+    // -- both point away from a client-side automation bug and toward the
+    // session/link's academic context, but the count narrows which.
+    const availableMateriaCheckboxes = await page
+      .locator('input[type="checkbox"][id*="chkSeleccionar"]')
+      .count()
+      .catch(() => -1);
+    logger.warn(
+      { event: 'materia_checkbox_not_found', availableMateriaCheckboxes },
+      'Materia checkbox not found in the materias dialog',
+    );
+    throw err;
+  }
 
   // The materias picker is a jQuery UI modal dialog that stays open after
   // checking a materia — its overlay intercepts clicks on the turno/día
