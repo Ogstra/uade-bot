@@ -40,7 +40,7 @@ async function listen(app) {
 }
 
 function cookieFrom(response) {
-  return response.headers.getSetCookie()[0]?.split(';', 1)[0];
+  return response.headers.getSetCookie().map((value) => value.split(';', 1)[0]).join('; ');
 }
 
 async function getLogin(baseUrl) {
