@@ -1,0 +1,20 @@
+[Unit]
+Description=UADE Discord vacancy bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=uade-bot
+Group=uade-bot
+WorkingDirectory=/opt/uade-bot/current
+EnvironmentFile=/etc/uade-bot/uade-bot.env
+ExecStart=/usr/bin/node src/bot.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
