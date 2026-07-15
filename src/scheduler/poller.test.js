@@ -6,6 +6,7 @@ import { upsertUser, getUser } from '../db/users.repository.js';
 import { upsertCredentials } from '../db/credentials.repository.js';
 import { createJob, getJob } from '../db/jobs.repository.js';
 import { getMateriaNombre } from '../db/materias.repository.js';
+import { listHistoryForJob } from '../db/poll-history.repository.js';
 import { encryptCredentials } from '../crypto/credentials-crypto.js';
 import { getBrowser } from '../automation/browser.js';
 import { pollOnce, attemptAutoRelink } from './poller.js';
@@ -78,6 +79,30 @@ test('pollOnce persists a no_vacancies outcome for a verified search with zero p
   }
 });
 
+test('pollOnce writes current state and bounded history through one timestamped boundary', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    const withUadeContextFn = async (creds, run) => run({});
+    const noVacancies = async () => ({ status: 'verified', html: '<table></table>' });
+
+    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn: noVacancies });
+    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn: noVacancies });
+
+    assert.equal(listHistoryForJob(db, job.id).length, 1);
+
+    const invalidCredentials = async () => ({ status: 'invalid_credentials' });
+    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn: invalidCredentials });
+
+    const history = listHistoryForJob(db, job.id);
+    const updated = getJob(db, job.id);
+    assert.deepEqual(history.map((record) => record.outcomeCode), ['invalid_credentials', 'no_vacancies']);
+    assert.equal(history[0].recordedAt, updated.lastPolledAt);
+  } finally {
+    db.close();
+  }
+});
+
 test('pollOnce does not cache a materia name when the poll result carries none', async () => {
   const db = createDatabase(':memory:');
   try {
@@ -125,6 +150,7 @@ test('pollOnce never leaves plaintext credentials in any DB table after resolvin
       ...db.prepare('SELECT * FROM users').all(),
       ...db.prepare('SELECT * FROM credentials').all(),
       ...db.prepare('SELECT * FROM jobs').all(),
+      ...db.prepare('SELECT * FROM poll_outcome_history').all(),
     ];
     const allRowsText = JSON.stringify(allRows);
 
