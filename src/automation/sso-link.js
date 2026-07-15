@@ -105,15 +105,42 @@ export function isStuckOnMicrosoftDomain(url) {
   }
 }
 
+// The domain every real inscripción start URL lives on -- the ONLY site
+// runSearch's navigateToStartUrl ever targets. A manually-pasted link on any
+// other host (a typo, a copy-paste of the wrong tab, or plain garbage) used
+// to pass the old `includes('param=')` check as long as the string happened
+// to contain that substring somewhere, silently persisting an unusable
+// uadeStartUrl -- confirmed live 2026-07-13: navigateToStartUrl then fails
+// with `navigation_failed` on every subsequent poll, which
+// backoffSignalFromStatus (src/scheduler/poller.js) intentionally maps to
+// 'success' (transient search_failed reasons must not indefinitely pause an
+// account) and which attemptAutoRelink never sees (it only fires on the
+// distinct `stale_start_url` outcome) -- so the account was stuck silently
+// failing forever, with no pause, no DM, and no self-healing.
+const INSCRIPCION_HOST = 'inscripcionespia.uade.edu.ar';
+
 /**
- * True only for a non-empty string containing `param=` -- the shape a
- * genuine `data-linkid` inscripción URL always carries.
+ * True only for a syntactically valid URL whose host is exactly
+ * `inscripcionespia.uade.edu.ar` (the only domain runSearch ever navigates
+ * to) and that carries a `param` query parameter -- the shape a genuine
+ * `data-linkid` inscripción URL always has. False for a well-formed URL on
+ * any other host, a non-URL string, or one missing `param` -- see the
+ * `INSCRIPCION_HOST` comment above for why the host check matters.
  *
  * @param {unknown} candidate
  * @returns {boolean}
  */
 export function isValidStartUrl(candidate) {
-  return typeof candidate === 'string' && candidate.length > 0 && candidate.includes('param=');
+  if (typeof candidate !== 'string' || candidate.length === 0) {
+    return false;
+  }
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return false;
+  }
+  return parsed.host === INSCRIPCION_HOST && parsed.searchParams.has('param');
 }
 
 /**

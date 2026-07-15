@@ -3,7 +3,7 @@ import { upsertUser } from '../db/users.repository.js';
 import { encryptCredentials, decryptCredentials } from '../crypto/credentials-crypto.js';
 import { loadEnv } from '../config/env.js';
 import { getBrowser, withPlainContext } from '../automation/browser.js';
-import { obtainStartUrl } from '../automation/sso-link.js';
+import { obtainStartUrl, isValidStartUrl } from '../automation/sso-link.js';
 import logger from '../logger.js';
 import {
   credentialOnboardingFailedMessage,
@@ -12,6 +12,7 @@ import {
   credentialsSavedMessage,
   credentialsUpdatedMessage,
   dmUnavailableMessage,
+  invalidStartUrlMessage,
 } from './messages.js';
 
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -81,6 +82,35 @@ async function ask(dm, message, { timeoutMs = DEFAULT_TIMEOUT_MS, userId } = {})
 }
 
 /**
+ * Same as `ask()`, but for a manually-pasted inscripción link specifically:
+ * rejects (throws `invalid_start_url_link`, never persists anything) a reply
+ * that isn't a real `inscripcionespia.uade.edu.ar` URL carrying a `param`
+ * query parameter -- confirmed live 2026-07-13 that an unvalidated paste
+ * (wrong domain, a non-link, or plain garbage) used to save straight through
+ * to `uadeStartUrl`, after which every poll failed with `navigation_failed`
+ * forever: that outcome maps to a 'success' backoff signal (by design, so a
+ * transient search_failed doesn't pause an account) and never reaches
+ * `attemptAutoRelink` (which only fires on the distinct `stale_start_url`
+ * outcome) -- so the account was stuck silently broken with no pause, no DM,
+ * and no self-healing. Rejecting the bad link before it's ever saved is the
+ * narrow fix: it stops the broken state from being created in the first
+ * place, without changing what `search_failed`/`navigation_failed` do
+ * elsewhere (which stay intentionally transient-tolerant).
+ *
+ * @param {import('discord.js').DMChannel} dm
+ * @param {string} message
+ * @param {{ timeoutMs?: number, userId: string }} options
+ * @returns {Promise<string>}
+ */
+async function askStartUrl(dm, message, options) {
+  const value = await ask(dm, message, options);
+  if (!isValidStartUrl(value)) {
+    throw new Error('invalid_start_url_link');
+  }
+  return value;
+}
+
+/**
  * Fase 3.1: the bot tries to obtain the inscripción link itself first,
  * automating the Microsoft/Azure AD login with the credentials just
  * collected -- the user is only asked to paste a link manually as a
@@ -99,7 +129,7 @@ async function obtainOrAskStartUrl(
   if (result.status === 'success') {
     return result.startUrl;
   }
-  return ask(dm, credentialPrompts.startUrl, { userId });
+  return askStartUrl(dm, credentialPrompts.startUrl, { userId });
 }
 
 export async function collectCredentialValues(dm, options = {}) {
@@ -180,7 +210,7 @@ export async function runFullCredentialOnboarding(
     );
     return {
       ok: false,
-      message: credentialOnboardingFailedMessage(),
+      message: err.message === 'invalid_start_url_link' ? invalidStartUrlMessage() : credentialOnboardingFailedMessage(),
     };
   }
 }
@@ -232,7 +262,7 @@ export async function runCredentialRotation(
         updates: { uadeUsername, uadePassword, uadeStartUrl },
       });
     } else if (mode === 'link') {
-      const uadeStartUrl = await ask(dm, credentialPrompts.newStartUrl, { userId: interaction.user.id });
+      const uadeStartUrl = await askStartUrl(dm, credentialPrompts.newStartUrl, { userId: interaction.user.id });
       rotateCredentialValues(db, {
         discordUserId: interaction.user.id,
         masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,
@@ -257,7 +287,7 @@ export async function runCredentialRotation(
     );
     return {
       ok: false,
-      message: credentialRotationFailedMessage(),
+      message: err.message === 'invalid_start_url_link' ? invalidStartUrlMessage() : credentialRotationFailedMessage(),
     };
   }
 }

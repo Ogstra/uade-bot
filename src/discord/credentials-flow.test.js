@@ -452,3 +452,92 @@ test('runCredentialRotation triggers onCredentialsUpdated after a successful mod
     db.close();
   }
 });
+
+// Regression for the live 2026-07-13 bug: a manually-pasted modo:link value
+// that isn't a real inscripcionespia.uade.edu.ar param= link (wrong domain,
+// or not a link at all) used to save straight through, after which every
+// poll failed with navigation_failed forever -- no pause, no DM, no
+// self-healing (see askStartUrl's docstring in credentials-flow.js).
+test('runCredentialRotation modo:link rejects a link on the wrong domain without saving it', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const masterKey = randomBytes(32).toString('hex');
+    upsertUser(db, 'user-1');
+    saveCredentialValues(db, {
+      discordUserId: 'user-1',
+      masterKey,
+      values: {
+        uadeUsername: 'old-user',
+        uadePassword: 'old-pass',
+        uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=old',
+      },
+    });
+
+    const dm = createDm(['https://otro-sitio.example/no-es-el-link-correcto']);
+    const interaction = createInteraction({ dm, modo: 'link' });
+
+    const result = await runCredentialRotation(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: masterKey },
+      getBrowserFn: async () => ({}),
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.message, /no parece un link de inscripcion valido/);
+    assert.deepEqual(decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1')), {
+      uadeUsername: 'old-user',
+      uadePassword: 'old-pass',
+      uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=old',
+    });
+  } finally {
+    db.close();
+  }
+});
+
+test('runCredentialRotation modo:link rejects a non-link reply without saving it', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const masterKey = randomBytes(32).toString('hex');
+    upsertUser(db, 'user-1');
+    saveCredentialValues(db, {
+      discordUserId: 'user-1',
+      masterKey,
+      values: {
+        uadeUsername: 'old-user',
+        uadePassword: 'old-pass',
+        uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=old',
+      },
+    });
+
+    const dm = createDm(['no tengo el link ahora']);
+    const interaction = createInteraction({ dm, modo: 'link' });
+
+    const result = await runCredentialRotation(interaction, {
+      db,
+      env: { CREDENTIALS_MASTER_KEY: masterKey },
+      getBrowserFn: async () => ({}),
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(
+      decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1')).uadeStartUrl,
+      'https://inscripcionespia.uade.edu.ar/x?param=old',
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test('collectCredentialValues rejects an invalid manually-pasted link in the MFA fallback path', async () => {
+  const dm = createDm(['usuario', 'password', 'esto no es un link']);
+
+  await assert.rejects(
+    () =>
+      collectCredentialValues(dm, {
+        userId: 'user-1',
+        withPlainContextFn: noopWithPlainContext,
+        obtainStartUrlFn: fakeObtainStartUrlMfaRequired(),
+      }),
+    /invalid_start_url_link/,
+  );
+});

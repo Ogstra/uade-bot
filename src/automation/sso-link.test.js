@@ -63,6 +63,22 @@ describe('isValidStartUrl', () => {
   test('returns false for a URL without param=', () => {
     assert.equal(isValidStartUrl('https://inscripcionespia.uade.edu.ar/x?otro=abc'), false);
   });
+
+  test('returns false for a well-formed URL on the wrong host', () => {
+    assert.equal(isValidStartUrl('https://evil.example/x?param=abc'), false);
+  });
+
+  test('returns false for a well-formed URL on a UADE look-alike host', () => {
+    assert.equal(isValidStartUrl('https://inscripcionespia.uade.edu.ar.evil.example/x?param=abc'), false);
+  });
+
+  test('returns false for a plain non-URL string', () => {
+    assert.equal(isValidStartUrl('esto no es un link'), false);
+  });
+
+  test('returns false for a link to a different real site', () => {
+    assert.equal(isValidStartUrl('https://inscripciones.uade.edu.ar/?param=abc'), false);
+  });
 });
 
 // Wraps a link in the real page's `.panel.panel-primary` > ... >

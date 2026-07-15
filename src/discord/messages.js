@@ -222,6 +222,13 @@ export function credentialRotationFailedMessage() {
   return 'No pude actualizar tus credenciales. Volve a intentar.';
 }
 
+export function invalidStartUrlMessage() {
+  return (
+    'Ese link no parece un link de inscripcion valido de UADE (tiene que ser de ' +
+    '`inscripcionespia.uade.edu.ar` e incluir `param=`). No lo guarde. Volve a intentar con `/credenciales`.'
+  );
+}
+
 function formatVacancyLines(vacancies) {
   return vacancies
     .map(
