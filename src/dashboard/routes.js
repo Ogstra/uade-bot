@@ -2,6 +2,7 @@ import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 
 import { buildDashboardSnapshot } from './snapshot.js';
+import { renderDashboardPage, renderLoginPage } from './render.js';
 
 const GENERIC_LOGIN_ERROR = 'Usuario o contraseña incorrectos. Volvé a intentarlo.';
 const LoginSchema = z.object({
@@ -16,22 +17,6 @@ export function noStore(_req, res, next) {
   next();
 }
 
-function defaultLoginRenderer({ csrfToken, error = null }) {
-  return `<!doctype html><html lang="es"><body><h1>Dashboard de UADE Bot</h1>${error ? `<p>${error}</p>` : ''}<form method="post" action="/login"><input name="username"><input type="password" name="password"><input type="hidden" name="_csrf" value="${csrfToken}"><button>Iniciar sesión</button></form></body></html>`;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
-}
-
-function defaultDashboardRenderer({ snapshot, csrfToken }) {
-  return `<!doctype html><html lang="es"><body><h1>Estado del sistema</h1><pre>${escapeHtml(JSON.stringify(snapshot))}</pre><form method="post" action="/logout"><input type="hidden" name="_csrf" value="${csrfToken}"><button>Cerrar sesión</button></form></body></html>`;
-}
-
 export function registerDashboardRoutes({
   app,
   auth,
@@ -39,8 +24,8 @@ export function registerDashboardRoutes({
   client,
   clock = Date.now,
   snapshotBuilder = buildDashboardSnapshot,
-  renderLogin = defaultLoginRenderer,
-  renderDashboard = defaultDashboardRenderer,
+  renderLogin = renderLoginPage,
+  renderDashboard = renderDashboardPage,
   loginLimit = 5,
 }) {
   const limiter = rateLimit({
