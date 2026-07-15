@@ -50,6 +50,7 @@ export function createDashboardApp({
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
         frameAncestors: ["'none'"],
+        upgradeInsecureRequests: null,
       },
     },
     referrerPolicy: { policy: 'same-origin' },

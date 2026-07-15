@@ -166,7 +166,9 @@ test('server module is side-effect free and app factory emits browser-compatible
   const nonce = body.match(/nonce="([^"]+)"/)?.[1];
 
   assert.ok(nonce);
-  assert.match(response.headers.get('content-security-policy'), new RegExp(`'nonce-${nonce}'`));
+  const contentSecurityPolicy = response.headers.get('content-security-policy');
+  assert.match(contentSecurityPolicy, new RegExp(`'nonce-${nonce}'`));
+  assert.doesNotMatch(contentSecurityPolicy, /upgrade-insecure-requests/);
   assert.equal(response.headers.get('x-powered-by'), null);
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(response.headers.get('x-frame-options'), 'SAMEORIGIN');
