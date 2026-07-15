@@ -52,7 +52,7 @@ sha256sum -c uade-bot-RELEASE.tar.gz.sha256
 RELEASE=REEMPLAZAR_CON_EL_ID_DEL_TARBALL
 sudo install -d -o uade-bot -g uade-bot "/opt/uade-bot/releases/$RELEASE"
 sudo -u uade-bot tar -xzf "/tmp/uade-bot-$RELEASE.tar.gz" \
-  -C "/opt/uade-bot/releases/$RELEASE"
+  -C "/opt/uade-bot/releases/$RELEASE" --strip-components=1
 ```
 
 Instalar dependencias Linux exactamente desde `package-lock.json`:
