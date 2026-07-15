@@ -2,7 +2,7 @@ import { pathToFileURL } from 'node:url';
 
 import { loadEnv } from './config/env.js';
 import { getDb } from './db/database.js';
-import { listJobsByUser } from './db/jobs.repository.js';
+import { listDistinctJobOwnerIds, listJobsByUser } from './db/jobs.repository.js';
 import { createDiscordClient } from './discord/client.js';
 import { commandsByName } from './discord/commands/index.js';
 import { createInteractionHandler } from './discord/interactions.js';
@@ -43,6 +43,28 @@ export function startOptionalDashboard({
       );
       return null;
     });
+}
+
+export async function warmDashboardUserCache({
+  db,
+  client,
+  logger: runtimeLogger = logger,
+  listOwnerIds = listDistinctJobOwnerIds,
+}) {
+  const ownerIds = listOwnerIds(db);
+  let loaded = 0;
+  for (const discordUserId of ownerIds) {
+    try {
+      await client.users.fetch(discordUserId);
+      loaded += 1;
+    } catch (error) {
+      runtimeLogger.warn(
+        { event: 'dashboard_user_cache_fetch_failed', discordUserId, message: error.message },
+        'Could not resolve a dashboard account display name',
+      );
+    }
+  }
+  return { requested: ownerIds.length, loaded };
 }
 
 export async function main() {
@@ -90,6 +112,12 @@ export async function main() {
     }),
   );
   client.once('ready', async () => {
+    void warmDashboardUserCache({ db, client, logger }).catch((error) => {
+      logger.warn(
+        { event: 'dashboard_user_cache_warmup_failed', message: error.message },
+        'Could not warm dashboard account display names',
+      );
+    });
     await reconstructActiveJobs(db, scheduler);
     scheduler.start({ immediate: true });
     logger.info({ event: 'discord_bot_ready', userId: client.user?.id }, 'Discord bot ready');

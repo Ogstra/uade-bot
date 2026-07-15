@@ -6,7 +6,7 @@ import express from 'express';
 import { createDashboardAuth } from './auth.js';
 import { registerDashboardRoutes } from './routes.js';
 import { createDashboardApp, startDashboardServer } from './server.js';
-import { getDashboardServer, startOptionalDashboard } from '../bot.js';
+import { getDashboardServer, startOptionalDashboard, warmDashboardUserCache } from '../bot.js';
 
 const env = {
   DASHBOARD_USERNAME: 'operator',
@@ -224,4 +224,30 @@ test('bot dashboard lifecycle is opt-in, non-blocking and reuses exact process d
   finish(server);
   assert.equal(await pending, server);
   assert.equal(getDashboardServer(), server);
+});
+
+test('dashboard user cache warmup resolves historical job owners without failing as a group', async () => {
+  const fetched = [];
+  const warnings = [];
+  const result = await warmDashboardUserCache({
+    db: { marker: 'db' },
+    client: {
+      users: {
+        async fetch(discordUserId) {
+          fetched.push(discordUserId);
+          if (discordUserId === 'missing-user') throw new Error('Discord lookup failed');
+          return { id: discordUserId, username: 'resolved-user' };
+        },
+      },
+    },
+    logger: { warn(fields) { warnings.push(fields); } },
+    listOwnerIds: (db) => {
+      assert.equal(db.marker, 'db');
+      return ['known-user', 'missing-user'];
+    },
+  });
+
+  assert.deepEqual(fetched, ['known-user', 'missing-user']);
+  assert.deepEqual(result, { requested: 2, loaded: 1 });
+  assert.deepEqual(warnings.map((entry) => entry.event), ['dashboard_user_cache_fetch_failed']);
 });
