@@ -129,6 +129,25 @@ test('snapshot failures return a generic 500 without internal details', async (t
   assert.doesNotMatch(await response.text(), /SQL|SENTINEL|param=|stack/);
 });
 
+test('authenticated HTML failures render a fixed safe error page', async (t) => {
+  const app = createDashboardApp({
+    db: {}, client: {}, env,
+    logger: { info() {}, warn() {}, error() {} },
+    snapshotBuilder: () => { throw new Error('SQL SENTINEL param=secret'); },
+    renderLogin: ({ csrfToken, error }) => JSON.stringify({ csrfToken, error }),
+  });
+  const { server, baseUrl } = await listen(app);
+  t.after(() => server.close());
+  const challenge = await getLogin(baseUrl);
+  const successful = await login(baseUrl, challenge.cookie, challenge.csrfToken);
+  const response = await fetch(`${baseUrl}/dashboard`, { headers: { cookie: cookieFrom(successful), accept: 'text/html' } });
+  const body = await response.text();
+  assert.equal(response.status, 500);
+  assert.match(response.headers.get('content-type'), /text\/html/);
+  assert.match(body, /No pudimos mostrar el dashboard/);
+  assert.doesNotMatch(body, /SQL|SENTINEL|param=|stack/);
+});
+
 test('server module is side-effect free and app factory emits nonce security headers', async (t) => {
   const warnings = [];
   const app = createDashboardApp({

@@ -57,6 +57,8 @@ test('dashboard SSR renders semantic, keyed, escaped operational content and exa
   assert.equal((html.match(/class="health-card"/g) ?? []).length, 4);
   assert.match(html, /<details[^>]*data-account-id="user-1"[^>]*open/);
   assert.match(html, /data-job-id="7"/);
+  assert.match(html, /data-field="job-status"/);
+  assert.match(html, /data-field="history"/);
   assert.match(html, /<caption>Historial de cambios<\/caption>/);
   assert.match(html, /<th scope="col">Fecha<\/th>/);
   assert.match(html, /Operador &lt;script&gt;alert\(1\)&lt;\/script&gt;/);

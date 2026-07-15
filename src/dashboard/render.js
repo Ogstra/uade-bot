@@ -50,7 +50,7 @@ function renderJob(job) {
   const filters = job.filters ?? {};
   const days = Array.isArray(filters.dias) && filters.dias.length > 0 ? filters.dias.join(', ') : 'No especificados';
   return `<article class="job-panel" data-job-id="${escapeHtml(job.jobId)}">
-    <div class="job-heading"><h3>${escapeHtml(job.label ?? filters.materiaCodigo ?? 'Búsqueda')} <span class="metadata">#${escapeHtml(job.jobId)}</span></h3>${badge(job.status)}</div>
+    <div class="job-heading"><h3>${escapeHtml(job.label ?? filters.materiaCodigo ?? 'Búsqueda')} <span class="metadata">#${escapeHtml(job.jobId)}</span></h3><span data-field="job-status">${badge(job.status)}</span></div>
     <dl class="job-metadata">
       <div><dt>Último poll</dt><dd data-field="last-polled-at">${timestamp(job.lastPolledAt)}</dd></div>
       <div><dt>Último resultado</dt><dd data-field="outcome">${badge(job.outcome)}</dd></div>
@@ -60,7 +60,7 @@ function renderJob(job) {
       <div><dt>Días</dt><dd>${escapeHtml(days)}</dd></div>
       <div><dt>Sedes excluidas</dt><dd>${escapeHtml(filters.sedesExcluidasLabel ?? 'Sin exclusiones')}</dd></div>
     </dl>
-    <section class="history" aria-labelledby="history-${escapeHtml(job.jobId)}"><h3 id="history-${escapeHtml(job.jobId)}">Historial de cambios</h3>${renderHistory(job)}</section>
+    <section class="history" aria-labelledby="history-${escapeHtml(job.jobId)}"><h3 id="history-${escapeHtml(job.jobId)}">Historial de cambios</h3><div data-field="history">${renderHistory(job)}</div></section>
   </article>`;
 }
 

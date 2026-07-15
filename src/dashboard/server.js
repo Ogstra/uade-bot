@@ -4,6 +4,7 @@ import express from 'express';
 import helmet from 'helmet';
 
 import { createDashboardAuth } from './auth.js';
+import { renderSafeError } from './render.js';
 import { registerDashboardRoutes } from './routes.js';
 
 export function createDashboardApp({
@@ -69,10 +70,13 @@ export function createDashboardApp({
     renderDashboard,
     loginLimit,
   });
-  app.use((_error, _req, res, _next) => {
+  app.use((_error, req, res, _next) => {
     logger.error({ event: 'dashboard_request_failed' }, 'Dashboard request failed');
     if (res.headersSent) return;
-    res.status(500).json({ error: 'internal_error' });
+    if (req.accepts('html') && !req.path.startsWith('/api/')) {
+      return res.status(500).type('html').send(renderSafeError({ cspNonce: res.locals.cspNonce, status: 500 }));
+    }
+    return res.status(500).json({ error: 'internal_error' });
   });
   return app;
 }
