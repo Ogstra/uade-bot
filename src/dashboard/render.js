@@ -297,7 +297,7 @@ function dashboardClientScript() {
       fetchSnapshot: async () => { const response = await fetch('/api/dashboard', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } }); return { ok: response.ok, status: response.status, snapshot: response.ok ? await response.json() : null }; },
       schedule: window.setTimeout.bind(window), cancel: window.clearTimeout.bind(window), now: Date.now,
       onBusy: (busy) => { root.setAttribute('aria-busy', String(busy)); if (busy) setText(liveStatus, 'Actualizando…'); },
-      onSuccess: (next) => { const scrollX = window.scrollX; const scrollY = window.scrollY; patchHealth(next.health); patchAccounts(next.accounts); lastSuccessAt = Number(next.generatedAt) || Date.now(); errorBanner.hidden = true; setText(liveStatus, 'Datos actualizados.'); updateFreshness(); window.scrollTo(scrollX, scrollY); },
+      onSuccess: (next) => { const scrollX = window.scrollX; const scrollY = window.scrollY; patchHealth(next.health); patchAccounts(next.accounts); lastSuccessAt = Number(next.generatedAt) || Date.now(); errorBanner.hidden = true; setText(liveStatus, ''); updateFreshness(); window.scrollTo(scrollX, scrollY); },
       onFailure: () => { errorBanner.hidden = false; setText(liveStatus, 'No se pudieron actualizar los datos.'); },
       onUnauthorized: () => { accountsList.replaceChildren(); setText(liveStatus, 'Tu sesión venció. Iniciá sesión de nuevo.'); window.location.assign('/login'); },
     });
@@ -326,7 +326,7 @@ function healthCards(snapshot) {
   return `<article class="health-card" data-health="active"><span class="health-label">Cuentas activas</span><strong data-value>${escapeHtml(health.activeAccounts ?? 0)}</strong><span class="metadata">Con búsquedas y sin pausa</span></article>
   <article class="health-card" data-health="paused"><span class="health-label">Cuentas pausadas</span><strong data-value>${escapeHtml(paused.total ?? 0)}</strong><span class="metadata" data-meta>${breakdown}</span></article>
   <article class="health-card" data-health="jobs"><span class="health-label">Búsquedas</span><strong data-value>${escapeHtml(jobs.total ?? 0)}</strong><span class="metadata" data-meta>${escapeHtml(jobs.active ?? 0)} activas · ${escapeHtml(jobs.manuallyPaused ?? 0)} pausadas</span></article>
-  <article class="health-card" data-health="last-poll"><span class="health-label">Último poll exitoso</span><strong class="health-time" data-value>${timestamp(health.lastSuccessfulPollAt, 'Sin polls exitosos')}</strong><span class="metadata">Resultado verificado</span></article>`;
+  <article class="health-card" data-health="last-poll"><span class="health-label">Último poll exitoso</span><strong class="health-time" data-value>${timestamp(health.lastSuccessfulPollAt, 'Sin polls exitosos')}</strong></article>`;
 }
 
 export function renderDashboardPage({ snapshot, csrfToken, cspNonce }) {

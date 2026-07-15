@@ -61,6 +61,7 @@ test('dashboard SSR renders semantic, keyed, escaped operational content and exa
   assert.match(html, /data-field="history"/);
   assert.match(html, /1234 — Álgebra Lineal/);
   assert.match(html, /data-field="account-materias">1234 — Álgebra Lineal/);
+  assert.doesNotMatch(html, /Datos actualizados\.|Resultado verificado/);
   assert.match(html, /<caption>Historial de cambios<\/caption>/);
   assert.match(html, /<th scope="col">Fecha<\/th>/);
   assert.match(html, /Operador &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
