@@ -5,6 +5,7 @@ import express from 'express';
 
 import { createDashboardAuth } from './auth.js';
 import { registerDashboardRoutes } from './routes.js';
+import { createDashboardApp, startDashboardServer } from './server.js';
 
 const env = {
   DASHBOARD_USERNAME: 'operator',
@@ -125,4 +126,49 @@ test('snapshot failures return a generic 500 without internal details', async (t
   assert.equal(response.status, 500);
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.doesNotMatch(await response.text(), /SQL|SENTINEL|param=|stack/);
+});
+
+test('server module is side-effect free and app factory emits nonce security headers', async (t) => {
+  const warnings = [];
+  const app = createDashboardApp({
+    db: {}, client: {},
+    env: { ...env, DASHBOARD_USERNAME: 'admin', DASHBOARD_PASSWORD: 'admin', DASHBOARD_SESSION_SECRET: undefined },
+    logger: { info() {}, error() {}, warn(fields) { warnings.push(fields); } },
+    randomBytes: (size) => Buffer.alloc(size, 9),
+    snapshotBuilder: () => ({ health: {}, accounts: [] }),
+    renderLogin: ({ csrfToken, cspNonce }) => `<form><input name="_csrf" value="${csrfToken}"><script nonce="${cspNonce}"></script></form>`,
+  });
+  assert.equal(app.get('trust proxy'), false);
+  const { server, baseUrl } = await listen(app);
+  t.after(() => server.close());
+  const response = await fetch(`${baseUrl}/login`);
+  const body = await response.text();
+  const nonce = body.match(/nonce="([^"]+)"/)?.[1];
+
+  assert.ok(nonce);
+  assert.match(response.headers.get('content-security-policy'), new RegExp(`'nonce-${nonce}'`));
+  assert.equal(response.headers.get('x-powered-by'), null);
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(response.headers.get('x-frame-options'), 'SAMEORIGIN');
+  assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+  assert.deepEqual(warnings.map((entry) => entry.event).sort(), ['dashboard_default_credentials', 'dashboard_ephemeral_session_secret']);
+  assert.doesNotMatch(JSON.stringify(warnings), /admin\/admin|ssss|secret|password/i);
+});
+
+test('startDashboardServer binds explicitly and closes cleanly while reusing dependencies', async () => {
+  const db = { identity: 'shared-db' };
+  const client = { identity: 'shared-client' };
+  const server = await startDashboardServer({
+    db, client,
+    env: { ...env, DASHBOARD_PORT: 0 },
+    logger: { info() {}, error() {}, warn() {} },
+    snapshotBuilder: ({ db: receivedDb, client: receivedClient }) => {
+      assert.equal(receivedDb, db);
+      assert.equal(receivedClient, client);
+      return { health: {}, accounts: [] };
+    },
+  });
+  assert.equal(server.address().address, '0.0.0.0');
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  assert.equal(server.listening, false);
 });
