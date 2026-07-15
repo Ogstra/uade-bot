@@ -42,6 +42,18 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS poll_outcome_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  recorded_at INTEGER NOT NULL,
+  outcome_code TEXT NOT NULL,
+  vacancy_count INTEGER,
+  total_cupos INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_poll_outcome_history_job_recorded
+  ON poll_outcome_history (job_id, recorded_at DESC, id DESC);
+
 -- Auto-populated cache of materia codigo -> nombre, filled in as real polls
 -- (any user's, any job's) scrape a name off the live site (poller.js). Not
 -- a full UADE catalog -- just what this bot has actually observed -- so

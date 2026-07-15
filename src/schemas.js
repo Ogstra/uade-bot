@@ -50,6 +50,27 @@ export const SearchOutcomeSchema = z.discriminatedUnion('outcome', [
 ]);
 
 /**
+ * Safe, allowlisted projection of a poll outcome for the dashboard history.
+ * Raw outcome payloads (including search failure reasons and URLs) never
+ * cross this boundary.
+ */
+export const PollOutcomeHistoryRecordSchema = z.object({
+  id: z.number().int().positive(),
+  jobId: z.number().int().positive(),
+  recordedAt: z.number().int(),
+  outcomeCode: z.enum([
+    'found',
+    'no_vacancies',
+    'search_failed',
+    'invalid_credentials',
+    'rate_limited',
+    'stale_start_url',
+  ]),
+  vacancyCount: z.number().int().nonnegative().nullable(),
+  totalCupos: z.number().int().nonnegative().nullable(),
+});
+
+/**
  * A single row of the `users` table (Phase 2, CRED-03/04/05) — one row per
  * Discord user, tracking account-level pause state consumed by Plan 02-03's
  * backoff/scheduler logic. `pauseReason`/`pauseUntil` are both `null` when
