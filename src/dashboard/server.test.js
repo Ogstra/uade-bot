@@ -148,7 +148,7 @@ test('authenticated HTML failures render a fixed safe error page', async (t) => 
   assert.doesNotMatch(body, /SQL|SENTINEL|param=|stack/);
 });
 
-test('server module is side-effect free and app factory emits nonce security headers', async (t) => {
+test('server module is side-effect free and app factory emits browser-compatible nonce security headers', async (t) => {
   const warnings = [];
   const app = createDashboardApp({
     db: {}, client: {},
@@ -170,7 +170,11 @@ test('server module is side-effect free and app factory emits nonce security hea
   assert.equal(response.headers.get('x-powered-by'), null);
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(response.headers.get('x-frame-options'), 'SAMEORIGIN');
-  assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+  // `no-referrer` makes Chromium submit same-origin POST forms with
+  // `Origin: null`, which the CSRF origin check correctly rejects. Keep
+  // referrers same-origin-only so browser form submissions remain verifiable
+  // without disclosing navigation data to other origins.
+  assert.equal(response.headers.get('referrer-policy'), 'same-origin');
   assert.deepEqual(warnings.map((entry) => entry.event).sort(), ['dashboard_default_credentials', 'dashboard_ephemeral_session_secret']);
   assert.doesNotMatch(JSON.stringify(warnings), /admin\/admin|correct horse|s{16,}/i);
 });
