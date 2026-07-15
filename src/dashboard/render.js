@@ -31,6 +31,11 @@ function historyDetail(outcome) {
   return outcome?.label ?? 'Resultado no reconocido';
 }
 
+function materiaDisplay(filters = {}) {
+  const codigo = filters.materiaCodigo ?? 'No disponible';
+  return filters.materiaNombre ? `${codigo} — ${filters.materiaNombre}` : codigo;
+}
+
 function renderHistory(job) {
   if (!Array.isArray(job.history) || job.history.length === 0) {
     return '<p class="empty-history">Todavía no hay cambios de resultado registrados.</p>';
@@ -49,12 +54,13 @@ function renderHistory(job) {
 function renderJob(job) {
   const filters = job.filters ?? {};
   const days = Array.isArray(filters.dias) && filters.dias.length > 0 ? filters.dias.join(', ') : 'No especificados';
+  const materia = materiaDisplay(filters);
   return `<article class="job-panel" data-job-id="${escapeHtml(job.jobId)}">
     <div class="job-heading"><h3>${escapeHtml(job.label ?? filters.materiaCodigo ?? 'Búsqueda')} <span class="metadata">#${escapeHtml(job.jobId)}</span></h3><span data-field="job-status">${badge(job.status)}</span></div>
     <dl class="job-metadata">
       <div><dt>Último poll</dt><dd data-field="last-polled-at">${timestamp(job.lastPolledAt)}</dd></div>
       <div><dt>Último resultado</dt><dd data-field="outcome">${badge(job.outcome)}</dd></div>
-      <div><dt>Materia</dt><dd>${escapeHtml(filters.materiaCodigo ?? 'No disponible')}</dd></div>
+      <div><dt>Materia</dt><dd>${escapeHtml(materia)}</dd></div>
       <div><dt>Turno</dt><dd>${escapeHtml(filters.turno ?? 'No disponible')}</dd></div>
       <div><dt>Ofrecimiento</dt><dd>${escapeHtml(filters.ofrecimiento ?? 'No disponible')}</dd></div>
       <div><dt>Días</dt><dd>${escapeHtml(days)}</dd></div>
@@ -65,8 +71,9 @@ function renderJob(job) {
 }
 
 function renderAccount(account, defaultOpen) {
+  const materias = account.jobs.map((job) => materiaDisplay(job.filters)).join(' · ');
   return `<details class="account" data-account-id="${escapeHtml(account.discordUserId)}"${defaultOpen ? ' open' : ''}>
-    <summary><span class="account-title"><strong>${escapeHtml(account.displayName)}</strong><span class="metadata">${escapeHtml(account.discordUserId)}</span></span><span data-field="account-status">${badge(account.status)}</span><span class="metadata" data-field="job-count">${escapeHtml(account.jobCount)} búsqueda(s)</span><span class="metadata" data-field="account-last-poll">${timestamp(account.lastPolledAt)}</span></summary>
+    <summary><span class="account-title"><strong>${escapeHtml(account.displayName)}</strong><span class="metadata">${escapeHtml(account.discordUserId)}</span><span class="metadata" data-field="account-materias">${escapeHtml(materias)}</span></span><span data-field="account-status">${badge(account.status)}</span><span class="metadata" data-field="job-count">${escapeHtml(account.jobCount)} búsqueda(s)</span><span class="metadata" data-field="account-last-poll">${timestamp(account.lastPolledAt)}</span></summary>
     <div class="jobs">${account.jobs.map(renderJob).join('')}</div>
   </details>`;
 }
@@ -215,7 +222,8 @@ function dashboardClientScript() {
       const title = document.createElement('span'); title.className = 'account-title';
       const strong = document.createElement('strong'); setText(strong, account.displayName);
       const id = document.createElement('span'); id.className = 'metadata'; setText(id, account.discordUserId);
-      title.append(strong, id);
+      const materias = document.createElement('span'); materias.className = 'metadata'; materias.dataset.field = 'account-materias';
+      title.append(strong, id, materias);
       const status = document.createElement('span'); status.dataset.field = 'account-status';
       const count = document.createElement('span'); count.className = 'metadata'; count.dataset.field = 'job-count';
       const poll = document.createElement('span'); poll.className = 'metadata'; poll.dataset.field = 'account-last-poll';
@@ -241,7 +249,8 @@ function dashboardClientScript() {
       setText(node.querySelector('[data-field="last-polled-at"]'), 'Último poll: ' + formatDate(job.lastPolledAt));
       replaceBadge(node.querySelector('[data-field="outcome"]'), job.outcome);
       const filters = job.filters ?? {};
-      setText(node.querySelector('[data-field="filters"]'), ['Materia: ' + (filters.materiaCodigo ?? 'No disponible'), 'Turno: ' + (filters.turno ?? 'No disponible'), 'Ofrecimiento: ' + (filters.ofrecimiento ?? 'No disponible'), 'Días: ' + (filters.dias?.length ? filters.dias.join(', ') : 'No especificados'), 'Sedes excluidas: ' + (filters.sedesExcluidasLabel ?? 'Sin exclusiones')].join(' · '));
+      const materia = filters.materiaNombre ? (filters.materiaCodigo ?? 'No disponible') + ' — ' + filters.materiaNombre : (filters.materiaCodigo ?? 'No disponible');
+      setText(node.querySelector('[data-field="filters"]'), ['Materia: ' + materia, 'Turno: ' + (filters.turno ?? 'No disponible'), 'Ofrecimiento: ' + (filters.ofrecimiento ?? 'No disponible'), 'Días: ' + (filters.dias?.length ? filters.dias.join(', ') : 'No especificados'), 'Sedes excluidas: ' + (filters.sedesExcluidasLabel ?? 'Sin exclusiones')].join(' · '));
       const history = node.querySelector('[data-field="history"]') ?? node.querySelector('.history');
       if (!history) return;
       const focusedHistoryId = document.activeElement?.closest?.('[data-history-id]')?.dataset.historyId;
@@ -267,6 +276,7 @@ function dashboardClientScript() {
         const node = accountNodes.get(id) ?? createAccount(account);
         if (wasOpen !== undefined) node.open = wasOpen;
         setText(node.querySelector('.account-title strong'), account.displayName);
+        setText(node.querySelector('[data-field="account-materias"]'), account.jobs.map((job) => { const filters = job.filters ?? {}; return filters.materiaNombre ? (filters.materiaCodigo ?? 'No disponible') + ' — ' + filters.materiaNombre : (filters.materiaCodigo ?? 'No disponible'); }).join(' · '));
         replaceBadge(node.querySelector('[data-field="account-status"]'), account.status);
         setText(node.querySelector('[data-field="job-count"]'), account.jobCount + ' búsqueda(s)');
         setText(node.querySelector('[data-field="account-last-poll"]'), formatDate(account.lastPolledAt));

@@ -34,6 +34,7 @@ const DEFAULT_REPOSITORIES = Object.freeze({
   listAllJobs,
   listPausedAccounts,
   listHistoryForJob,
+  getMateriaNombre,
 });
 
 function outcomeProjection(code, label, tone, vacancyCount = null, totalCupos = null) {
@@ -158,6 +159,12 @@ function safeFilters(filtros) {
   };
 }
 
+function safeMateriaNombre(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized.slice(0, 160) : null;
+}
+
 function cachedDisplayName(client, discordUserId) {
   const cached = client?.users?.cache?.get?.(discordUserId);
   const value = cached?.displayName ?? cached?.globalName ?? cached?.username;
@@ -234,13 +241,17 @@ export function buildDashboardSnapshot({
     if (Number.isInteger(job.lastPolledAt) && (account.lastPolledAt == null || job.lastPolledAt > account.lastPolledAt)) {
       account.lastPolledAt = job.lastPolledAt;
     }
+    const filters = safeFilters(job.filtros);
+    const materiaNombre = safeMateriaNombre(
+      repositories.getMateriaNombre?.(db, filters.materiaCodigo),
+    );
     account.jobs.push({
       jobId: job.id,
       label: job.label,
       status: jobStatus(job.status, pause?.pauseReason),
       lastPolledAt: Number.isInteger(job.lastPolledAt) ? job.lastPolledAt : null,
       outcome: currentOutcome,
-      filters: safeFilters(job.filtros),
+      filters: { ...filters, materiaNombre },
       history,
     });
   }
@@ -286,5 +297,6 @@ export function buildDashboardSnapshot({
   };
 }
 import { listAllJobs } from '../db/jobs.repository.js';
+import { getMateriaNombre } from '../db/materias.repository.js';
 import { listHistoryForJob } from '../db/poll-history.repository.js';
 import { listPausedAccounts } from '../db/users.repository.js';

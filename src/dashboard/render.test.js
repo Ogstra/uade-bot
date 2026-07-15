@@ -23,7 +23,7 @@ const snapshot = {
       status: { code: 'active', label: 'Activa', tone: 'healthy' },
       lastPolledAt: 1_749_999_995_000,
       outcome: { code: 'found', label: 'Vacantes encontradas', tone: 'healthy', vacancyCount: 1, totalCupos: 2 },
-      filters: { materiaCodigo: '1234', turno: 'Noche', ofrecimiento: 'Curricular', dias: ['Lunes'], sedesExcluidasLabel: 'Sin exclusiones' },
+      filters: { materiaCodigo: '1234', materiaNombre: 'Álgebra Lineal', turno: 'Noche', ofrecimiento: 'Curricular', dias: ['Lunes'], sedesExcluidasLabel: 'Sin exclusiones' },
       history: [{ id: 11, recordedAt: 1_749_999_995_000, outcome: { code: 'found', label: 'Vacantes encontradas', tone: 'healthy', vacancyCount: 1, totalCupos: 2 } }],
     }],
   }],
@@ -59,6 +59,8 @@ test('dashboard SSR renders semantic, keyed, escaped operational content and exa
   assert.match(html, /data-job-id="7"/);
   assert.match(html, /data-field="job-status"/);
   assert.match(html, /data-field="history"/);
+  assert.match(html, /1234 — Álgebra Lineal/);
+  assert.match(html, /data-field="account-materias">1234 — Álgebra Lineal/);
   assert.match(html, /<caption>Historial de cambios<\/caption>/);
   assert.match(html, /<th scope="col">Fecha<\/th>/);
   assert.match(html, /Operador &lt;script&gt;alert\(1\)&lt;\/script&gt;/);

@@ -114,6 +114,10 @@ test('buildDashboardSnapshot groups jobs by account and derives health from safe
   const repositories = {
     listAllJobs: () => jobs,
     listPausedAccounts: () => [{ discordUserId: 'user-a', pauseReason: 'needs_credentials', pauseUntil: null }],
+    getMateriaNombre: (_db, codigo) => ({
+      '1.1.010': 'Análisis Matemático',
+      '1.1.020': 'Álgebra Lineal',
+    })[codigo] ?? null,
     listHistoryForJob: (_db, jobId, options) => {
       assert.deepEqual(options, { limit: 10 });
       return histories.get(jobId) ?? [];
@@ -139,6 +143,7 @@ test('buildDashboardSnapshot groups jobs by account and derives health from safe
   assert.equal(snapshot.accounts[0].jobs[0].status.label, 'Pausada: requiere credenciales');
   assert.deepEqual(snapshot.accounts[0].jobs[0].filters, {
     materiaCodigo: '1.1.010',
+    materiaNombre: 'Análisis Matemático',
     ofrecimiento: 'Optativa',
     turno: 'Mañana',
     dias: ['MA', 'JU'],
@@ -146,6 +151,7 @@ test('buildDashboardSnapshot groups jobs by account and derives health from safe
     sedesExcluidasLabel: 'Costa Argentina',
   });
   assert.equal(snapshot.accounts[1].jobs[0].filters.sedesExcluidasLabel, 'Sin exclusiones');
+  assert.equal(snapshot.accounts[1].jobs[0].filters.materiaNombre, 'Álgebra Lineal');
   assert.deepEqual(snapshot.accounts[1].jobs[0].history.map((item) => item.id), [3, 2]);
   assert.equal(snapshot.accounts[1].jobs[0].history[1].outcome.label, 'Vacantes encontradas');
   assert.equal(fetchCalls, 0);
