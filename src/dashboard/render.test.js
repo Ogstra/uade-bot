@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { escapeHtml, renderDashboardPage, renderLoginPage, renderSafeError } from './render.js';
+import { createRefreshController, escapeHtml, renderDashboardPage, renderLoginPage, renderSafeError } from './render.js';
 
 const snapshot = {
   generatedAt: 1_750_000_000_000,
@@ -82,4 +82,82 @@ test('dashboard SSR has the canonical empty state and a fixed safe error page', 
   const error = renderSafeError({ cspNonce: 'safe', status: 500 });
   assert.match(error, /No pudimos mostrar el dashboard/);
   assert.doesNotMatch(error, /stack|Error:|SQL|param=/i);
+});
+
+function refreshHarness() {
+  const timers = [];
+  const events = [];
+  let now = 1_000;
+  let resolveFetch;
+  let fetchCount = 0;
+  const controller = createRefreshController({
+    fetchSnapshot: () => {
+      fetchCount += 1;
+      return new Promise((resolve) => { resolveFetch = resolve; });
+    },
+    schedule: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
+    cancel: () => {},
+    now: () => now,
+    onBusy: (busy) => events.push(['busy', busy]),
+    onSuccess: (value) => events.push(['success', value]),
+    onFailure: () => events.push(['failure']),
+    onUnauthorized: () => events.push(['unauthorized']),
+  });
+  return {
+    controller, timers, events,
+    get fetchCount() { return fetchCount; },
+    setNow(value) { now = value; },
+    resolve(value) { resolveFetch(value); },
+  };
+}
+
+test('refresh schedules 10 seconds from completion and never overlaps', async () => {
+  const harness = refreshHarness();
+  harness.controller.start();
+  assert.equal(harness.timers.shift().delay, 10_000);
+  const first = harness.controller.refresh();
+  assert.equal(harness.fetchCount, 1);
+  assert.equal(harness.controller.refresh(), first);
+  assert.equal(harness.fetchCount, 1);
+  harness.resolve({ ok: true, status: 200, snapshot: { generatedAt: 2_000 } });
+  await first;
+  assert.equal(harness.timers.at(-1).delay, 10_000);
+  assert.deepEqual(harness.events.slice(-2), [['success', { generatedAt: 2_000 }], ['busy', false]]);
+});
+
+test('refresh retries after failures, visibility recovery waits over 10s, and 401 is terminal', async () => {
+  const harness = refreshHarness();
+  harness.controller.start();
+  const failed = harness.controller.refresh();
+  harness.resolve({ ok: false, status: 503 });
+  await failed;
+  assert.ok(harness.events.some(([event]) => event === 'failure'));
+  assert.equal(harness.timers.at(-1).delay, 10_000);
+
+  harness.controller.hidden();
+  harness.setNow(10_999);
+  assert.equal(harness.controller.visible(), null);
+  harness.setNow(11_001);
+  const recovery = harness.controller.visible();
+  assert.equal(harness.fetchCount, 2);
+  harness.resolve({ ok: false, status: 401 });
+  await recovery;
+  assert.ok(harness.events.some(([event]) => event === 'unauthorized'));
+  assert.equal(harness.controller.stopped, true);
+  assert.equal(harness.controller.retry(), null);
+});
+
+test('browser script patches stable keys without replacing the dashboard root or using storage/cookies', () => {
+  const html = renderDashboardPage({ snapshot, csrfToken: 'csrf', cspNonce: 'nonce' });
+  const script = html.match(/<script nonce="nonce">([\s\S]*?)<\/script>/)?.[1] ?? '';
+
+  assert.match(script, /fetch\('\/api\/dashboard'/);
+  assert.match(script, /credentials: 'same-origin'/);
+  assert.match(script, /cache: 'no-store'/);
+  assert.match(script, /data-account-id/);
+  assert.match(script, /data-job-id/);
+  assert.match(script, /textContent/);
+  assert.match(script, /visibilitychange/);
+  assert.match(script, /Tu sesión venció\. Iniciá sesión de nuevo\./);
+  assert.doesNotMatch(script, /localStorage|sessionStorage|document\.cookie|\.innerHTML\s*=/);
 });
