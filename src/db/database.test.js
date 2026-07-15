@@ -24,6 +24,27 @@ test('createDatabase is idempotent against the same on-disk path', () => {
   }
 });
 
+test('createDatabase creates the safe poll outcome history table and index idempotently', () => {
+  const db = createDatabase(':memory:');
+  try {
+    const columns = db.prepare("PRAGMA table_info('poll_outcome_history')").all().map((column) => column.name);
+    assert.deepEqual(columns, [
+      'id',
+      'job_id',
+      'recorded_at',
+      'outcome_code',
+      'vacancy_count',
+      'total_cupos',
+    ]);
+
+    const indexes = db.prepare("PRAGMA index_list('poll_outcome_history')").all();
+    assert.equal(indexes.some((index) => index.name === 'idx_poll_outcome_history_job_recorded'), true);
+    assert.doesNotThrow(() => createDatabase(':memory:').close());
+  } finally {
+    db.close();
+  }
+});
+
 test('createJob + getJob round-trips filtros through JSON storage', () => {
   const db = createDatabase(':memory:');
   try {
