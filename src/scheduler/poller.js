@@ -1,4 +1,5 @@
-import { getJob, updateJobPollResult } from '../db/jobs.repository.js';
+import { getJob } from '../db/jobs.repository.js';
+import { persistPollResult } from '../db/poll-history.repository.js';
 import { getCredentials } from '../db/credentials.repository.js';
 import { getUser, updateAccountPauseState } from '../db/users.repository.js';
 import { upsertMateriaNombre } from '../db/materias.repository.js';
@@ -140,7 +141,7 @@ export async function attemptAutoRelink(
  * successful relink overrides only the LOCAL backoff signal fed into
  * `nextBackoffState` (so this account comes out of this call unpaused with
  * no DM); it never mutates `outcome` itself, which is persisted via
- * `updateJobPollResult` BEFORE the relink attempt runs, exactly as it was
+ * `persistPollResult` BEFORE the relink attempt runs, exactly as it was
  * before this phase.
  *
  * CRED-04/CRED-05 discipline: `decryptCredentials`'s output is destructured
@@ -207,7 +208,8 @@ export async function pollOnce(
     return { outcome: result.status };
   });
 
-  updateJobPollResult(db, jobId, { lastPolledAt: Date.now(), lastOutcome: JSON.stringify(outcome) });
+  const recordedAt = Date.now();
+  persistPollResult(db, { jobId, recordedAt, outcome });
 
   if (outcome.materiaNombre) {
     upsertMateriaNombre(db, job.filtros.materiaCodigo, outcome.materiaNombre);
