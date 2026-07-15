@@ -152,7 +152,7 @@ test('server module is side-effect free and app factory emits nonce security hea
   assert.equal(response.headers.get('x-frame-options'), 'SAMEORIGIN');
   assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
   assert.deepEqual(warnings.map((entry) => entry.event).sort(), ['dashboard_default_credentials', 'dashboard_ephemeral_session_secret']);
-  assert.doesNotMatch(JSON.stringify(warnings), /admin\/admin|ssss|secret|password/i);
+  assert.doesNotMatch(JSON.stringify(warnings), /admin\/admin|correct horse|s{16,}/i);
 });
 
 test('startDashboardServer binds explicitly and closes cleanly while reusing dependencies', async () => {

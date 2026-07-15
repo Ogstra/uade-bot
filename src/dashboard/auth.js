@@ -86,7 +86,7 @@ export function createSessionRegistry({
 
 function isSameOriginRequest(req) {
   const fetchSite = req.get?.('sec-fetch-site');
-  if (fetchSite && !['same-origin', 'same-site', 'none'].includes(fetchSite)) return false;
+  if (fetchSite && !['same-origin', 'none'].includes(fetchSite)) return false;
   const origin = req.get?.('origin');
   if (!origin) return true;
   try {
@@ -162,6 +162,10 @@ export function createDashboardAuth({
     });
   }
 
+  function recordLoginFailure() {
+    logger.info({ event: 'dashboard_login_failed' }, 'Dashboard login failed');
+  }
+
   function revoke(req) {
     registry.revoke(req.session?.sid);
     req.session = null;
@@ -175,6 +179,7 @@ export function createDashboardAuth({
     issueLoginChallenge,
     establishSession,
     verifyCredentials,
+    recordLoginFailure,
     requireDashboardSession,
     requireMutationCsrf,
     revoke,
