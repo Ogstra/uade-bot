@@ -172,8 +172,8 @@ test('buildDashboardSnapshot returns a stable empty state and safe unknown pause
     health: {
       activeAccounts: 0,
       pausedAccounts: {
-        total: 0,
-        breakdown: [],
+        total: 1,
+        breakdown: [{ code: 'unknown', label: 'Revisar el estado', count: 1 }],
       },
       jobs: { total: 0, active: 0, manuallyPaused: 0 },
       lastSuccessfulPollAt: null,
