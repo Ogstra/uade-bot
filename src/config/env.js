@@ -53,6 +53,24 @@ const EnvSchema = z.object({
     .optional()
     .default('false')
     .transform((value) => value === 'true'),
+  // The operator dashboard is opt-in (D-07). Keeping every field defaulted
+  // or optional means adding this contract cannot break the existing bot
+  // startup when the HTTP server is disabled.
+  DASHBOARD_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .default('false')
+    .transform((value) => value === 'true'),
+  DASHBOARD_PORT: z.coerce.number().int().positive().default(3000),
+  // D-01 deliberately permits admin/admin as the documented development
+  // default. The dashboard server owns the value-free warning required by
+  // D-03; configuration validation must never block on these defaults.
+  DASHBOARD_USERNAME: z.string().min(1, 'DASHBOARD_USERNAME').default('admin'),
+  DASHBOARD_PASSWORD: z.string().min(1, 'DASHBOARD_PASSWORD').default('admin'),
+  // When omitted, the future dashboard server generates an ephemeral secret
+  // once at process start. Supplying one makes sessions survive restarts and
+  // requires at least 32 characters.
+  DASHBOARD_SESSION_SECRET: z.string().min(32, 'DASHBOARD_SESSION_SECRET').optional(),
 });
 
 /**
@@ -63,7 +81,7 @@ const EnvSchema = z.object({
  * variable name(s) — never the attempted value, to avoid leaking a partial
  * credential into a stack trace or console output.
  *
- * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string | undefined, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string, DISCORD_BOT_TOKEN: string, DISCORD_CLIENT_ID: string, DISCORD_GUILD_ID: string, DISCORD_GUILD_IDS: string[], POLL_INTERVAL_MS: number, SCHEDULER_CONCURRENCY: number, DISCORD_EPHEMERAL_REPLIES: boolean }}
+ * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string | undefined, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string, DISCORD_BOT_TOKEN: string, DISCORD_CLIENT_ID: string, DISCORD_GUILD_ID: string, DISCORD_GUILD_IDS: string[], POLL_INTERVAL_MS: number, SCHEDULER_CONCURRENCY: number, DISCORD_EPHEMERAL_REPLIES: boolean, DASHBOARD_ENABLED: boolean, DASHBOARD_PORT: number, DASHBOARD_USERNAME: string, DASHBOARD_PASSWORD: string, DASHBOARD_SESSION_SECRET: string | undefined }}
  */
 export function loadEnv({ loadDotenvFile = true } = {}) {
   if (loadDotenvFile) {

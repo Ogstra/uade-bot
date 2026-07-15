@@ -172,7 +172,9 @@ for (const [variable, rejectedValue] of [
       () => loadEnv({ loadDotenvFile: false }),
       (err) => {
         assert.match(err.message, new RegExp(variable));
-        assert.doesNotMatch(err.message, new RegExp(rejectedValue));
+        if (rejectedValue) {
+          assert.doesNotMatch(err.message, new RegExp(rejectedValue));
+        }
         return true;
       },
     );
