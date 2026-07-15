@@ -21,6 +21,11 @@ beforeEach(() => {
   delete process.env.DISCORD_CLIENT_ID;
   delete process.env.DISCORD_GUILD_ID;
   delete process.env.DISCORD_EPHEMERAL_REPLIES;
+  delete process.env.DASHBOARD_ENABLED;
+  delete process.env.DASHBOARD_PORT;
+  delete process.env.DASHBOARD_USERNAME;
+  delete process.env.DASHBOARD_PASSWORD;
+  delete process.env.DASHBOARD_SESSION_SECRET;
 });
 
 afterEach(() => {
@@ -112,3 +117,64 @@ test('loadEnv() rejects a non-"true"/"false" DISCORD_EPHEMERAL_REPLIES value', (
     },
   );
 });
+
+function setDiscordEnv() {
+  process.env.DISCORD_BOT_TOKEN = 'discord-token';
+  process.env.DISCORD_CLIENT_ID = 'discord-client-id';
+  process.env.DISCORD_GUILD_ID = 'discord-guild-id';
+}
+
+test('loadEnv() keeps the dashboard disabled with safe typed defaults when DASHBOARD_* is unset', () => {
+  setBaseEnv();
+  setDiscordEnv();
+
+  const env = loadEnv({ loadDotenvFile: false });
+
+  assert.equal(env.DASHBOARD_ENABLED, false);
+  assert.equal(env.DASHBOARD_PORT, 3000);
+  assert.equal(env.DASHBOARD_USERNAME, 'admin');
+  assert.equal(env.DASHBOARD_PASSWORD, 'admin');
+  assert.equal(env.DASHBOARD_SESSION_SECRET, undefined);
+});
+
+test('loadEnv() coerces valid dashboard overrides to typed values', () => {
+  setBaseEnv();
+  setDiscordEnv();
+  process.env.DASHBOARD_ENABLED = 'true';
+  process.env.DASHBOARD_PORT = '4310';
+  process.env.DASHBOARD_USERNAME = 'operator';
+  process.env.DASHBOARD_PASSWORD = 'dashboard-password';
+  process.env.DASHBOARD_SESSION_SECRET = 's'.repeat(32);
+
+  const env = loadEnv({ loadDotenvFile: false });
+
+  assert.equal(env.DASHBOARD_ENABLED, true);
+  assert.equal(env.DASHBOARD_PORT, 4310);
+  assert.equal(env.DASHBOARD_USERNAME, 'operator');
+  assert.equal(env.DASHBOARD_PASSWORD, 'dashboard-password');
+  assert.equal(env.DASHBOARD_SESSION_SECRET, 's'.repeat(32));
+});
+
+for (const [variable, rejectedValue] of [
+  ['DASHBOARD_ENABLED', 'yes'],
+  ['DASHBOARD_PORT', '0'],
+  ['DASHBOARD_PORT', 'not-a-port'],
+  ['DASHBOARD_USERNAME', ''],
+  ['DASHBOARD_PASSWORD', ''],
+  ['DASHBOARD_SESSION_SECRET', 'secret-too-short'],
+]) {
+  test(`loadEnv() rejects invalid ${variable} without echoing its value`, () => {
+    setBaseEnv();
+    setDiscordEnv();
+    process.env[variable] = rejectedValue;
+
+    assert.throws(
+      () => loadEnv({ loadDotenvFile: false }),
+      (err) => {
+        assert.match(err.message, new RegExp(variable));
+        assert.doesNotMatch(err.message, new RegExp(rejectedValue));
+        return true;
+      },
+    );
+  });
+}
