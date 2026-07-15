@@ -6,6 +6,7 @@ import express from 'express';
 import { createDashboardAuth } from './auth.js';
 import { registerDashboardRoutes } from './routes.js';
 import { createDashboardApp, startDashboardServer } from './server.js';
+import { getDashboardServer, startOptionalDashboard } from '../bot.js';
 
 const env = {
   DASHBOARD_USERNAME: 'operator',
@@ -171,4 +172,31 @@ test('startDashboardServer binds explicitly and closes cleanly while reusing dep
   assert.equal(server.address().address, '0.0.0.0');
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   assert.equal(server.listening, false);
+});
+
+test('bot dashboard lifecycle is opt-in, non-blocking and reuses exact process dependencies', async () => {
+  const db = { identity: 'same-db' };
+  const client = { identity: 'same-client' };
+  const logger = { info() {}, warn() {}, error() {} };
+  const disabledEnv = { DASHBOARD_ENABLED: false, DASHBOARD_PORT: 3000 };
+  let starts = 0;
+  assert.equal(startOptionalDashboard({ db, client, env: disabledEnv, logger, startServer: () => { starts += 1; } }), null);
+  assert.equal(starts, 0);
+
+  let finish;
+  const enabledEnv = { DASHBOARD_ENABLED: true, DASHBOARD_PORT: 4310 };
+  const pending = startOptionalDashboard({
+    db, client, env: enabledEnv, logger,
+    startServer: (received) => {
+      starts += 1;
+      assert.deepEqual(received, { db, client, env: enabledEnv, logger });
+      return new Promise((resolve) => { finish = resolve; });
+    },
+  });
+  assert.equal(starts, 1);
+  assert.equal(getDashboardServer(), null);
+  const server = { close() {} };
+  finish(server);
+  assert.equal(await pending, server);
+  assert.equal(getDashboardServer(), server);
 });

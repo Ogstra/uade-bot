@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, test } from 'node:test';
 import { loadEnv } from './env.js';
 
@@ -180,3 +181,16 @@ for (const [variable, rejectedValue] of [
     );
   });
 }
+
+test('README documents safe local dashboard operation and the Phase 4 TLS boundary', () => {
+  const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+  assert.match(readme, /DASHBOARD_ENABLED=true/);
+  assert.match(readme, /DASHBOARD_PORT/);
+  assert.match(readme, /DASHBOARD_USERNAME/);
+  assert.match(readme, /DASHBOARD_PASSWORD/);
+  assert.match(readme, /DASHBOARD_SESSION_SECRET/);
+  assert.match(readme, /admin.*admin.*solo.*desarrollo/is);
+  assert.match(readme, /TLS|HTTPS/);
+  assert.match(readme, /proxy inverso/i);
+  assert.doesNotMatch(readme, /param=|UADE_PASSWORD=\S+|DASHBOARD_PASSWORD=(?!admin\b)\S+/);
+});
