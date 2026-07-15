@@ -94,6 +94,209 @@ function sharedStyles() {
   `;
 }
 
+export function createRefreshController({
+  fetchSnapshot,
+  schedule,
+  cancel,
+  now,
+  onBusy,
+  onSuccess,
+  onFailure,
+  onUnauthorized,
+}) {
+  let timer = null;
+  let inFlight = null;
+  let hiddenAt = null;
+  let stopped = false;
+
+  function clearTimer() {
+    if (timer != null) cancel(timer);
+    timer = null;
+  }
+
+  function scheduleNext() {
+    clearTimer();
+    if (!stopped) timer = schedule(refresh, 10_000);
+  }
+
+  function refresh() {
+    if (stopped) return null;
+    if (inFlight) return inFlight;
+    clearTimer();
+    onBusy(true);
+    let request;
+    try {
+      request = fetchSnapshot();
+    } catch (error) {
+      request = Promise.reject(error);
+    }
+    inFlight = Promise.resolve(request)
+      .then((result) => {
+        if (result.status === 401) {
+          stopped = true;
+          onUnauthorized();
+          return;
+        }
+        if (!result.ok) {
+          onFailure();
+          return;
+        }
+        onSuccess(result.snapshot);
+      })
+      .catch(onFailure)
+      .finally(() => {
+        onBusy(false);
+        inFlight = null;
+        if (!stopped) scheduleNext();
+      });
+    return inFlight;
+  }
+
+  return {
+    start() { scheduleNext(); },
+    refresh,
+    retry: refresh,
+    hidden() { hiddenAt = now(); },
+    visible() {
+      if (hiddenAt == null || now() - hiddenAt <= 10_000) return null;
+      hiddenAt = null;
+      return refresh();
+    },
+    stop() { stopped = true; clearTimer(); },
+    get stopped() { return stopped; },
+  };
+}
+
+function dashboardClientScript() {
+  return `(() => {
+    const createRefreshController = ${createRefreshController.toString()};
+    const root = document.getElementById('dashboard-data');
+    const accountsList = document.getElementById('accounts-list');
+    const errorBanner = document.getElementById('refresh-error');
+    const retryButton = document.getElementById('refresh-retry');
+    const liveStatus = document.getElementById('refresh-status');
+    const freshness = document.getElementById('freshness');
+    let lastSuccessAt = Number(freshness.dataset.generatedAt) || Date.now();
+
+    const setText = (node, value) => { if (node) node.textContent = String(value ?? ''); };
+    const safeTone = (value) => ['healthy', 'warning', 'failure', 'neutral'].includes(value) ? value : 'warning';
+    const formatDate = (value, empty = 'Sin sondeos todavía') => Number.isInteger(value)
+      ? new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
+      : empty;
+    const badge = (status) => {
+      const node = document.createElement('span');
+      node.className = 'badge badge--' + safeTone(status?.tone);
+      const dot = document.createElement('span');
+      dot.className = 'badge__dot'; dot.setAttribute('aria-hidden', 'true');
+      node.append(dot, document.createTextNode(status?.label ?? 'Revisar el estado'));
+      return node;
+    };
+    const replaceBadge = (container, status) => { if (container) container.replaceChildren(badge(status)); };
+    const keyed = (selector, key) => new Map([...document.querySelectorAll(selector)].map((node) => [node.dataset[key], node]));
+
+    function patchHealth(health = {}) {
+      const paused = health.pausedAccounts ?? { total: 0, breakdown: [] };
+      const jobs = health.jobs ?? { total: 0, active: 0, manuallyPaused: 0 };
+      const activeCard = document.querySelector('[data-health="active"]');
+      const pausedCard = document.querySelector('[data-health="paused"]');
+      const jobsCard = document.querySelector('[data-health="jobs"]');
+      const pollCard = document.querySelector('[data-health="last-poll"]');
+      setText(activeCard?.querySelector('[data-value]'), health.activeAccounts ?? 0);
+      setText(pausedCard?.querySelector('[data-value]'), paused.total ?? 0);
+      setText(pausedCard?.querySelector('[data-meta]'), paused.breakdown?.length ? paused.breakdown.map((item) => item.label + ': ' + item.count).join(' · ') : 'Sin cuentas pausadas');
+      setText(jobsCard?.querySelector('[data-value]'), jobs.total ?? 0);
+      setText(jobsCard?.querySelector('[data-meta]'), (jobs.active ?? 0) + ' activas · ' + (jobs.manuallyPaused ?? 0) + ' pausadas');
+      setText(pollCard?.querySelector('[data-value]'), formatDate(health.lastSuccessfulPollAt, 'Sin polls exitosos'));
+    }
+
+    function createAccount(account) {
+      const details = document.createElement('details'); details.className = 'account'; details.dataset.accountId = account.discordUserId;
+      const summary = document.createElement('summary');
+      const title = document.createElement('span'); title.className = 'account-title';
+      const strong = document.createElement('strong'); setText(strong, account.displayName);
+      const id = document.createElement('span'); id.className = 'metadata'; setText(id, account.discordUserId);
+      title.append(strong, id);
+      const status = document.createElement('span'); status.dataset.field = 'account-status';
+      const count = document.createElement('span'); count.className = 'metadata'; count.dataset.field = 'job-count';
+      const poll = document.createElement('span'); poll.className = 'metadata'; poll.dataset.field = 'account-last-poll';
+      summary.append(title, status, count, poll);
+      const jobs = document.createElement('div'); jobs.className = 'jobs';
+      details.append(summary, jobs); accountsList.append(details); return details;
+    }
+
+    function createJob(job, container) {
+      const article = document.createElement('article'); article.className = 'job-panel'; article.dataset.jobId = job.jobId;
+      const heading = document.createElement('div'); heading.className = 'job-heading';
+      const title = document.createElement('h3'); setText(title, (job.label ?? job.filters?.materiaCodigo ?? 'Búsqueda') + ' #' + job.jobId);
+      const status = document.createElement('span'); status.dataset.field = 'job-status'; heading.append(title, status);
+      const lastPoll = document.createElement('p'); lastPoll.dataset.field = 'last-polled-at';
+      const outcome = document.createElement('p'); outcome.dataset.field = 'outcome';
+      const filters = document.createElement('p'); filters.className = 'metadata'; filters.dataset.field = 'filters';
+      const history = document.createElement('div'); history.dataset.field = 'history';
+      article.append(heading, lastPoll, outcome, filters, history); container.append(article); return article;
+    }
+
+    function patchJob(node, job) {
+      replaceBadge(node.querySelector('[data-field="job-status"]'), job.status);
+      setText(node.querySelector('[data-field="last-polled-at"]'), 'Último poll: ' + formatDate(job.lastPolledAt));
+      replaceBadge(node.querySelector('[data-field="outcome"]'), job.outcome);
+      const filters = job.filters ?? {};
+      setText(node.querySelector('[data-field="filters"]'), ['Materia: ' + (filters.materiaCodigo ?? 'No disponible'), 'Turno: ' + (filters.turno ?? 'No disponible'), 'Ofrecimiento: ' + (filters.ofrecimiento ?? 'No disponible'), 'Días: ' + (filters.dias?.length ? filters.dias.join(', ') : 'No especificados'), 'Sedes excluidas: ' + (filters.sedesExcluidasLabel ?? 'Sin exclusiones')].join(' · '));
+      const history = node.querySelector('[data-field="history"]') ?? node.querySelector('.history');
+      if (!history) return;
+      const focusedHistoryId = document.activeElement?.closest?.('[data-history-id]')?.dataset.historyId;
+      const fragment = document.createDocumentFragment();
+      if (!job.history?.length) {
+        const empty = document.createElement('p'); setText(empty, 'Todavía no hay cambios de resultado registrados.'); fragment.append(empty);
+      } else {
+        const table = document.createElement('table'); const caption = document.createElement('caption'); setText(caption, 'Historial de cambios');
+        const body = document.createElement('tbody');
+        for (const item of job.history) { const row = document.createElement('tr'); row.dataset.historyId = item.id; for (const value of [formatDate(item.recordedAt), item.outcome?.label ?? 'Resultado no reconocido', item.outcome?.code === 'found' ? (item.outcome.vacancyCount ?? 0) + ' comisión(es), ' + (item.outcome.totalCupos ?? 0) + ' cupo(s)' : item.outcome?.label ?? 'Resultado no reconocido']) { const cell = document.createElement('td'); setText(cell, value); row.append(cell); } body.append(row); }
+        table.append(caption, body); fragment.append(table);
+      }
+      history.replaceChildren(fragment);
+      if (focusedHistoryId) history.querySelector('[data-history-id="' + CSS.escape(focusedHistoryId) + '"]')?.focus({ preventScroll: true });
+    }
+
+    function patchAccounts(accounts = []) {
+      const accountNodes = keyed('[data-account-id]', 'accountId');
+      const incomingAccounts = new Set(accounts.map((account) => String(account.discordUserId)));
+      for (const [id, node] of accountNodes) if (!incomingAccounts.has(id)) node.remove();
+      for (const account of accounts) {
+        const id = String(account.discordUserId); const wasOpen = accountNodes.get(id)?.open;
+        const node = accountNodes.get(id) ?? createAccount(account);
+        if (wasOpen !== undefined) node.open = wasOpen;
+        setText(node.querySelector('.account-title strong'), account.displayName);
+        replaceBadge(node.querySelector('[data-field="account-status"]'), account.status);
+        setText(node.querySelector('[data-field="job-count"]'), account.jobCount + ' búsqueda(s)');
+        setText(node.querySelector('[data-field="account-last-poll"]'), formatDate(account.lastPolledAt));
+        const container = node.querySelector('.jobs'); const jobNodes = new Map([...container.querySelectorAll('[data-job-id]')].map((item) => [item.dataset.jobId, item]));
+        const incomingJobs = new Set(account.jobs.map((job) => String(job.jobId)));
+        for (const [jobId, jobNode] of jobNodes) if (!incomingJobs.has(jobId)) jobNode.remove();
+        for (const job of account.jobs) patchJob(jobNodes.get(String(job.jobId)) ?? createJob(job, container), job);
+      }
+    }
+
+    function updateFreshness() {
+      const age = Math.max(0, Date.now() - lastSuccessAt); const seconds = Math.floor(age / 1000);
+      freshness.dataset.state = age >= 60_000 ? 'stale' : age >= 20_000 ? 'delayed' : 'fresh';
+      setText(freshness, age >= 60_000 ? 'Datos desactualizados · actualizado hace ' + seconds + ' segundos' : age >= 20_000 ? 'Datos demorados · actualizado hace ' + seconds + ' segundos' : 'Actualizado hace ' + seconds + ' segundos');
+    }
+
+    const controller = createRefreshController({
+      fetchSnapshot: async () => { const response = await fetch('/api/dashboard', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } }); return { ok: response.ok, status: response.status, snapshot: response.ok ? await response.json() : null }; },
+      schedule: window.setTimeout.bind(window), cancel: window.clearTimeout.bind(window), now: Date.now,
+      onBusy: (busy) => { root.setAttribute('aria-busy', String(busy)); if (busy) setText(liveStatus, 'Actualizando…'); },
+      onSuccess: (next) => { const scrollX = window.scrollX; const scrollY = window.scrollY; patchHealth(next.health); patchAccounts(next.accounts); lastSuccessAt = Number(next.generatedAt) || Date.now(); errorBanner.hidden = true; setText(liveStatus, 'Datos actualizados.'); updateFreshness(); window.scrollTo(scrollX, scrollY); },
+      onFailure: () => { errorBanner.hidden = false; setText(liveStatus, 'No se pudieron actualizar los datos.'); },
+      onUnauthorized: () => { accountsList.replaceChildren(); setText(liveStatus, 'Tu sesión venció. Iniciá sesión de nuevo.'); window.location.assign('/login'); },
+    });
+    retryButton.addEventListener('click', () => controller.retry());
+    document.addEventListener('visibilitychange', () => { if (document.hidden) controller.hidden(); else controller.visible(); });
+    window.setInterval(updateFreshness, 1_000); updateFreshness(); controller.start();
+  })();`;
+}
+
 export function renderLoginPage({ csrfToken, error = null, cspNonce }) {
   const describedBy = error ? 'login-help login-error' : 'login-help';
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Dashboard de UADE Bot</title><style nonce="${escapeHtml(cspNonce)}">${sharedStyles()}
@@ -140,7 +343,7 @@ export function renderDashboardPage({ snapshot, csrfToken, cspNonce }) {
     .history { display: grid; gap: var(--space-md); } .table-scroll { overflow-x: auto; } table { border-collapse: collapse; min-width: 600px; width: 100%; } caption { text-align: left; padding-bottom: var(--space-sm); } th, td { border-bottom: 1px solid var(--color-border); padding: var(--space-sm); text-align: left; vertical-align: top; } time { font-variant-numeric: tabular-nums; }
     @media (min-width: 640px) { .page { padding-left: var(--space-lg); padding-right: var(--space-lg); } .page-header { align-items: center; flex-direction: row; justify-content: space-between; } .health-grid { grid-template-columns: repeat(2, 1fr); } .job-metadata { grid-template-columns: repeat(2, 1fr); } }
     @media (min-width: 1024px) { .health-grid { grid-template-columns: repeat(4, 1fr); } .job-metadata { grid-template-columns: repeat(4, 1fr); } }
-  </style></head><body><div class="page"><header class="page-header"><div><p class="metadata">UADE Bot</p><h1>Estado del sistema</h1></div><div class="header-actions"><span id="freshness" class="freshness" data-generated-at="${escapeHtml(snapshot.generatedAt)}">Actualizado hace 0 segundos</span><form method="post" action="/logout"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}"><button class="link-button" type="submit">Cerrar sesión</button></form></div></header><div id="refresh-error" class="refresh-error" role="status" hidden><span>No se pudieron actualizar los datos. Se conserva la última información disponible.</span><button id="refresh-retry" class="link-button" type="button">Reintentar ahora</button></div><main id="dashboard-data" aria-busy="false"><div class="refresh-progress" aria-hidden="true"></div><section class="health-section" aria-labelledby="health-title"><h2 id="health-title">Resumen de salud</h2><div class="health-grid">${healthCards(snapshot)}</div></section><section id="accounts-section" class="accounts-section" aria-labelledby="accounts-title"><h2 id="accounts-title">Cuentas y búsquedas</h2><div id="accounts-list">${content}</div></section></main><p id="refresh-status" class="visually-hidden" aria-live="polite"></p></div><script nonce="${escapeHtml(cspNonce)}">document.documentElement.classList.add('js');</script></body></html>`;
+  </style></head><body><div class="page"><header class="page-header"><div><p class="metadata">UADE Bot</p><h1>Estado del sistema</h1></div><div class="header-actions"><span id="freshness" class="freshness" data-generated-at="${escapeHtml(snapshot.generatedAt)}">Actualizado hace 0 segundos</span><form method="post" action="/logout"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}"><button class="link-button" type="submit">Cerrar sesión</button></form></div></header><div id="refresh-error" class="refresh-error" role="status" hidden><span>No se pudieron actualizar los datos. Se conserva la última información disponible.</span><button id="refresh-retry" class="link-button" type="button">Reintentar ahora</button></div><main id="dashboard-data" aria-busy="false"><div class="refresh-progress" aria-hidden="true"></div><section class="health-section" aria-labelledby="health-title"><h2 id="health-title">Resumen de salud</h2><div class="health-grid">${healthCards(snapshot)}</div></section><section id="accounts-section" class="accounts-section" aria-labelledby="accounts-title"><h2 id="accounts-title">Cuentas y búsquedas</h2><div id="accounts-list">${content}</div></section></main><p id="refresh-status" class="visually-hidden" aria-live="polite"></p></div><script nonce="${escapeHtml(cspNonce)}">${dashboardClientScript()}</script></body></html>`;
 }
 
 export function renderSafeError({ cspNonce }) {
