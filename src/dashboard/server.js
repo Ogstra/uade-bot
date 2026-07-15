@@ -52,7 +52,7 @@ export function createDashboardApp({
         frameAncestors: ["'none'"],
       },
     },
-    referrerPolicy: { policy: 'no-referrer' },
+    referrerPolicy: { policy: 'same-origin' },
     strictTransportSecurity: false,
   }));
   app.use(express.urlencoded({ extended: false, limit: '4kb', parameterLimit: 10 }));
