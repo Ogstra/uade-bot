@@ -133,8 +133,11 @@ export async function pollOnce(
     const result = await runHttpSearchFn(session, job.filtros, { startUrl: uadeStartUrl });
 
     if (result.status === 'verified') {
-      const rows = await parseResults(result.html);
-      const vacancies = filterVacancies(rows, job.filtros);
+      const parsedResults = await parseResults(result.html);
+      if (parsedResults.invalidRowCount > 0 || !parsedResults.resultsContainerDetected) {
+        return classifySearchResult({ searchStatus: 'search_failed', reason: 'result_parse_failed' });
+      }
+      const vacancies = filterVacancies(parsedResults.rows, job.filtros);
       const outcome = classifySearchResult({ searchStatus: 'verified', vacancies });
       return result.materiaNombre ? { ...outcome, materiaNombre: result.materiaNombre } : outcome;
     }

@@ -56,8 +56,11 @@ async function main() {
 
     let vacancies = [];
     if (result.status === 'verified') {
-      const rows = await parseResults(result.html);
-      vacancies = filterVacancies(rows, filtros);
+      const parsedResults = await parseResults(result.html);
+      if (parsedResults.invalidRowCount > 0 || !parsedResults.resultsContainerDetected) {
+        return classifySearchResult({ searchStatus: 'search_failed', reason: 'result_parse_failed', vacancies });
+      }
+      vacancies = filterVacancies(parsedResults.rows, filtros);
     }
 
     const searchStatus = result.status === 'rate_limited' || result.status === 'stale_start_url'

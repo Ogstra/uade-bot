@@ -56,6 +56,7 @@ function webformsFailure(error) {
   const known = {
     WEBFORMS_FORM_MISSING: 'form_missing',
     WEBFORMS_SUBMIT_MISSING: 'submit_missing',
+    WEBFORMS_SUBMIT_AMBIGUOUS: 'submit_ambiguous',
     WEBFORMS_MATERIA_MISSING: 'materia_missing',
     WEBFORMS_OFRECIMIENTO_MISSING: 'ofrecimiento_missing',
     WEBFORMS_TURNO_MISSING: 'turno_missing',
@@ -67,7 +68,53 @@ function isDeltaResponse(response) {
   return response.contentType.toLowerCase().startsWith('text/plain');
 }
 
-function parseVerifiedBody(response, limits) {
+function buildDeltaVerificationHtml(initialHtml, payload, parsed) {
+  const $ = load(String(initialHtml ?? ''));
+  const form = $('form').filter((_, element) => $(element)
+    .find('input[type="submit"], input[type="image"], button[type="submit"], button:not([type])')
+    .toArray()
+    .some((submit) => String($(submit).attr('value') ?? $(submit).text()).trim().toLocaleLowerCase('es') === 'buscar'))
+    .first();
+  if (form.length === 0) {
+    return null;
+  }
+
+  form.find('input, select, textarea').each((_, element) => {
+    const control = $(element);
+    const name = control.attr('name');
+    if (!name) return;
+    const submittedValues = payload.getAll(name);
+    const tag = element.tagName.toLowerCase();
+    const type = (control.attr('type') ?? '').toLowerCase();
+
+    if (type === 'checkbox' || type === 'radio') {
+      control.prop('checked', submittedValues.includes(control.attr('value') ?? 'on'));
+    } else if (tag === 'select') {
+      control.find('option').each((__, option) => {
+        const optionControl = $(option);
+        optionControl.prop('selected', submittedValues.includes(optionControl.attr('value') ?? optionControl.text()));
+      });
+    } else if (submittedValues.length > 0) {
+      control.attr('value', submittedValues[0]);
+    }
+  });
+
+  for (const { name, value } of parsed.hiddenFields) {
+    const existing = form.find('input[type="hidden"]').filter((_, element) => $(element).attr('name') === name).first();
+    if (existing.length > 0) {
+      existing.attr('value', value);
+    } else {
+      form.append($('<input>').attr({ type: 'hidden', name, value }));
+    }
+  }
+  for (const panel of parsed.updatePanels) {
+    form.append(panel.html);
+  }
+
+  return $.html();
+}
+
+function parseVerifiedBody(response, limits, initialHtml, payload) {
   if (!isDeltaResponse(response)) {
     if (!response.contentType.toLowerCase().includes('text/html')) {
       return { failure: searchFailed('response_invalid') };
@@ -87,7 +134,8 @@ function parseVerifiedBody(response, limits) {
   if (parsed.updatePanels.length === 0) {
     return { failure: searchFailed('delta_missing_panel') };
   }
-  return { html: parsed.updatePanels.map((panel) => panel.html).join('') };
+  const html = buildDeltaVerificationHtml(initialHtml, payload, parsed);
+  return html === null ? { failure: searchFailed('form_missing') } : { html };
 }
 
 /**
@@ -182,7 +230,7 @@ export async function runHttpSearch(session, filtros, { startUrl, limits = {} } 
     return searchFailed('http_status_error');
   }
 
-  const parsedBody = parseVerifiedBody(postResponse, effectiveLimits);
+  const parsedBody = parseVerifiedBody(postResponse, effectiveLimits, initialResponse.body, searchForm.payload);
   if (parsedBody.failure) {
     return parsedBody.failure;
   }

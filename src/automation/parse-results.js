@@ -7,6 +7,7 @@ import logger from '../logger.js';
 // PROJECT.md's Context section). `row_recoleta` was not observed in the one
 // live capture taken so far, but is documented and included defensively.
 const ROW_SELECTOR = 'tr.row_central, tr.row_recoleta, tr.rowTagueadoNuevo';
+const RESULTS_CONTAINER_SELECTOR = 'table.grillaInscripcion, table#results';
 
 // Each row's día columns carry hidden inputs whose `id` CONTAINS (not
 // equals) one of these substrings, suffixed with a per-row index
@@ -66,8 +67,8 @@ function extractRow(row) {
 }
 
 /**
- * Parses a captured HTML snapshot of the UADE results page into a validated
- * `VacancyRow[]` using Cheerio's inert, browserless DOM implementation.
+ * Parses a captured HTML snapshot of the UADE results page into validated
+ * rows plus enough structural metadata for callers to fail closed.
  *
  * A row whose extracted fields fail `VacancyRowSchema` validation is
  * dropped (logged as a warning) rather than crashing the whole parse — a
@@ -75,19 +76,22 @@ function extractRow(row) {
  * result set (PITFALLS.md Pitfall 3 / this plan's threat model T-01-07).
  *
  * @param {string} html
- * @returns {Promise<import('zod').infer<typeof VacancyRowSchema>[]>}
+ * @returns {Promise<{rows: import('zod').infer<typeof VacancyRowSchema>[], matchedRowCount: number, invalidRowCount: number, resultsContainerDetected: boolean}>}
  */
 export async function parseResults(html) {
   const $ = load(html);
-  const vacancies = [];
+  const rows = [];
+  const matchedRows = $(ROW_SELECTOR).toArray();
+  let invalidRowCount = 0;
 
-  for (const element of $(ROW_SELECTOR).toArray()) {
+  for (const element of matchedRows) {
     const candidate = extractRow($(element));
     const result = VacancyRowSchema.safeParse(candidate);
 
     if (result.success) {
-      vacancies.push(result.data);
+      rows.push(result.data);
     } else {
+      invalidRowCount += 1;
       const issues = result.error.issues.map(({ code, path }) => ({ code, path }));
       logger.warn(
         { event: 'vacancy_row_invalid', issues },
@@ -96,7 +100,12 @@ export async function parseResults(html) {
     }
   }
 
-  return vacancies;
+  return {
+    rows,
+    matchedRowCount: matchedRows.length,
+    invalidRowCount,
+    resultsContainerDetected: matchedRows.length > 0 || $(RESULTS_CONTAINER_SELECTOR).length > 0,
+  };
 }
 
 /**

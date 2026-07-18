@@ -41,6 +41,37 @@ test('buildSearchPayload serializes successful controls using names and values f
   assert.equal([...result.payload.keys()].includes(''), false);
 });
 
+test('buildSearchPayload selects the unique form containing the Buscar submit', async () => {
+  const html = await readFixture('initial-form.html');
+  const unrelatedForm = '<form action="/login"><input name="username"><button type="submit">Ingresar</button></form>';
+  const result = buildSearchPayload(html.replace('<body>', `<body>${unrelatedForm}`), filtros);
+
+  assert.equal(result.formAction, '/InscripcionClaseBuscar.aspx');
+  assert.equal(result.payload.get('ctl00$ContentPlaceHolder1$btnBuscar'), 'Buscar');
+});
+
+test('buildSearchPayload rejects ambiguous Buscar forms', async () => {
+  const html = await readFixture('initial-form.html');
+  const duplicate = '<form><input type="submit" name="otherSearch" value="Buscar"></form>';
+
+  assert.throws(
+    () => buildSearchPayload(html.replace('<body>', `<body>${duplicate}`), filtros),
+    (error) => error?.code === 'WEBFORMS_SUBMIT_AMBIGUOUS',
+  );
+});
+
+test('materia selection requires an exact code-cell match', async () => {
+  const html = await readFixture('initial-form.html');
+
+  for (const collision of ['3.1.0500', '13.1.050']) {
+    const candidate = html.replaceAll('3.1.050', collision);
+    assert.throws(
+      () => buildSearchPayload(candidate, filtros),
+      (error) => error?.code === 'WEBFORMS_MATERIA_MISSING',
+    );
+  }
+});
+
 test('mock contract and limits remain traceable to the approved manifest', async () => {
   const [html, manifestText] = await Promise.all([
     readFixture('initial-form.html'),
@@ -104,6 +135,16 @@ test('SEARCH-04 verification is fail-closed for every missing or mismatched fiel
   assert.equal(verifyPostbackMatchesQuery({ ...matching, ofrecimiento: 'optativa' }, completeFiltros), false);
   assert.equal(verifyPostbackMatchesQuery({ ...matching, turno: 'TARDE' }, completeFiltros), false);
   assert.equal(verifyPostbackMatchesQuery({ ...matching, dias: ['LU'] }, completeFiltros), false);
+});
+
+test('reflected materia verification rejects prefix and suffix code collisions', async () => {
+  const html = await readFixture('postback-found.html');
+
+  for (const collision of ['3.1.0500', '13.1.050']) {
+    const reflected = extractReflectedSearchState(html.replace('3.1.050', collision), filtros.materiaCodigo);
+    assert.equal(reflected.materiaCodigo, collision);
+    assert.equal(verifyPostbackMatchesQuery(reflected, { ...filtros, dias: ['LU', 'MI'] }), false);
+  }
 });
 
 test('postback-empty is valid only when all reflected fields match', async () => {

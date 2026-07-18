@@ -112,17 +112,36 @@ function optionMatchesLabel(optionText, label) {
   return normalizeText(optionText).localeCompare(normalizeText(label), 'es', { sensitivity: 'base' }) === 0;
 }
 
-function extractMateriaFromRow($, row, expectedMateriaCodigo) {
+function extractMateriaFromRow($, row) {
   const cells = $(row).find('td').map((_, cell) => normalizeText($(cell).text())).get();
-  const codeCellIndex = cells.findIndex((cell) => cell.includes(expectedMateriaCodigo));
+  const codeCellIndex = cells.findIndex((cell) => /^\d+\.\d+\.\d+$/.test(cell));
   if (codeCellIndex === -1) {
     return { materiaCodigo: null, materiaNombre: null };
   }
 
-  const codeCell = cells[codeCellIndex];
-  const suffix = normalizeText(codeCell.slice(codeCell.indexOf(expectedMateriaCodigo) + expectedMateriaCodigo.length));
-  const materiaNombre = suffix || cells.slice(codeCellIndex + 1).find(Boolean) || null;
-  return { materiaCodigo: expectedMateriaCodigo, materiaNombre };
+  return {
+    materiaCodigo: cells[codeCellIndex],
+    materiaNombre: cells.slice(codeCellIndex + 1).find(Boolean) || null,
+  };
+}
+
+function findSearchForm($) {
+  const forms = $('form');
+  if (forms.length === 0) {
+    throw webformsError('WEBFORMS_FORM_MISSING');
+  }
+
+  const matchingSubmits = forms
+    .find('input[type="submit"], input[type="image"], button[type="submit"], button:not([type])')
+    .filter((_, element) => optionMatchesLabel($(element).attr('value') ?? $(element).text(), 'Buscar'));
+  if (matchingSubmits.length === 0) {
+    throw webformsError('WEBFORMS_SUBMIT_MISSING');
+  }
+  if (matchingSubmits.length !== 1 || !matchingSubmits.first().attr('name')) {
+    throw webformsError('WEBFORMS_SUBMIT_AMBIGUOUS');
+  }
+
+  return { form: matchingSubmits.first().closest('form'), chosenSubmit: matchingSubmits.first() };
 }
 
 function selectBySemanticSuffix($, form, suffix) {
@@ -178,29 +197,18 @@ function serializeSuccessfulControls($, form, chosenSubmit) {
 
 export function buildSearchPayload(html, filtros) {
   const $ = load(String(html ?? ''));
-  const form = $('form').first();
-  if (form.length === 0) {
-    throw webformsError('WEBFORMS_FORM_MISSING');
-  }
-
-  const chosenSubmit = form
-    .find('input[type="submit"], input[type="image"], button[type="submit"], button:not([type])')
-    .filter((_, element) => optionMatchesLabel($(element).attr('value') ?? $(element).text(), 'Buscar'))
-    .first();
-  if (chosenSubmit.length === 0 || !chosenSubmit.attr('name')) {
-    throw webformsError('WEBFORMS_SUBMIT_MISSING');
-  }
+  const { form, chosenSubmit } = findSearchForm($);
 
   const materiaCheckboxes = form.find('input[type="checkbox"][id*="chkSeleccionar"]');
   const materiaCheckbox = materiaCheckboxes
-    .filter((_, element) => normalizeText($(element).closest('tr').text()).includes(filtros.materiaCodigo))
+    .filter((_, element) => extractMateriaFromRow($, $(element).closest('tr')).materiaCodigo === filtros.materiaCodigo)
     .first();
   if (materiaCheckbox.length === 0) {
     throw webformsError('WEBFORMS_MATERIA_MISSING');
   }
   materiaCheckboxes.prop('checked', false);
   materiaCheckbox.prop('checked', true);
-  const { materiaNombre } = extractMateriaFromRow($, materiaCheckbox.closest('tr'), filtros.materiaCodigo);
+  const { materiaNombre } = extractMateriaFromRow($, materiaCheckbox.closest('tr'));
 
   const ofrecimientoValue = OFRECIMIENTO_VALUES[filtros.ofrecimiento];
   const ofrecimientoRadios = form.find('input[type="radio"]').filter((_, element) =>
@@ -245,7 +253,7 @@ export function extractReflectedSearchState(html, expectedMateriaCodigo) {
 
   const checkedMateria = form.find('input[type="checkbox"][id*="chkSeleccionar"]:checked').first();
   const materia = checkedMateria.length > 0
-    ? extractMateriaFromRow($, checkedMateria.closest('tr'), expectedMateriaCodigo)
+    ? extractMateriaFromRow($, checkedMateria.closest('tr'))
     : { materiaCodigo: null, materiaNombre: null };
 
   const checkedOfrecimiento = form.find('input[type="radio"]:checked').filter((_, element) =>

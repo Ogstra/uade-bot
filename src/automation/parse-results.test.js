@@ -72,12 +72,16 @@ describe('parseResults', () => {
     assert.doesNotMatch(source, /from ['"].*(?:browser|playwright).*['"]/);
   });
 
-  test('returns a non-empty VacancyRow[] from a fixture with real result rows', async () => {
+  test('returns validated rows and structural metadata from a fixture with real result rows', async () => {
     const html = readFileSync(SAMPLE_HTML_PATH, 'utf8');
-    const rows = await parseResults(html);
+    const parsed = await parseResults(html);
+    const { rows } = parsed;
 
     assert.ok(Array.isArray(rows));
     assert.ok(rows.length > 0, 'expected at least one parsed row');
+    assert.equal(parsed.matchedRowCount, rows.length);
+    assert.equal(parsed.invalidRowCount, 0);
+    assert.equal(parsed.resultsContainerDetected, true);
 
     for (const row of rows) {
       assert.equal(typeof row.turno, 'string');
@@ -91,12 +95,17 @@ describe('parseResults', () => {
     assert.ok(withVacantes, 'fixture must include at least one row with cupos > 0');
   });
 
-  test('returns [] (never null, never throws) from a fixture with zero matching rows', async () => {
-    const rows = await parseResults(ZERO_ROWS_HTML);
-    assert.deepEqual(rows, []);
+  test('positively identifies an empty results container with zero invalid rows', async () => {
+    const parsed = await parseResults(ZERO_ROWS_HTML);
+    assert.deepEqual(parsed, {
+      rows: [],
+      matchedRowCount: 0,
+      invalidRowCount: 0,
+      resultsContainerDetected: true,
+    });
   });
 
-  test('drops a row that fails VacancyRowSchema validation without crashing the parse', async (t) => {
+  test('reports every row that fails VacancyRowSchema validation without exposing row data', async (t) => {
     const warnings = [];
     const originalWarn = logger.warn;
     logger.warn = (...args) => warnings.push(args);
@@ -104,7 +113,8 @@ describe('parseResults', () => {
       logger.warn = originalWarn;
     });
 
-    const rows = await parseResults(MIXED_VALID_INVALID_HTML);
+    const parsed = await parseResults(MIXED_VALID_INVALID_HTML);
+    const { rows } = parsed;
 
     // Only the valid row (NOCHE/MONSERRAT/2 cupos/LU) should survive.
     assert.equal(rows.length, 1);
@@ -112,6 +122,9 @@ describe('parseResults', () => {
     assert.equal(rows[0].sede, 'MONSERRAT');
     assert.equal(rows[0].cupos, 2);
     assert.deepEqual(rows[0].dias, ['LU']);
+    assert.equal(parsed.matchedRowCount, 2);
+    assert.equal(parsed.invalidRowCount, 1);
+    assert.equal(parsed.resultsContainerDetected, true);
 
     assert.equal(warnings.length, 1);
     const [metadata] = warnings[0];
@@ -119,6 +132,13 @@ describe('parseResults', () => {
     assert.equal(metadata.event, 'vacancy_row_invalid');
     assert.ok(Array.isArray(metadata.issues) && metadata.issues.length > 0);
     assert.doesNotMatch(JSON.stringify(warnings), /no-es-un-numero|<tr|cookie|authorization/i);
+  });
+
+  test('does not treat arbitrary markup as a positively identified empty result', async () => {
+    const parsed = await parseResults('<html><body><div>portal changed</div></body></html>');
+    assert.equal(parsed.resultsContainerDetected, false);
+    assert.equal(parsed.matchedRowCount, 0);
+    assert.equal(parsed.invalidRowCount, 0);
   });
 });
 

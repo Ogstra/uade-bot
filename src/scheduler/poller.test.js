@@ -54,7 +54,7 @@ test('pollOnce requires an explicit masterKey and never falls back to process co
     await assert.rejects(
       pollOnce(db, job.id, {
         withHttpSessionFn: async (credentials, run) => run({}),
-        runHttpSearchFn: async () => ({ status: 'verified', html: '<table></table>' }),
+        runHttpSearchFn: async () => ({ status: 'verified', html: '<table id="results"></table>' }),
       }),
       /masterKey/,
     );
@@ -71,7 +71,7 @@ test('pollOnce persists a no_vacancies outcome for a verified search with zero p
 
     const runHttpSearchFn = async () => ({
       status: 'verified',
-      html: '<table></table>',
+      html: '<table id="results"></table>',
       materiaNombre: 'Fisica II',
     });
     await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
@@ -89,7 +89,7 @@ test('pollOnce writes current state and bounded history through one timestamped 
   const db = createDatabase(':memory:');
   try {
     const job = seedJob(db);
-    const noVacancies = async () => ({ status: 'verified', html: '<table></table>' });
+    const noVacancies = async () => ({ status: 'verified', html: '<table id="results"></table>' });
 
     await pollOnce(db, job.id, pollDeps(noVacancies));
     await pollOnce(db, job.id, pollDeps(noVacancies));
@@ -113,7 +113,7 @@ test('pollOnce does not cache a materia name when the poll result carries none',
   try {
     const job = seedJob(db);
 
-    const runHttpSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
+    const runHttpSearchFn = async () => ({ status: 'verified', html: '<table id="results"></table>' });
     await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
 
     assert.equal(getMateriaNombre(db, FILTROS.materiaCodigo), null);
@@ -153,6 +153,26 @@ test('pollOnce preserves search_failed mismatch instead of classifying an unveri
   }
 });
 
+test('pollOnce fails closed when result rows are invalid or the empty-results structure is missing', async () => {
+  for (const html of [
+    '<table class="grillaInscripcion"><tr class="row_central"><td>changed markup</td></tr></table>',
+    '<html><body><div>unexpected portal response</div></body></html>',
+  ]) {
+    const db = createDatabase(':memory:');
+    try {
+      const job = seedJob(db);
+      const runHttpSearchFn = async () => ({ status: 'verified', html });
+
+      const outcome = await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
+
+      assert.deepEqual(outcome, { outcome: 'search_failed', reason: 'result_parse_failed' });
+      assert.equal(getJob(db, job.id).lastOutcome, JSON.stringify(outcome));
+    } finally {
+      db.close();
+    }
+  }
+});
+
 test('pollOnce preserves the rate_limited account backoff state', async () => {
   const db = createDatabase(':memory:');
   try {
@@ -176,7 +196,7 @@ test('pollOnce never leaves plaintext credentials in any DB table after resolvin
   try {
     const job = seedJob(db);
 
-    const runHttpSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
+    const runHttpSearchFn = async () => ({ status: 'verified', html: '<table id="results"></table>' });
     await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
 
     const allRows = [
@@ -208,7 +228,7 @@ test('pollOnce decrypts credentials transiently and passes them to withHttpSessi
     };
     const runHttpSearchFn = async (session, filtros, options) => {
       capturedSearchArgs = { filtros, options };
-      return { status: 'verified', html: '<table></table>' };
+      return { status: 'verified', html: '<table id="results"></table>' };
     };
 
     await pollOnce(db, job.id, { masterKey: MASTER_KEY, withHttpSessionFn, runHttpSearchFn });
@@ -258,7 +278,7 @@ test('pollOnce never calls attemptAutoRelinkFn for a verified/no_vacancies outco
       loaderCalls += 1;
       return { attemptAutoRelink: attemptAutoRelinkFn };
     };
-    const runHttpSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
+    const runHttpSearchFn = async () => ({ status: 'verified', html: '<table id="results"></table>' });
     await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn, loadRelinkFn }));
 
     assert.equal(relinkCalls, 0);

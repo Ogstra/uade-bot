@@ -7,12 +7,13 @@ import { withHttpSession } from './http-session.js';
 import { runHttpSearch } from './http-search.js';
 
 const FIXTURE_ROOT = new URL('./__fixtures__/webforms/', import.meta.url);
-const [initialForm, postbackFound, postbackEmpty, postbackMismatch, malformedDelta] = await Promise.all([
+const [initialForm, postbackFound, postbackEmpty, postbackMismatch, malformedDelta, fragmentDelta] = await Promise.all([
   readFile(new URL('initial-form.html', FIXTURE_ROOT), 'utf8'),
   readFile(new URL('postback-found.html', FIXTURE_ROOT), 'utf8'),
   readFile(new URL('postback-empty.html', FIXTURE_ROOT), 'utf8'),
   readFile(new URL('postback-mismatch.html', FIXTURE_ROOT), 'utf8'),
   readFile(new URL('delta-malformed.txt', FIXTURE_ROOT), 'utf8'),
+  readFile(new URL('delta-found.txt', FIXTURE_ROOT), 'utf8').then((text) => text.trimEnd()),
 ]);
 
 const filtros = Object.freeze({
@@ -194,11 +195,12 @@ test('fails closed for reflected mismatch and invalid HTML', async (t) => {
   assert.deepEqual(invalid.result, { status: 'search_failed', reason: 'postback_mismatch' });
 });
 
-test('parses delta responses but verifies only positively reflected panel HTML', async (t) => {
-  const validDelta = `${postbackFound.length}|updatePanel|ctl00$UpdatePanelContenido|${postbackFound}|`;
-  const valid = await searchAgainst(t, { postBody: validDelta, contentType: 'text/plain; charset=utf-8' });
+test('verifies a realistic fragment-only delta against retained submitted form state', async (t) => {
+  const valid = await searchAgainst(t, { postBody: fragmentDelta, contentType: 'text/plain; charset=utf-8' });
   assert.equal(valid.result.status, 'verified');
-  assert.equal(valid.result.html, postbackFound);
+  assert.match(valid.result.html, /<form[^>]*id="form1"/);
+  assert.match(valid.result.html, /Vacantes: 2 \| F(?:ísica|&#xed;sica) II/);
+  assert.equal((valid.result.html.match(/<form\b/g) ?? []).length, 1);
 
   const malformed = await searchAgainst(t, { postBody: malformedDelta, contentType: 'text/plain' });
   assert.deepEqual(malformed.result, { status: 'search_failed', reason: 'delta_malformed' });
