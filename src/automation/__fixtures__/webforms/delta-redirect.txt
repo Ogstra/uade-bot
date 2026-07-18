@@ -1,0 +1,1 @@
+47|pageRedirect||https://example.invalid/private?token=sintético|
