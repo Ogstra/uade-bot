@@ -328,7 +328,7 @@ test('a PQueue with concurrency N never lets .pending exceed N', async () => {
   assert.ok(maxPending <= 2);
 });
 
-test('createScheduler closes the idle browser when a tick finds no jobs to poll', async () => {
+test('createScheduler does not manage browser lifecycle when a tick finds no jobs to poll', async () => {
   const db = createDatabase(':memory:');
   try {
     let closeCalls = 0;
@@ -340,7 +340,7 @@ test('createScheduler closes the idle browser when a tick finds no jobs to poll'
     scheduler.start({ immediate: true });
     scheduler.stop();
 
-    assert.equal(closeCalls, 1);
+    assert.equal(closeCalls, 0);
   } finally {
     db.close();
   }
