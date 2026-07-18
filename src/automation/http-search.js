@@ -144,10 +144,10 @@ function parseVerifiedBody(response, limits, initialHtml, payload) {
  *
  * @param {{ request: (url: string | URL, options?: object) => Promise<{status:number,body:string,url:string,contentType:string}> }} session
  * @param {unknown} filtros
- * @param {{ startUrl: string, limits?: { timeoutMs?: number, maxBodyBytes?: number, maxDeltaChars?: number, maxDeltaNodes?: number } }} options
+ * @param {{ startUrl: string, limits?: { timeoutMs?: number, maxBodyBytes?: number, maxDeltaChars?: number, maxDeltaNodes?: number }, memoryCheckpoint?: (stage: string) => void }} options
  * @returns {Promise<{status:'invalid_credentials'|'rate_limited'|'stale_start_url'}|{status:'search_failed',reason:string}|{status:'verified',html:string,materiaNombre?:string}>}
  */
-export async function runHttpSearch(session, filtros, { startUrl, limits = {} } = {}) {
+export async function runHttpSearch(session, filtros, { startUrl, limits = {}, memoryCheckpoint = () => {} } = {}) {
   const parsedFiltros = FiltrosSchema.parse(filtros);
   if (!session || typeof session.request !== 'function') {
     return searchFailed('transport_unavailable');
@@ -162,6 +162,7 @@ export async function runHttpSearch(session, filtros, { startUrl, limits = {} } 
       timeoutMs: limits.timeoutMs,
       maxBodyBytes: limits.maxBodyBytes,
     });
+    memoryCheckpoint('initial_response_accumulated');
   } catch (error) {
     return transportFailure(error);
   }
@@ -176,10 +177,12 @@ export async function runHttpSearch(session, filtros, { startUrl, limits = {} } 
   if (!hasTurnoOptions(initialResponse.body)) {
     return { status: 'stale_start_url' };
   }
+  memoryCheckpoint('initial_turno_parse_complete');
 
   let searchForm;
   try {
     searchForm = buildSearchPayload(initialResponse.body, parsedFiltros);
+    memoryCheckpoint('search_form_parse_complete');
   } catch (error) {
     return webformsFailure(error);
   }
@@ -218,6 +221,7 @@ export async function runHttpSearch(session, filtros, { startUrl, limits = {} } 
       },
       body: searchForm.payload,
     });
+    memoryCheckpoint('post_response_accumulated');
   } catch (error) {
     return transportFailure(error);
   }
@@ -231,10 +235,12 @@ export async function runHttpSearch(session, filtros, { startUrl, limits = {} } 
   }
 
   const parsedBody = parseVerifiedBody(postResponse, effectiveLimits, initialResponse.body, searchForm.payload);
+  memoryCheckpoint('post_body_parse_complete');
   if (parsedBody.failure) {
     return parsedBody.failure;
   }
   const reflectedState = extractReflectedSearchState(parsedBody.html, parsedFiltros.materiaCodigo);
+  memoryCheckpoint('reflected_state_parse_complete');
   if (!verifyPostbackMatchesQuery(reflectedState, parsedFiltros)) {
     return searchFailed('postback_mismatch');
   }

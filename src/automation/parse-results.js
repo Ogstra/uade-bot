@@ -76,10 +76,12 @@ function extractRow(row) {
  * result set (PITFALLS.md Pitfall 3 / this plan's threat model T-01-07).
  *
  * @param {string} html
+ * @param {{ memoryCheckpoint?: (stage: string) => void }} options
  * @returns {Promise<{rows: import('zod').infer<typeof VacancyRowSchema>[], matchedRowCount: number, invalidRowCount: number, resultsContainerDetected: boolean}>}
  */
-export async function parseResults(html) {
+export async function parseResults(html, { memoryCheckpoint = () => {} } = {}) {
   const $ = load(html);
+  memoryCheckpoint('vacancy_dom_parse_complete');
   const rows = [];
   const matchedRows = $(ROW_SELECTOR).toArray();
   let invalidRowCount = 0;
@@ -99,6 +101,7 @@ export async function parseResults(html) {
       );
     }
   }
+  memoryCheckpoint('vacancy_row_validation_complete');
 
   return {
     rows,

@@ -61,19 +61,25 @@ function padToApprovedBytes(html, approvedBytes, label) {
 }
 
 async function loadFixtures() {
-  const [manifestText, initialTemplate, postbackTemplate] = await Promise.all([
+  const [manifestText, initialTemplate, postbackTemplate, resultRowsTemplate] = await Promise.all([
     readFile(new URL('manifest.json', EVIDENCE_ROOT), 'utf8'),
     readFile(new URL('initial-form.html', FIXTURE_ROOT), 'utf8'),
     readFile(new URL('postback-found.html', FIXTURE_ROOT), 'utf8'),
+    readFile(new URL('../src/automation/__fixtures__/results-sample.html', import.meta.url), 'utf8'),
   ]);
   const manifest = JSON.parse(manifestText);
   assert.equal(manifest.postbackModeAccepted, 'accepted');
   const initialApprovedBytes = positiveInteger(manifest.responses?.initialGet?.bytes, 'initial fixture bytes');
   const postbackApprovedBytes = positiveInteger(manifest.responses?.fullPostback?.bytes, 'postback fixture bytes');
   const maxBodyBytes = positiveInteger(manifest.derivedLimits?.maxBodyBytes, 'max body bytes');
+  const resultTable = resultRowsTemplate.match(/<table\b[^>]*class="grillaInscripcion"[\s\S]*?<\/table>/)?.[0]
+    ?.replace(/(<input[^>]+id="[^"]*hiddenLU_0")>/, '$1 value="True">')
+    .replace(/(<input[^>]+id="[^"]*hiddenMI_0")>/, '$1 value="True">');
+  assert(resultTable, 'results fixture must contain the production results table');
+  const composedPostback = postbackTemplate.replace(/<table\s+id="results">[\s\S]*?<\/table>/, resultTable);
   return {
     initial: padToApprovedBytes(initialTemplate, initialApprovedBytes, 'initial fixture'),
-    postback: padToApprovedBytes(postbackTemplate, postbackApprovedBytes, 'postback fixture'),
+    postback: padToApprovedBytes(composedPostback, postbackApprovedBytes, 'postback fixture'),
     bytes: {
       initialGet: initialApprovedBytes,
       fullPostback: postbackApprovedBytes,
@@ -150,35 +156,58 @@ async function runWorker(concurrency) {
   const fixtures = await loadFixtures();
   const mock = await createLocalMock(fixtures);
   try {
-    const [{ withHttpSession }, { runHttpSearch }] = await Promise.all([
+    const [{ withHttpSession }, { runHttpSearch }, { parseResults, filterVacancies }, { classifySearchResult }] = await Promise.all([
       import('../src/automation/http-session.js'),
       import('../src/automation/http-search.js'),
+      import('../src/automation/parse-results.js'),
+      import('../src/automation/classify.js'),
     ]);
-    const search = () => withHttpSession(
+    const search = (memoryCheckpoint = () => {}) => withHttpSession(
       DUMMY_CREDENTIALS,
-      (session) => runHttpSearch(session, FILTERS, {
-        startUrl: `${mock.origin}/start`,
-        limits: { maxBodyBytes: fixtures.bytes.maxBody },
-      }),
+      async (session) => {
+        const result = await runHttpSearch(session, FILTERS, {
+          startUrl: `${mock.origin}/start`,
+          limits: { maxBodyBytes: fixtures.bytes.maxBody },
+          memoryCheckpoint,
+        });
+        if (result.status !== 'verified') {
+          return classifySearchResult({ searchStatus: result.status, reason: result.reason, vacancies: [] });
+        }
+
+        const parsed = await parseResults(result.html, { memoryCheckpoint });
+        if (parsed.invalidRowCount > 0 || !parsed.resultsContainerDetected) {
+          return classifySearchResult({ searchStatus: 'search_failed', reason: 'result_parse_failed', vacancies: [] });
+        }
+        const vacancies = filterVacancies(parsed.rows, FILTERS);
+        memoryCheckpoint('vacancy_filter_complete');
+        const outcome = classifySearchResult({ searchStatus: 'verified', vacancies });
+        memoryCheckpoint('classification_complete');
+        return outcome;
+      },
       { allowedOrigin: mock.origin, maxBodyBytes: fixtures.bytes.maxBody },
     );
 
     const warmup = await search();
-    assert.equal(warmup.status, 'verified', 'warm-up search must verify successfully');
+    assert.equal(warmup.outcome, 'found', 'warm-up production search chain must find a validated vacancy');
     guard.assertClear();
     global.gc();
     const baselineRss = process.memoryUsage.rss();
     let peakRss = baselineRss;
-    const sample = () => { peakRss = Math.max(peakRss, process.memoryUsage.rss()); };
-    const sampler = setInterval(sample, 1);
+    const checkpointRss = {};
+    const sample = (stage = 'interval') => {
+      const rss = process.memoryUsage.rss();
+      peakRss = Math.max(peakRss, rss);
+      checkpointRss[stage] = Math.max(checkpointRss[stage] ?? 0, rss);
+    };
+    const sampler = setInterval(() => sample('interval'), 1);
     let outcomes;
     try {
-      outcomes = await Promise.all(Array.from({ length: concurrency }, () => search()));
-      sample();
+      outcomes = await Promise.all(Array.from({ length: concurrency }, () => search(sample)));
+      sample('search_chain_complete');
     } finally {
       clearInterval(sampler);
     }
-    assert(outcomes.every(({ status }) => status === 'verified'), 'measured searches must verify successfully');
+    assert(outcomes.every(({ outcome }) => outcome === 'found'), 'measured production search chains must find validated vacancies');
     guard.assertClear();
     const deltaRss = peakRss - baselineRss;
     const perSearchDeltaRss = deltaRss / concurrency;
@@ -193,6 +222,7 @@ async function runWorker(concurrency) {
       peakRss,
       deltaRss,
       perSearchDeltaRss,
+      checkpointRss,
       limitBytesExclusive: RSS_LIMIT_BYTES,
     };
   } finally {
