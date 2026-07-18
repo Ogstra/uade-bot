@@ -3,7 +3,6 @@ import { listActiveJobs } from '../db/jobs.repository.js';
 import { getUser } from '../db/users.repository.js';
 import { loadEnv } from '../config/env.js';
 import { pollOnce } from './poller.js';
-import { closeBrowser } from '../automation/browser.js';
 import logger from '../logger.js';
 
 /**
@@ -98,7 +97,6 @@ function isAccountPaused(db, discordUserId) {
  *   concurrency?: number,
  *   pollOnceFn?: typeof pollOnce,
  *   onJobPolled?: (job: object, outcome: object) => Promise<void> | void,
- *   closeBrowserFn?: typeof closeBrowser,
  * }} params
  * @returns {{ start: (options?: { immediate?: boolean }) => void, stop: () => void }}
  */
@@ -108,7 +106,6 @@ export function createScheduler({
   concurrency = loadEnv().SCHEDULER_CONCURRENCY,
   pollOnceFn = pollOnce,
   onJobPolled = async () => {},
-  closeBrowserFn = closeBrowser,
 } = {}) {
   const pQueue = new PQueue({ concurrency });
   let pointers = new Map();
@@ -180,22 +177,6 @@ export function createScheduler({
     pointers = nextPointers;
 
     logger.info({ event: 'scheduler_tick', selectedCount: selected.length }, 'Scheduler tick');
-
-    // Nothing to poll this tick and nothing already running -- release the
-    // shared Chromium browser (~150MB) instead of holding it open between
-    // polls. getBrowser()/withUadeContext relaunch it lazily (~0.9s) the
-    // next time a job actually needs to poll (a scheduled tick, /buscar's
-    // or /reanudar's immediate poll). Skipped whenever a poll is still
-    // in-flight so an active page/context is never yanked mid-run.
-    if (selected.length === 0 && inFlightAccountIds.size === 0) {
-      closeBrowserFn().catch((err) => {
-        logger.error(
-          { event: 'browser_idle_close_failed', message: err.message },
-          'Failed to close idle Chromium browser from scheduler tick',
-        );
-      });
-      return;
-    }
 
     for (const job of selected) {
       enqueuePoll(job);
