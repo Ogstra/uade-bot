@@ -78,6 +78,14 @@ function renderAccount(account, defaultOpen) {
   </details>`;
 }
 
+function renderGuilds(snapshot) {
+  const guilds = Array.isArray(snapshot.botGuilds) ? snapshot.botGuilds : [];
+  const content = guilds.length > 0
+    ? `<ul class="guild-list">${guilds.map((guild) => `<li data-guild-id="${escapeHtml(guild.id)}"><strong>${escapeHtml(guild.name)}</strong><span class="metadata">${escapeHtml(guild.id)}</span></li>`).join('')}</ul>`
+    : '<p class="metadata">Sin servidores en cache. Puede aparecer después de que Discord termine de inicializar.</p>';
+  return `<section class="guilds-section" aria-labelledby="guilds-title"><div class="section-heading"><h2 id="guilds-title">Servidores del bot</h2><span class="metadata" data-guild-count>${escapeHtml(guilds.length)} servidor(es)</span></div><div id="guilds-list">${content}</div></section>`;
+}
+
 function sharedStyles() {
   return `
     :root { --space-xs: 4px; --space-sm: 8px; --space-md: 16px; --space-lg: 24px; --space-xl: 32px; --space-2xl: 48px; --space-3xl: 64px; --color-bg: #F4F7FB; --color-panel: #FFFFFF; --color-accent: #2563EB; --color-danger: #B42318; --color-text: #101828; --color-muted: #475467; --color-border: #D0D5DD; --healthy: #067647; --healthy-bg: #ECFDF3; --warning: #B54708; --warning-bg: #FFFAEB; --failure: #B42318; --failure-bg: #FEF3F2; --neutral: #475467; --neutral-bg: #F2F4F7; }
@@ -216,6 +224,27 @@ function dashboardClientScript() {
       setText(pollCard?.querySelector('[data-value]'), formatDate(health.lastSuccessfulPollAt, 'Sin polls exitosos'));
     }
 
+    function patchGuilds(guilds = []) {
+      const guildsList = document.getElementById('guilds-list');
+      const guildCount = document.querySelector('[data-guild-count]');
+      if (!guildsList) return;
+      setText(guildCount, guilds.length + ' servidor(es)');
+      if (guilds.length === 0) {
+        const empty = document.createElement('p'); empty.className = 'metadata';
+        setText(empty, 'Sin servidores en cache. Puede aparecer después de que Discord termine de inicializar.');
+        guildsList.replaceChildren(empty);
+        return;
+      }
+      const list = document.createElement('ul'); list.className = 'guild-list';
+      for (const guild of guilds) {
+        const item = document.createElement('li'); item.dataset.guildId = guild.id;
+        const name = document.createElement('strong'); setText(name, guild.name ?? 'Servidor sin nombre');
+        const id = document.createElement('span'); id.className = 'metadata'; setText(id, guild.id ?? '');
+        item.append(name, id); list.append(item);
+      }
+      guildsList.replaceChildren(list);
+    }
+
     function createAccount(account) {
       const details = document.createElement('details'); details.className = 'account'; details.dataset.accountId = account.discordUserId;
       const summary = document.createElement('summary');
@@ -297,7 +326,7 @@ function dashboardClientScript() {
       fetchSnapshot: async () => { const response = await fetch('/api/dashboard', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } }); return { ok: response.ok, status: response.status, snapshot: response.ok ? await response.json() : null }; },
       schedule: window.setTimeout.bind(window), cancel: window.clearTimeout.bind(window), now: Date.now,
       onBusy: (busy) => { root.setAttribute('aria-busy', String(busy)); if (busy) setText(liveStatus, 'Actualizando…'); },
-      onSuccess: (next) => { const scrollX = window.scrollX; const scrollY = window.scrollY; patchHealth(next.health); patchAccounts(next.accounts); lastSuccessAt = Number(next.generatedAt) || Date.now(); errorBanner.hidden = true; setText(liveStatus, ''); updateFreshness(); window.scrollTo(scrollX, scrollY); },
+      onSuccess: (next) => { const scrollX = window.scrollX; const scrollY = window.scrollY; patchHealth(next.health); patchGuilds(next.botGuilds); patchAccounts(next.accounts); lastSuccessAt = Number(next.generatedAt) || Date.now(); errorBanner.hidden = true; setText(liveStatus, ''); updateFreshness(); window.scrollTo(scrollX, scrollY); },
       onFailure: () => { errorBanner.hidden = false; setText(liveStatus, 'No se pudieron actualizar los datos.'); },
       onUnauthorized: () => { accountsList.replaceChildren(); setText(liveStatus, 'Tu sesión venció. Iniciá sesión de nuevo.'); window.location.assign('/login'); },
     });
@@ -341,19 +370,22 @@ export function renderDashboardPage({ snapshot, csrfToken, cspNonce }) {
     .freshness { color: var(--color-muted); font-variant-numeric: tabular-nums; } .freshness[data-state="delayed"] { color: var(--warning); } .freshness[data-state="stale"] { color: var(--failure); }
     .refresh-progress { background: var(--color-accent); height: 4px; opacity: 0; } [aria-busy="true"] .refresh-progress { opacity: 1; }
     .refresh-error { align-items: center; background: var(--failure-bg); color: var(--failure); display: flex; flex-wrap: wrap; gap: var(--space-md); justify-content: space-between; margin-bottom: var(--space-lg); padding: var(--space-md); } [hidden] { display: none !important; }
-    .health-section, .accounts-section { display: grid; gap: var(--space-md); margin-top: var(--space-xl); }
+    .health-section, .guilds-section, .accounts-section { display: grid; gap: var(--space-md); margin-top: var(--space-xl); }
+    .section-heading { align-items: center; display: flex; flex-wrap: wrap; gap: var(--space-md); justify-content: space-between; }
     .health-grid { display: grid; gap: var(--space-md); grid-template-columns: 1fr; }
     .health-card, .job-panel, .empty-state { background: var(--color-panel); border: 1px solid var(--color-border); border-radius: 12px; padding: var(--space-lg); }
     .health-card { display: grid; gap: var(--space-sm); } .health-card > strong { font-size: 28px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; } .health-time { font-size: 20px !important; }
+    .guild-list { display: grid; gap: var(--space-sm); grid-template-columns: 1fr; list-style: none; margin: 0; padding: 0; }
+    .guild-list li { align-items: center; background: var(--color-panel); border: 1px solid var(--color-border); border-radius: 12px; display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-md); justify-content: space-between; padding: var(--space-md); }
     .account { background: var(--color-panel); border: 1px solid var(--color-border); border-radius: 12px; box-shadow: 0 1px 2px rgb(16 24 40 / 0.06); overflow: clip; }
     .account > summary { align-items: center; cursor: pointer; display: flex; flex-wrap: wrap; gap: var(--space-md); justify-content: space-between; padding: var(--space-md) var(--space-lg); }
     .account-title { display: grid; min-width: 0; } .jobs { border-top: 1px solid var(--color-border); display: grid; gap: var(--space-md); padding: var(--space-md); }
     .job-heading { align-items: flex-start; display: flex; flex-wrap: wrap; gap: var(--space-md); justify-content: space-between; } .job-heading h3 { overflow-wrap: anywhere; }
     .job-metadata { display: grid; gap: var(--space-md); grid-template-columns: 1fr; margin: var(--space-lg) 0; } .job-metadata div { min-width: 0; } dt { color: var(--color-muted); } dd { margin: var(--space-xs) 0 0; overflow-wrap: anywhere; }
     .history { display: grid; gap: var(--space-md); } .table-scroll { overflow-x: auto; } table { border-collapse: collapse; min-width: 600px; width: 100%; } caption { text-align: left; padding-bottom: var(--space-sm); } th, td { border-bottom: 1px solid var(--color-border); padding: var(--space-sm); text-align: left; vertical-align: top; } time { font-variant-numeric: tabular-nums; }
-    @media (min-width: 640px) { .page { padding-left: var(--space-lg); padding-right: var(--space-lg); } .page-header { align-items: center; flex-direction: row; justify-content: space-between; } .health-grid { grid-template-columns: repeat(2, 1fr); } .job-metadata { grid-template-columns: repeat(2, 1fr); } }
+    @media (min-width: 640px) { .page { padding-left: var(--space-lg); padding-right: var(--space-lg); } .page-header { align-items: center; flex-direction: row; justify-content: space-between; } .health-grid, .guild-list { grid-template-columns: repeat(2, 1fr); } .job-metadata { grid-template-columns: repeat(2, 1fr); } }
     @media (min-width: 1024px) { .health-grid { grid-template-columns: repeat(4, 1fr); } .job-metadata { grid-template-columns: repeat(4, 1fr); } }
-  </style></head><body><div class="page"><header class="page-header"><div><p class="metadata">UADE Bot</p><h1>Estado del sistema</h1></div><div class="header-actions"><span id="freshness" class="freshness" data-generated-at="${escapeHtml(snapshot.generatedAt)}">Actualizado hace 0 segundos</span><form method="post" action="/logout"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}"><button class="link-button" type="submit">Cerrar sesión</button></form></div></header><div id="refresh-error" class="refresh-error" role="status" hidden><span>No se pudieron actualizar los datos. Se conserva la última información disponible.</span><button id="refresh-retry" class="link-button" type="button">Reintentar ahora</button></div><main id="dashboard-data" aria-busy="false"><div class="refresh-progress" aria-hidden="true"></div><section class="health-section" aria-labelledby="health-title"><h2 id="health-title">Resumen de salud</h2><div class="health-grid">${healthCards(snapshot)}</div></section><section id="accounts-section" class="accounts-section" aria-labelledby="accounts-title"><h2 id="accounts-title">Cuentas y búsquedas</h2><div id="accounts-list">${content}</div></section></main><p id="refresh-status" class="visually-hidden" aria-live="polite"></p></div><script nonce="${escapeHtml(cspNonce)}">${dashboardClientScript()}</script></body></html>`;
+  </style></head><body><div class="page"><header class="page-header"><div><p class="metadata">UADE Bot</p><h1>Estado del sistema</h1></div><div class="header-actions"><span id="freshness" class="freshness" data-generated-at="${escapeHtml(snapshot.generatedAt)}">Actualizado hace 0 segundos</span><form method="post" action="/logout"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}"><button class="link-button" type="submit">Cerrar sesión</button></form></div></header><div id="refresh-error" class="refresh-error" role="status" hidden><span>No se pudieron actualizar los datos. Se conserva la última información disponible.</span><button id="refresh-retry" class="link-button" type="button">Reintentar ahora</button></div><main id="dashboard-data" aria-busy="false"><div class="refresh-progress" aria-hidden="true"></div><section class="health-section" aria-labelledby="health-title"><h2 id="health-title">Resumen de salud</h2><div class="health-grid">${healthCards(snapshot)}</div></section>${renderGuilds(snapshot)}<section id="accounts-section" class="accounts-section" aria-labelledby="accounts-title"><h2 id="accounts-title">Cuentas y búsquedas</h2><div id="accounts-list">${content}</div></section></main><p id="refresh-status" class="visually-hidden" aria-live="polite"></p></div><script nonce="${escapeHtml(cspNonce)}">${dashboardClientScript()}</script></body></html>`;
 }
 
 export function renderSafeError({ cspNonce }) {

@@ -173,6 +173,18 @@ function cachedDisplayName(client, discordUserId) {
     : `Usuario ${discordUserId}`;
 }
 
+function cachedGuilds(client) {
+  const guildCache = client?.guilds?.cache;
+  const guilds = typeof guildCache?.values === 'function' ? [...guildCache.values()] : [];
+  return guilds
+    .map((guild) => ({
+      id: typeof guild?.id === 'string' ? guild.id : null,
+      name: safeMateriaNombre(guild?.name) ?? 'Servidor sin nombre',
+    }))
+    .filter((guild) => guild.id)
+    .sort((left, right) => left.name.localeCompare(right.name, 'es') || left.id.localeCompare(right.id));
+}
+
 function projectHistory(records) {
   return records
     .slice(0, 10)
@@ -280,6 +292,7 @@ export function buildDashboardSnapshot({
 
   return {
     generatedAt,
+    botGuilds: cachedGuilds(client),
     health: {
       activeAccounts,
       pausedAccounts: {

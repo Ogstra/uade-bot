@@ -5,6 +5,10 @@ import { createRefreshController, escapeHtml, renderDashboardPage, renderLoginPa
 
 const snapshot = {
   generatedAt: 1_750_000_000_000,
+  botGuilds: [
+    { id: 'guild-1', name: 'og2' },
+    { id: 'guild-2', name: 'Servidor <script>alert(1)</script>' },
+  ],
   health: {
     activeAccounts: 1,
     pausedAccounts: { total: 1, breakdown: [{ code: 'rate_limited', label: 'Límite de UADE', count: 1 }] },
@@ -55,6 +59,10 @@ test('dashboard SSR renders semantic, keyed, escaped operational content and exa
   assert.match(html, /<main\b/);
   assert.match(html, /Estado del sistema/);
   assert.equal((html.match(/class="health-card"/g) ?? []).length, 4);
+  assert.match(html, /Servidores del bot/);
+  assert.match(html, /2 servidor\(es\)/);
+  assert.match(html, /data-guild-id="guild-1"/);
+  assert.match(html, /Servidor &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.match(html, /<details[^>]*data-account-id="user-1"[^>]*open/);
   assert.match(html, /data-job-id="7"/);
   assert.match(html, /data-field="job-status"/);
@@ -160,6 +168,8 @@ test('browser script patches stable keys without replacing the dashboard root or
   assert.match(script, /credentials: 'same-origin'/);
   assert.match(script, /cache: 'no-store'/);
   assert.match(script, /data-account-id/);
+  assert.match(script, /patchGuilds\(next\.botGuilds\)/);
+  assert.match(script, /dataset\.guildId/);
   assert.match(script, /data-job-id/);
   assert.match(script, /textContent/);
   assert.match(script, /visibilitychange/);

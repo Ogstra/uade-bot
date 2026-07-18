@@ -110,6 +110,12 @@ test('buildDashboardSnapshot groups jobs by account and derives health from safe
         throw new Error('REST must not be called');
       },
     },
+    guilds: {
+      cache: new Map([
+        ['guild-b', { id: 'guild-b', name: 'OG2' }],
+        ['guild-a', { id: 'guild-a', name: 'Servidor <script>bad()</script>' }],
+      ]),
+    },
   };
   const repositories = {
     listAllJobs: () => jobs,
@@ -127,6 +133,10 @@ test('buildDashboardSnapshot groups jobs by account and derives health from safe
   const snapshot = buildDashboardSnapshot({ db: {}, client, now: () => 500, repositories });
 
   assert.equal(snapshot.generatedAt, 500);
+  assert.deepEqual(snapshot.botGuilds, [
+    { id: 'guild-b', name: 'OG2' },
+    { id: 'guild-a', name: 'Servidor <script>bad()</script>' },
+  ]);
   assert.deepEqual(snapshot.health, {
     activeAccounts: 1,
     pausedAccounts: {
@@ -175,6 +185,7 @@ test('buildDashboardSnapshot returns a stable empty state and safe unknown pause
 
   assert.deepEqual(buildDashboardSnapshot({ db: {}, client: null, now: 700, repositories }), {
     generatedAt: 700,
+    botGuilds: [],
     health: {
       activeAccounts: 0,
       pausedAccounts: {
