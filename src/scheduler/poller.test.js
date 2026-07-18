@@ -1,4 +1,4 @@
-import { test, after } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createDatabase } from '../db/database.js';
@@ -8,31 +8,8 @@ import { createJob, getJob } from '../db/jobs.repository.js';
 import { getMateriaNombre } from '../db/materias.repository.js';
 import { listHistoryForJob } from '../db/poll-history.repository.js';
 import { encryptCredentials } from '../crypto/credentials-crypto.js';
-import { getBrowser } from '../automation/browser.js';
 import { pollOnce, attemptAutoRelink } from './poller.js';
-
-// A 'verified' outcome flows through parseResults(), which launches (and
-// reuses) the shared headless Chromium instance — same reason as
-// src/automation/parse-results.test.js's after() hook: without an explicit
-// close, that Chromium process outlives this test run and keeps
-// `node --test` from exiting on its own.
-after(async () => {
-  const browser = await getBrowser();
-  await browser.close();
-});
-
-// pollOnce internally calls loadEnv() to read CREDENTIALS_MASTER_KEY (and,
-// via the EnvSchema, UADE_USERNAME/UADE_PASSWORD are still required fields).
-// These are set here, BEFORE any loadEnv() call, so this test is
-// deterministic regardless of the developer's local .env contents — dotenv's
-// config() never overrides a process.env value that's already set.
-process.env.UADE_USERNAME = process.env.UADE_USERNAME || 'test-username-placeholder';
-process.env.UADE_PASSWORD = process.env.UADE_PASSWORD || 'test-password-placeholder';
 const MASTER_KEY = randomBytes(32).toString('hex');
-process.env.CREDENTIALS_MASTER_KEY = MASTER_KEY;
-process.env.DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || 'test-discord-token';
-process.env.DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || 'test-discord-client-id';
-process.env.DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID || 'test-discord-guild-id';
 
 const FILTROS = {
   materiaCodigo: '3.1.050',
@@ -55,20 +32,43 @@ function seedJob(db, discordUserId = 'user-1') {
   return createJob(db, { discordUserId, filtros: FILTROS });
 }
 
+function pollDeps(runHttpSearchFn, overrides = {}) {
+  return {
+    masterKey: MASTER_KEY,
+    withHttpSessionFn: async (credentials, run) => run({ request: async () => { throw new Error('unexpected request'); } }),
+    runHttpSearchFn,
+    ...overrides,
+  };
+}
+
+test('pollOnce requires an explicit masterKey and never falls back to process configuration', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    await assert.rejects(
+      pollOnce(db, job.id, {
+        withHttpSessionFn: async (credentials, run) => run({}),
+        runHttpSearchFn: async () => ({ status: 'verified', html: '<table></table>' }),
+      }),
+      /masterKey/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
 test('pollOnce persists a no_vacancies outcome for a verified search with zero parsed vacancies', async () => {
   const db = createDatabase(':memory:');
   try {
     const job = seedJob(db);
     const before = Date.now();
 
-    const runSearchFn = async () => ({
+    const runHttpSearchFn = async () => ({
       status: 'verified',
       html: '<table></table>',
       materiaNombre: 'Fisica II',
     });
-    const withUadeContextFn = async (creds, run) => run({});
-
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn });
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
 
     const updated = getJob(db, job.id);
     assert.equal(updated.lastOutcome, JSON.stringify({ outcome: 'no_vacancies', materiaNombre: 'Fisica II' }));
@@ -83,16 +83,15 @@ test('pollOnce writes current state and bounded history through one timestamped 
   const db = createDatabase(':memory:');
   try {
     const job = seedJob(db);
-    const withUadeContextFn = async (creds, run) => run({});
     const noVacancies = async () => ({ status: 'verified', html: '<table></table>' });
 
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn: noVacancies });
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn: noVacancies });
+    await pollOnce(db, job.id, pollDeps(noVacancies));
+    await pollOnce(db, job.id, pollDeps(noVacancies));
 
     assert.equal(listHistoryForJob(db, job.id).length, 1);
 
     const invalidCredentials = async () => ({ status: 'invalid_credentials' });
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn: invalidCredentials });
+    await pollOnce(db, job.id, pollDeps(invalidCredentials));
 
     const history = listHistoryForJob(db, job.id);
     const updated = getJob(db, job.id);
@@ -108,10 +107,8 @@ test('pollOnce does not cache a materia name when the poll result carries none',
   try {
     const job = seedJob(db);
 
-    const runSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
-    const withUadeContextFn = async (creds, run) => run({});
-
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn });
+    const runHttpSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
 
     assert.equal(getMateriaNombre(db, FILTROS.materiaCodigo), null);
   } finally {
@@ -124,13 +121,45 @@ test('pollOnce persists an invalid_credentials outcome', async () => {
   try {
     const job = seedJob(db);
 
-    const runSearchFn = async () => ({ status: 'invalid_credentials' });
-    const withUadeContextFn = async (creds, run) => run({});
-
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn });
+    const runHttpSearchFn = async () => ({ status: 'invalid_credentials' });
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
 
     const updated = getJob(db, job.id);
     assert.equal(updated.lastOutcome, JSON.stringify({ outcome: 'invalid_credentials' }));
+  } finally {
+    db.close();
+  }
+});
+
+test('pollOnce preserves search_failed mismatch instead of classifying an unverified response as no_vacancies', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    const runHttpSearchFn = async () => ({ status: 'search_failed', reason: 'postback_mismatch' });
+
+    const outcome = await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
+
+    assert.deepEqual(outcome, { outcome: 'search_failed', reason: 'postback_mismatch' });
+    assert.equal(getJob(db, job.id).lastOutcome, JSON.stringify(outcome));
+    assert.equal(getUser(db, job.discordUserId).pauseReason, null);
+  } finally {
+    db.close();
+  }
+});
+
+test('pollOnce preserves the rate_limited account backoff state', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    const runHttpSearchFn = async () => ({ status: 'rate_limited' });
+
+    const outcome = await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
+
+    assert.deepEqual(outcome, { outcome: 'rate_limited' });
+    const user = getUser(db, job.discordUserId);
+    assert.equal(user.pauseReason, 'rate_limited');
+    assert.equal(user.backoffAttempt, 1);
+    assert.ok(user.pauseUntil > Date.now());
   } finally {
     db.close();
   }
@@ -141,10 +170,8 @@ test('pollOnce never leaves plaintext credentials in any DB table after resolvin
   try {
     const job = seedJob(db);
 
-    const runSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
-    const withUadeContextFn = async (creds, run) => run({});
-
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn });
+    const runHttpSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
 
     const allRows = [
       ...db.prepare('SELECT * FROM users').all(),
@@ -161,7 +188,7 @@ test('pollOnce never leaves plaintext credentials in any DB table after resolvin
   }
 });
 
-test('pollOnce decrypts credentials transiently and passes them to withUadeContextFn/runSearchFn', async () => {
+test('pollOnce decrypts credentials transiently and passes them to withHttpSessionFn/runHttpSearchFn', async () => {
   const db = createDatabase(':memory:');
   try {
     const job = seedJob(db);
@@ -169,16 +196,16 @@ test('pollOnce decrypts credentials transiently and passes them to withUadeConte
     let capturedCreds;
     let capturedSearchArgs;
 
-    const withUadeContextFn = async (creds, run) => {
+    const withHttpSessionFn = async (creds, run) => {
       capturedCreds = creds;
       return run({});
     };
-    const runSearchFn = async (context, filtros, options) => {
+    const runHttpSearchFn = async (session, filtros, options) => {
       capturedSearchArgs = { filtros, options };
       return { status: 'verified', html: '<table></table>' };
     };
 
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn });
+    await pollOnce(db, job.id, { masterKey: MASTER_KEY, withHttpSessionFn, runHttpSearchFn });
 
     assert.deepEqual(capturedCreds, {
       username: PLAINTEXT.uadeUsername,
@@ -198,10 +225,8 @@ test('pollOnce persists needs_credentials account-level pause state after an inv
     const before = getUser(db, job.discordUserId);
     assert.equal(before.pauseReason, null);
 
-    const runSearchFn = async () => ({ status: 'invalid_credentials' });
-    const withUadeContextFn = async (creds, run) => run({});
-
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn });
+    const runHttpSearchFn = async () => ({ status: 'invalid_credentials' });
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn));
 
     const after = getUser(db, job.discordUserId);
     assert.equal(after.pauseReason, 'needs_credentials');
@@ -222,10 +247,8 @@ test('pollOnce never calls attemptAutoRelinkFn for a verified/no_vacancies outco
       relinkCalls += 1;
       return { status: 'fallback' };
     };
-    const runSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
-    const withUadeContextFn = async (creds, run) => run({});
-
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+    const runHttpSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
 
     assert.equal(relinkCalls, 0);
   } finally {
@@ -242,12 +265,10 @@ test('pollOnce never calls attemptAutoRelinkFn for an invalid_credentials/rate_l
       relinkCalls += 1;
       return { status: 'fallback' };
     };
-    const withUadeContextFn = async (creds, run) => run({});
-
     for (const status of ['invalid_credentials', 'rate_limited', 'search_failed']) {
       relinkCalls = 0;
-      const runSearchFn = async () => (status === 'search_failed' ? { status, reason: 'postback_timeout' } : { status });
-      await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+      const runHttpSearchFn = async () => (status === 'search_failed' ? { status, reason: 'postback_timeout' } : { status });
+      await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
       assert.equal(relinkCalls, 0, `attemptAutoRelinkFn must not be called for outcome "${status}"`);
     }
   } finally {
@@ -268,10 +289,8 @@ test('pollOnce calls attemptAutoRelinkFn exactly once, with the job and the alre
       capturedCreds = creds;
       return { status: 'fallback' };
     };
-    const runSearchFn = async () => ({ status: 'stale_start_url' });
-    const withUadeContextFn = async (creds, run) => run({});
-
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+    const runHttpSearchFn = async () => ({ status: 'stale_start_url' });
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
 
     assert.equal(relinkCalls, 1);
     assert.equal(capturedJob.id, job.id);
@@ -290,10 +309,8 @@ test('a successful automatic relink clears the account pause state after a stale
   try {
     const job = seedJob(db);
     const attemptAutoRelinkFn = async () => ({ status: 'success' });
-    const runSearchFn = async () => ({ status: 'stale_start_url' });
-    const withUadeContextFn = async (creds, run) => run({});
-
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+    const runHttpSearchFn = async () => ({ status: 'stale_start_url' });
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
 
     const after = getUser(db, job.discordUserId);
     assert.equal(after.pauseReason, null);
@@ -307,10 +324,8 @@ test('a fallback automatic relink preserves the exact pre-existing needs_new_sta
   try {
     const job = seedJob(db);
     const attemptAutoRelinkFn = async () => ({ status: 'fallback' });
-    const runSearchFn = async () => ({ status: 'stale_start_url' });
-    const withUadeContextFn = async (creds, run) => run({});
-
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+    const runHttpSearchFn = async () => ({ status: 'stale_start_url' });
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
 
     const after = getUser(db, job.discordUserId);
     assert.equal(after.pauseReason, 'needs_new_start_url');
@@ -324,10 +339,8 @@ test('a successful automatic relink never mutates the persisted outcome — last
   try {
     const job = seedJob(db);
     const attemptAutoRelinkFn = async () => ({ status: 'success' });
-    const runSearchFn = async () => ({ status: 'stale_start_url' });
-    const withUadeContextFn = async (creds, run) => run({});
-
-    await pollOnce(db, job.id, { withUadeContextFn, runSearchFn, attemptAutoRelinkFn });
+    const runHttpSearchFn = async () => ({ status: 'stale_start_url' });
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
 
     const updated = getJob(db, job.id);
     assert.equal(updated.lastOutcome, JSON.stringify({ outcome: 'stale_start_url' }));
