@@ -211,6 +211,6 @@ test('normalizes redirect, timeout, and response cap failures without native det
   const timeout = await searchAgainst(t, { slowPost: true }, { timeoutMs: 10 });
   assert.deepEqual(timeout.result, { status: 'search_failed', reason: 'transport_timeout' });
 
-  const oversized = await searchAgainst(t, { postBody: postbackFound }, { maxBodyBytes: Buffer.byteLength(initialForm) + 10 });
+  const oversized = await searchAgainst(t, { postBody: postbackFound.repeat(10) }, { maxBodyBytes: Buffer.byteLength(initialForm) + 10 });
   assert.deepEqual(oversized.result, { status: 'search_failed', reason: 'response_too_large' });
 });
