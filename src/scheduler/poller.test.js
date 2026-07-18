@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { createDatabase } from '../db/database.js';
 import { upsertUser, getUser } from '../db/users.repository.js';
 import { upsertCredentials } from '../db/credentials.repository.js';
@@ -243,14 +244,20 @@ test('pollOnce never calls attemptAutoRelinkFn for a verified/no_vacancies outco
   try {
     const job = seedJob(db);
     let relinkCalls = 0;
+    let loaderCalls = 0;
     const attemptAutoRelinkFn = async () => {
       relinkCalls += 1;
       return { status: 'fallback' };
     };
+    const loadRelinkFn = async () => {
+      loaderCalls += 1;
+      return { attemptAutoRelink: attemptAutoRelinkFn };
+    };
     const runHttpSearchFn = async () => ({ status: 'verified', html: '<table></table>' });
-    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn, loadRelinkFn }));
 
     assert.equal(relinkCalls, 0);
+    assert.equal(loaderCalls, 0);
   } finally {
     db.close();
   }
@@ -261,15 +268,21 @@ test('pollOnce never calls attemptAutoRelinkFn for an invalid_credentials/rate_l
   try {
     const job = seedJob(db);
     let relinkCalls = 0;
+    let loaderCalls = 0;
     const attemptAutoRelinkFn = async () => {
       relinkCalls += 1;
       return { status: 'fallback' };
     };
+    const loadRelinkFn = async () => {
+      loaderCalls += 1;
+      return { attemptAutoRelink: attemptAutoRelinkFn };
+    };
     for (const status of ['invalid_credentials', 'rate_limited', 'search_failed']) {
       relinkCalls = 0;
       const runHttpSearchFn = async () => (status === 'search_failed' ? { status, reason: 'postback_timeout' } : { status });
-      await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
+      await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn, loadRelinkFn }));
       assert.equal(relinkCalls, 0, `attemptAutoRelinkFn must not be called for outcome "${status}"`);
+      assert.equal(loaderCalls, 0, `loadRelinkFn must not be called for outcome "${status}"`);
     }
   } finally {
     db.close();
@@ -281,6 +294,7 @@ test('pollOnce calls attemptAutoRelinkFn exactly once, with the job and the alre
   try {
     const job = seedJob(db);
     let relinkCalls = 0;
+    let loaderCalls = 0;
     let capturedJob;
     let capturedCreds;
     const attemptAutoRelinkFn = async (dbArg, jobArg, creds) => {
@@ -289,9 +303,14 @@ test('pollOnce calls attemptAutoRelinkFn exactly once, with the job and the alre
       capturedCreds = creds;
       return { status: 'fallback' };
     };
+    const loadRelinkFn = async () => {
+      loaderCalls += 1;
+      return { attemptAutoRelink: attemptAutoRelinkFn };
+    };
     const runHttpSearchFn = async () => ({ status: 'stale_start_url' });
-    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn, loadRelinkFn }));
 
+    assert.equal(loaderCalls, 1);
     assert.equal(relinkCalls, 1);
     assert.equal(capturedJob.id, job.id);
     assert.deepEqual(capturedCreds, {
@@ -302,6 +321,15 @@ test('pollOnce calls attemptAutoRelinkFn exactly once, with the job and the alre
   } finally {
     db.close();
   }
+});
+
+test('poller composition keeps relink and browser modules behind a dynamic stale-only boundary', async () => {
+  const source = await readFile(new URL('./poller.js', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(source, /^import .*automation\/browser\.js/m);
+  assert.doesNotMatch(source, /^import .*automation\/sso-link\.js/m);
+  assert.doesNotMatch(source, /^import .*\.\/relink\.js/m);
+  assert.match(source, /import\(['"]\.\/relink\.js['"]\)/);
 });
 
 test('a successful automatic relink clears the account pause state after a stale_start_url poll (no needs_new_start_url pause, no DM)', async () => {
