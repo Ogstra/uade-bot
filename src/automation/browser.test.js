@@ -40,6 +40,10 @@ test('routine entrypoint composition has no eager dotenv or Playwright import', 
 test('browser boundary keeps plain-context cleanup explicit', async () => {
   const source = await readSource('./browser.js');
 
+  assert.match(source, /export function createBrowserLifecycle/);
+  assert.match(source, /import\(['"]playwright['"]\)/);
+  assert.doesNotMatch(source, /^import\s+{\s*chromium\s*}\s+from\s+['"]playwright['"]/m);
   assert.match(source, /export async function withPlainContext/);
   assert.match(source, /finally\s*{[\s\S]*?context\.close\(\)/);
+  assert.doesNotMatch(source, /withUadeContext/);
 });
