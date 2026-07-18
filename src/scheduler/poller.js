@@ -169,13 +169,20 @@ export async function pollOnce(
   // this call already decrypted above, never re-reading/re-decrypting them.
   let relinkSucceeded = false;
   if (outcome.outcome === 'stale_start_url') {
-    const { attemptAutoRelink } = await loadRelinkFn();
-    const relinkResult = await attemptAutoRelink(db, job, {
-      username: uadeUsername,
-      password: uadePassword,
-      masterKey,
-    });
-    relinkSucceeded = relinkResult.status === 'success';
+    try {
+      const { attemptAutoRelink } = await loadRelinkFn();
+      const relinkResult = await attemptAutoRelink(db, job, {
+        username: uadeUsername,
+        password: uadePassword,
+        masterKey,
+      });
+      relinkSucceeded = relinkResult.status === 'success';
+    } catch {
+      logger.warn(
+        { event: 'auto_relink_boundary_failed', jobId: job.id, reason: 'relink_exception' },
+        'Automatic SSO relink boundary failed; preserving manual fallback state',
+      );
+    }
   }
 
   // D-04: this single write pauses/resumes EVERY job tied to this account,

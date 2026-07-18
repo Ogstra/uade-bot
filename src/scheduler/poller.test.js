@@ -389,6 +389,34 @@ test('a fallback automatic relink preserves the exact pre-existing needs_new_sta
   }
 });
 
+test('exceptional relink loader and callback failures preserve the manual fallback pause', async () => {
+  const failingLoaders = [
+    async () => {
+      throw new Error('module details must stay private');
+    },
+    async () => ({
+      attemptAutoRelink: async () => {
+        throw new Error('callback details must stay private');
+      },
+    }),
+  ];
+
+  for (const loadRelinkFn of failingLoaders) {
+    const db = createDatabase(':memory:');
+    try {
+      const job = seedJob(db);
+      const runHttpSearchFn = async () => ({ status: 'stale_start_url' });
+
+      const outcome = await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { loadRelinkFn }));
+
+      assert.deepEqual(outcome, { outcome: 'stale_start_url' });
+      assert.equal(getUser(db, job.discordUserId).pauseReason, 'needs_new_start_url');
+    } finally {
+      db.close();
+    }
+  }
+});
+
 test('a successful automatic relink never mutates the persisted outcome — lastOutcome still reflects stale_start_url', async () => {
   const db = createDatabase(':memory:');
   try {
@@ -484,6 +512,47 @@ test('attemptAutoRelink never calls rotateCredentialValuesFn and returns only { 
 
     assert.deepEqual(result, { status: 'fallback' });
     assert.equal(rotateCalls, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('attemptAutoRelink maps context, cleanup, callback, and credential rotation exceptions to fallback', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    const job = seedJob(db);
+    const credentials = { username: 'someuser', password: 'somepass', masterKey: MASTER_KEY };
+    const cases = [
+      {
+        withPlainContextFn: async () => {
+          throw new Error('context creation failed with sensitive detail');
+        },
+      },
+      {
+        withPlainContextFn: async (run) => {
+          await run({});
+          throw new Error('context cleanup failed with sensitive detail');
+        },
+        obtainStartUrlFn: async () => ({ status: 'failed', reason: 'private reason' }),
+      },
+      {
+        withPlainContextFn: async (run) => run({}),
+        obtainStartUrlFn: async () => {
+          throw new Error('callback failed with sensitive detail');
+        },
+      },
+      {
+        withPlainContextFn: async (run) => run({}),
+        obtainStartUrlFn: async () => ({ status: 'success', startUrl: 'https://example.invalid/private' }),
+        rotateCredentialValuesFn: () => {
+          throw new Error('rotation failed with sensitive detail');
+        },
+      },
+    ];
+
+    for (const deps of cases) {
+      assert.deepEqual(await attemptAutoRelink(db, job, credentials, deps), { status: 'fallback' });
+    }
   } finally {
     db.close();
   }

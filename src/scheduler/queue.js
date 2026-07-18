@@ -126,15 +126,19 @@ export function createScheduler({
   // with several other active jobs could take multiple full POLL_INTERVAL_MS
   // cycles before that job was ever polled at all (confirmed live: a
   // freshly-created search sat at "sin sondeos" well past its expected
-  // immediate poll). This map remembers the most recent such blocked
-  // request per account and fires it the moment the in-flight poll finishes,
-  // instead of losing it.
+  // immediate poll). This map remembers every distinct blocked immediate
+  // job per account in insertion order and drains them serially.
   const pendingImmediate = new Map();
 
   function enqueuePoll(job, { event = 'scheduled' } = {}) {
     if (inFlightAccountIds.has(job.discordUserId)) {
       if (event === 'immediate') {
-        pendingImmediate.set(job.discordUserId, job);
+        let accountQueue = pendingImmediate.get(job.discordUserId);
+        if (!accountQueue) {
+          accountQueue = new Map();
+          pendingImmediate.set(job.discordUserId, accountQueue);
+        }
+        accountQueue.set(job.id, job);
       }
       return false;
     }
@@ -160,9 +164,13 @@ export function createScheduler({
       })
       .finally(() => {
         inFlightAccountIds.delete(job.discordUserId);
-        const queuedJob = pendingImmediate.get(job.discordUserId);
+        const accountQueue = pendingImmediate.get(job.discordUserId);
+        const queuedJob = accountQueue?.values().next().value;
         if (queuedJob) {
-          pendingImmediate.delete(job.discordUserId);
+          accountQueue.delete(queuedJob.id);
+          if (accountQueue.size === 0) {
+            pendingImmediate.delete(job.discordUserId);
+          }
           enqueuePoll(queuedJob, { event: 'immediate' });
         }
       });

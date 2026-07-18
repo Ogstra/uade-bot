@@ -248,6 +248,59 @@ test('scheduler.pollJobNow queues behind an in-flight poll for the same account 
   }
 });
 
+test('scheduler.pollJobNow drains four same-account immediate jobs once in order', async () => {
+  const db = createDatabase(':memory:');
+  try {
+    upsertUser(db, 'user-1');
+    const jobs = ['3.1.050', '3.1.051', '3.1.052', '3.1.053'].map((materiaCodigo, index) =>
+      createJob(db, { discordUserId: 'user-1', filtros: { ...FILTROS, materiaCodigo }, label: String(index) }));
+
+    let releaseFirst;
+    const firstGate = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    let signalFirstStarted;
+    const firstStarted = new Promise((resolve) => {
+      signalFirstStarted = resolve;
+    });
+    let signalAllPolled;
+    const allPolled = new Promise((resolve) => {
+      signalAllPolled = resolve;
+    });
+    const polled = [];
+    const scheduler = createScheduler({
+      db,
+      intervalMs: 1000000,
+      concurrency: 2,
+      pollOnceFn: async (_db, jobId) => {
+        if (jobId === jobs[0].id) {
+          signalFirstStarted();
+          await firstGate;
+        }
+        polled.push(jobId);
+        if (polled.length === jobs.length) signalAllPolled();
+        return { outcome: 'no_vacancies' };
+      },
+    });
+
+    assert.equal(scheduler.pollJobNow(jobs[0]), true);
+    await firstStarted;
+    for (const job of jobs.slice(1)) {
+      assert.equal(scheduler.pollJobNow(job), false);
+    }
+    assert.equal(scheduler.pollJobNow(jobs[1]), false, 'duplicate job id is deduplicated');
+    releaseFirst();
+    await Promise.race([
+      allPolled,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('immediate queue did not drain')), 500)),
+    ]);
+
+    assert.deepEqual(polled, jobs.map((job) => job.id));
+  } finally {
+    db.close();
+  }
+});
+
 test('createScheduler does not call onJobPolled when pollOnceFn rejects', async () => {
   const db = createDatabase(':memory:');
   try {

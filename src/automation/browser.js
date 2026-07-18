@@ -2,7 +2,7 @@ import logger from '../logger.js';
 
 const LAUNCH_OPTIONS = Object.freeze({
   headless: true,
-  args: ['--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage'],
+  args: ['--disable-gpu', '--disable-dev-shm-usage'],
 });
 
 async function launchChromium() {
@@ -70,13 +70,18 @@ export function createBrowserLifecycle({
   }
 
   async function withPlainContext(run) {
-    const browser = await getBrowser();
-    const context = await browser.newContext();
-
+    runtimeLogger.info({ event: 'browser_launch_start' }, 'Launching exceptional SSO Chromium browser');
+    const browser = await launchBrowser();
     try {
-      return await run(context);
+      const context = await browser.newContext();
+      try {
+        return await run(context);
+      } finally {
+        await context.close();
+      }
     } finally {
-      await context.close();
+      await browser.close();
+      runtimeLogger.info({ event: 'browser_closed' }, 'Exceptional SSO Chromium browser closed');
     }
   }
 

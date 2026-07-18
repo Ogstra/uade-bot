@@ -46,6 +46,7 @@ test('browser boundary keeps plain-context cleanup explicit', async () => {
   assert.doesNotMatch(source, /^import\s+{\s*chromium\s*}\s+from\s+['"]playwright['"]/m);
   assert.match(source, /export async function withPlainContext/);
   assert.match(source, /finally\s*{[\s\S]*?context\.close\(\)/);
+  assert.doesNotMatch(source, /--no-sandbox/);
   assert.doesNotMatch(source, /withUadeContext/);
 });
 
@@ -82,17 +83,17 @@ function createFakeLifecycle() {
   };
 }
 
-test('SSO plain context closes after a successful callback without Playwright', async () => {
+test('SSO plain context closes its context and browser after a successful callback without Playwright', async () => {
   const lifecycle = createFakeLifecycle();
 
   const result = await lifecycle.withPlainContext(async () => 'ok');
 
   assert.equal(result, 'ok');
   assert.equal(lifecycle.contexts[0].closed, true);
-  assert.deepEqual(lifecycle.counts(), { browserClosed: 0, launches: 1 });
+  assert.deepEqual(lifecycle.counts(), { browserClosed: 1, launches: 1 });
 });
 
-test('SSO plain context closes after a rejected callback without Playwright', async () => {
+test('SSO plain context closes its context and browser after a rejected callback without Playwright', async () => {
   const lifecycle = createFakeLifecycle();
 
   await assert.rejects(
@@ -103,6 +104,25 @@ test('SSO plain context closes after a rejected callback without Playwright', as
   );
 
   assert.equal(lifecycle.contexts[0].closed, true);
+  assert.deepEqual(lifecycle.counts(), { browserClosed: 1, launches: 1 });
+});
+
+test('SSO plain context closes its browser when context creation rejects', async () => {
+  let browserClosed = 0;
+  const lifecycle = createBrowserLifecycle({
+    launchBrowser: async () => ({
+      async newContext() {
+        throw new Error('context failed');
+      },
+      async close() {
+        browserClosed += 1;
+      },
+    }),
+    logger: { info() {}, error() {} },
+  });
+
+  await assert.rejects(lifecycle.withPlainContext(async () => 'unused'), /context failed/);
+  assert.equal(browserClosed, 1);
 });
 
 test('shared SSO browser closes and relaunches lazily through the injected launcher', async () => {
