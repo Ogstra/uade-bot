@@ -1,7 +1,7 @@
 import { CookieJar } from 'tough-cookie';
 
 const PRODUCTION_ORIGIN = 'https://inscripcionespia.uade.edu.ar';
-const DEFAULT_MAX_BODY_BYTES = 109_175;
+const DEFAULT_MAX_BODY_BYTES = 300_000;
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);

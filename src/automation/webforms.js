@@ -95,7 +95,7 @@ const DERIVED_LIMITS = Object.freeze({
   measuredMaxBodyBytes: 87340,
   measuredDeltaChars: 80154,
   measuredDeltaNodes: 17,
-  maxBodyBytes: 109175,
+  maxBodyBytes: 300000,
   maxDeltaChars: 100193,
   maxDeltaNodes: 22,
 });
