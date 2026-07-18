@@ -1,5 +1,5 @@
 import { VacancyRowSchema } from '../schemas.js';
-import { getBrowser } from './browser.js';
+import { load } from 'cheerio/slim';
 import logger from '../logger.js';
 
 // Results rows use one of three classes depending on how the site tags that
@@ -26,14 +26,13 @@ const DIA_HIDDEN_INPUT_SUBSTRINGS = {
  * Extracts every día for which this row's hidden input carries
  * `value="True"`.
  *
- * @param {import('playwright').Locator} row
- * @returns {Promise<string[]>}
+ * @param {import('cheerio').Cheerio<import('domhandler').Element>} row
+ * @returns {string[]}
  */
-async function extractDias(row) {
+function extractDias(row) {
   const dias = [];
   for (const [dia, idSubstring] of Object.entries(DIA_HIDDEN_INPUT_SUBSTRINGS)) {
-    const input = row.locator(`input[id*="${idSubstring}"]`).first();
-    const value = await input.getAttribute('value').catch(() => null);
+    const value = row.find(`input[id*="${idSubstring}"]`).first().attr('value');
     if (value === 'True') {
       dias.push(dia);
     }
@@ -45,36 +44,30 @@ async function extractDias(row) {
  * Extracts a single results row into a raw candidate object (pre-schema-
  * validation) — turno/sede/horario/cupos cell text plus the row's día set.
  *
- * @param {import('playwright').Locator} row
- * @returns {Promise<{ turno: unknown, sede: unknown, horario: unknown, dias: string[], cupos: unknown }>}
+ * @param {import('cheerio').Cheerio<import('domhandler').Element>} row
+ * @returns {{ turno: string, sede: string, horario: string, dias: string[], cupos: number|string }}
  */
-async function extractRow(row) {
-  const [turnoText, sedeText, horarioText, cuposText, dias] = await Promise.all([
-    row.locator('td.tdTurno').first().textContent(),
-    row.locator('td.tdSede').first().textContent(),
-    row.locator('td.tdHorario').first().textContent(),
-    row.locator('td.tdvacantes').first().textContent(),
-    extractDias(row),
-  ]);
+function extractRow(row) {
+  const turnoText = row.find('td.tdTurno').first().text();
+  const sedeText = row.find('td.tdSede').first().text();
+  const horarioText = row.find('td.tdHorario').first().text();
+  const cuposText = row.find('td.tdvacantes').first().text();
 
-  const cuposTrimmed = cuposText?.trim() ?? '';
+  const cuposTrimmed = cuposText.trim();
   const cupos = /^\d+$/.test(cuposTrimmed) ? Number.parseInt(cuposTrimmed, 10) : cuposTrimmed;
 
   return {
-    turno: turnoText?.trim(),
-    sede: sedeText?.trim(),
-    horario: horarioText?.trim(),
-    dias,
+    turno: turnoText.trim(),
+    sede: sedeText.trim(),
+    horario: horarioText.trim(),
+    dias: extractDias(row),
     cupos,
   };
 }
 
 /**
- * Parses a captured `page.content()` HTML snapshot of the UADE results page
- * into a validated `VacancyRow[]`. Opens a fresh, credential-free
- * `BrowserContext` (this is an offline parse of already-captured markup,
- * not a live authenticated request) purely to reuse Playwright's DOM/CSS
- * locator engine instead of hand-rolling an HTML parser.
+ * Parses a captured HTML snapshot of the UADE results page into a validated
+ * `VacancyRow[]` using Cheerio's inert, browserless DOM implementation.
  *
  * A row whose extracted fields fail `VacancyRowSchema` validation is
  * dropped (logged as a warning) rather than crashing the whole parse — a
@@ -85,34 +78,25 @@ async function extractRow(row) {
  * @returns {Promise<import('zod').infer<typeof VacancyRowSchema>[]>}
  */
 export async function parseResults(html) {
-  const browser = await getBrowser();
-  const context = await browser.newContext();
+  const $ = load(html);
+  const vacancies = [];
 
-  try {
-    const page = await context.newPage();
-    await page.setContent(html);
+  for (const element of $(ROW_SELECTOR).toArray()) {
+    const candidate = extractRow($(element));
+    const result = VacancyRowSchema.safeParse(candidate);
 
-    const rows = await page.locator(ROW_SELECTOR).all();
-    const vacancies = [];
-
-    for (const row of rows) {
-      const candidate = await extractRow(row);
-      const result = VacancyRowSchema.safeParse(candidate);
-
-      if (result.success) {
-        vacancies.push(result.data);
-      } else {
-        logger.warn(
-          { event: 'vacancy_row_invalid', candidate, issues: result.error.issues },
-          'Dropping a results row that failed VacancyRowSchema validation'
-        );
-      }
+    if (result.success) {
+      vacancies.push(result.data);
+    } else {
+      const issues = result.error.issues.map(({ code, path }) => ({ code, path }));
+      logger.warn(
+        { event: 'vacancy_row_invalid', issues },
+        'Dropping a results row that failed VacancyRowSchema validation'
+      );
     }
-
-    return vacancies;
-  } finally {
-    await context.close();
   }
+
+  return vacancies;
 }
 
 /**

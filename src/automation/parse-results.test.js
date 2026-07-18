@@ -1,22 +1,10 @@
-import { test, describe, after } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { parseResults, filterVacancies } from './parse-results.js';
-import { getBrowser } from './browser.js';
 import logger from '../logger.js';
-
-// parseResults() launches (and reuses) a shared headless Chromium instance
-// purely to run Playwright's DOM/CSS locator engine over already-captured
-// HTML. Without an explicit close, that Chromium process outlives the test
-// run and keeps `node --test` from exiting on its own (this bit a live
-// debugging session during Plan 01-01 too — see that plan's SUMMARY.md
-// "Issues Encountered").
-after(async () => {
-  const browser = await getBrowser();
-  await browser.close();
-});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
