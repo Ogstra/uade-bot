@@ -7,6 +7,7 @@ set -Eeuo pipefail
 ARCHIVE="${1:-$HOME/uade-bot-code-update.tar.gz}"
 APP_DIR="${APP_DIR:-$HOME/uade-bot}"
 PROCESS_PATTERN='node.*src/bot\.js'
+LOCK_HASH_FILE="$APP_DIR/node_modules/.uade-bot-package-lock.sha256"
 
 if [[ ! -f "$ARCHIVE" ]]; then
   echo "No existe el tarball: $ARCHIVE" >&2
@@ -28,8 +29,20 @@ echo "Extrayendo $(basename "$ARCHIVE")..."
 tar xzf "$ARCHIVE" -C "$HOME"
 cd "$APP_DIR"
 
-echo "Instalando dependencias desde package-lock.json..."
-npm ci --omit=dev
+current_lock_hash="$(sha256sum package-lock.json | awk '{print $1}')"
+installed_lock_hash=""
+if [[ -f "$LOCK_HASH_FILE" ]]; then
+  installed_lock_hash="$(cat "$LOCK_HASH_FILE")"
+fi
+
+if [[ ! -d node_modules || "$installed_lock_hash" != "$current_lock_hash" ]]; then
+  echo "Instalando dependencias desde package-lock.json..."
+  npm ci --omit=dev
+  mkdir -p node_modules
+  printf '%s\n' "$current_lock_hash" > "$LOCK_HASH_FILE"
+else
+  echo "Dependencias sin cambios; se omite npm ci."
+fi
 
 echo "Iniciando bot desacoplado..."
 nohup npm run bot > bot.log 2>&1 < /dev/null &
