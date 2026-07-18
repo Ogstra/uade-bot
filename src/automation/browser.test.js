@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createBrowserLifecycle } from './browser.js';
 
 const readSource = (relativePath) => readFile(new URL(relativePath, import.meta.url), 'utf8');
 
@@ -46,4 +47,71 @@ test('browser boundary keeps plain-context cleanup explicit', async () => {
   assert.match(source, /export async function withPlainContext/);
   assert.match(source, /finally\s*{[\s\S]*?context\.close\(\)/);
   assert.doesNotMatch(source, /withUadeContext/);
+});
+
+function createFakeLifecycle() {
+  const contexts = [];
+  let browserClosed = 0;
+  let launches = 0;
+  const browser = {
+    async newContext() {
+      const context = {
+        closed: false,
+        async close() {
+          this.closed = true;
+        },
+      };
+      contexts.push(context);
+      return context;
+    },
+    async close() {
+      browserClosed += 1;
+    },
+  };
+  const lifecycle = createBrowserLifecycle({
+    launchBrowser: async () => {
+      launches += 1;
+      return browser;
+    },
+    logger: { info() {}, error() {} },
+  });
+  return {
+    ...lifecycle,
+    contexts,
+    counts: () => ({ browserClosed, launches }),
+  };
+}
+
+test('SSO plain context closes after a successful callback without Playwright', async () => {
+  const lifecycle = createFakeLifecycle();
+
+  const result = await lifecycle.withPlainContext(async () => 'ok');
+
+  assert.equal(result, 'ok');
+  assert.equal(lifecycle.contexts[0].closed, true);
+  assert.deepEqual(lifecycle.counts(), { browserClosed: 0, launches: 1 });
+});
+
+test('SSO plain context closes after a rejected callback without Playwright', async () => {
+  const lifecycle = createFakeLifecycle();
+
+  await assert.rejects(
+    lifecycle.withPlainContext(async () => {
+      throw new Error('boom');
+    }),
+    /boom/,
+  );
+
+  assert.equal(lifecycle.contexts[0].closed, true);
+});
+
+test('shared SSO browser closes and relaunches lazily through the injected launcher', async () => {
+  const lifecycle = createFakeLifecycle();
+
+  const first = await lifecycle.getBrowser();
+  assert.equal(await lifecycle.getBrowser(), first);
+  await lifecycle.closeBrowser();
+  await lifecycle.getBrowser();
+
+  assert.deepEqual(lifecycle.counts(), { browserClosed: 1, launches: 2 });
 });
