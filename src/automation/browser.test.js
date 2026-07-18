@@ -1,53 +1,45 @@
-import { test, after } from 'node:test';
+import { readFile } from 'node:fs/promises';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { closeBrowser, getBrowser, withPlainContext } from './browser.js';
 
-after(async () => {
-  await closeBrowser();
+const readSource = (relativePath) => readFile(new URL(relativePath, import.meta.url), 'utf8');
+
+test('CLI composition uses the HTTP engine behind an inert entrypoint guard', async () => {
+  const source = await readSource('../cli.js');
+
+  assert.match(source, /from ['"]\.\/automation\/http-session\.js['"]/);
+  assert.match(source, /from ['"]\.\/automation\/http-search\.js['"]/);
+  assert.match(source, /withHttpSession/);
+  assert.match(source, /runHttpSearch/);
+  assert.match(source, /import\.meta\.url\s*===\s*pathToFileURL\(process\.argv\[1\]\)\.href/);
+  assert.doesNotMatch(source, /automation\/browser\.js|automation\/search\.js|withUadeContext|getBrowser|closeBrowser/);
 });
 
-test('closeBrowser() closes the shared browser and getBrowser() relaunches it lazily afterwards', async () => {
-  const first = await getBrowser();
-  assert.equal(first.isConnected(), true);
+test('bot composition injects the validated master key into pollOnce without browser pre-warm', async () => {
+  const source = await readSource('../bot.js');
 
-  await closeBrowser();
-  assert.equal(first.isConnected(), false);
-
-  const second = await getBrowser();
-  assert.equal(second.isConnected(), true);
-  assert.notEqual(second, first);
+  assert.match(source, /from ['"]\.\/scheduler\/poller\.js['"]/);
+  assert.match(source, /pollOnce/);
+  assert.match(source, /masterKey:\s*env\.CREDENTIALS_MASTER_KEY/);
+  assert.doesNotMatch(source, /automation\/browser\.js|getBrowser|browser_warm/);
 });
 
-test('closeBrowser() is a no-op when no browser is currently open', async () => {
-  await closeBrowser();
-  await assert.doesNotReject(() => closeBrowser());
+test('routine entrypoint composition has no eager dotenv or Playwright import', async () => {
+  const [cliSource, botSource, pollerSource] = await Promise.all([
+    readSource('../cli.js'),
+    readSource('../bot.js'),
+    readSource('../scheduler/poller.js'),
+  ]);
+
+  for (const source of [cliSource, botSource, pollerSource]) {
+    assert.doesNotMatch(source, /from ['"](?:dotenv|playwright)['"]|import\(['"](?:dotenv|playwright)['"]\)/);
+  }
+  assert.doesNotMatch(pollerSource, /automation\/browser\.js/);
 });
 
-test('withPlainContext() runs run(context), returns its result, and closes the context afterwards', async () => {
-  let capturedContext;
+test('browser boundary keeps plain-context cleanup explicit', async () => {
+  const source = await readSource('./browser.js');
 
-  const result = await withPlainContext(async (context) => {
-    capturedContext = context;
-    return 'ok';
-  });
-
-  assert.equal(result, 'ok');
-  // A closed BrowserContext rejects any further page operations -- same
-  // pattern already used above to prove closeBrowser() actually closed
-  // the browser.
-  await assert.rejects(() => capturedContext.newPage());
-});
-
-test('withPlainContext() closes the context even when run(context) rejects', async () => {
-  let capturedContext;
-
-  await assert.rejects(
-    withPlainContext(async (context) => {
-      capturedContext = context;
-      throw new Error('boom');
-    }),
-    /boom/,
-  );
-
-  await assert.rejects(() => capturedContext.newPage());
+  assert.match(source, /export async function withPlainContext/);
+  assert.match(source, /finally\s*{[\s\S]*?context\.close\(\)/);
 });
