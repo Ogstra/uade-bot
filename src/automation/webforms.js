@@ -84,6 +84,8 @@ const REQUEST_CONTRACT = Object.freeze({
   triggerId: 'ctl00$ContentPlaceHolder1$btnBuscar',
 });
 
+const MATERIA_CATALOG_TRIGGER_SUFFIX = 'btnSeleccionarMaterias';
+
 const DERIVED_LIMITS = Object.freeze({
   source: 'live response bodies measured before in-memory sanitization',
   margin: {
@@ -137,6 +139,10 @@ function extractMateriaFromRow($, row) {
   };
 }
 
+function postBackTargetFromHref(href) {
+  return String(href ?? '').match(/__doPostBack\('([^']+)'/)?.[1] ?? null;
+}
+
 function findSearchForm($) {
   const forms = $('form');
   if (forms.length === 0) {
@@ -156,6 +162,22 @@ function findSearchForm($) {
   return { form: matchingSubmits.first().closest('form'), chosenSubmit: matchingSubmits.first() };
 }
 
+function findMateriaCatalogTrigger($) {
+  const trigger = $(`[id$="${MATERIA_CATALOG_TRIGGER_SUFFIX}"], [name$="$${MATERIA_CATALOG_TRIGGER_SUFFIX}"]`).first();
+  if (trigger.length === 0) {
+    throw webformsError('WEBFORMS_MATERIA_TRIGGER_MISSING');
+  }
+
+  const target = trigger.attr('name')
+    ?? postBackTargetFromHref(trigger.attr('href'))
+    ?? trigger.attr('id')?.replaceAll('_', '$');
+  if (!target) {
+    throw webformsError('WEBFORMS_MATERIA_TRIGGER_MISSING');
+  }
+
+  return { form: trigger.closest('form'), target };
+}
+
 function selectBySemanticSuffix($, form, suffix) {
   return form.find(`select[id$="${suffix}"], select[name$="$${suffix}"]`).first();
 }
@@ -164,7 +186,7 @@ function controlBySemanticSuffix(form, suffix) {
   return form.find(`input[id$="${suffix}"], input[name$="$${suffix}"]`).first();
 }
 
-function serializeSuccessfulControls($, form, chosenSubmit) {
+function serializeSuccessfulControls($, form, chosenSubmit = null) {
   const payload = new URLSearchParams();
 
   form.find('input, select, textarea, button').each((_, element) => {
@@ -192,7 +214,7 @@ function serializeSuccessfulControls($, form, chosenSubmit) {
       return;
     }
     if (type === 'submit' || type === 'image') {
-      if (element === chosenSubmit[0]) {
+      if (element === chosenSubmit?.[0]) {
         payload.append(name, control.attr('value') ?? normalizeText(control.text()));
       }
       return;
@@ -205,6 +227,34 @@ function serializeSuccessfulControls($, form, chosenSubmit) {
   });
 
   return payload;
+}
+
+export function hasMateriaCheckboxes(html) {
+  const $ = load(String(html ?? ''));
+  return $('input[type="checkbox"][id*="chkSeleccionar"]').length > 0;
+}
+
+export function buildMateriaCatalogPayload(html) {
+  const $ = load(String(html ?? ''));
+  const { form, target } = findMateriaCatalogTrigger($);
+  if (form.length === 0) {
+    throw webformsError('WEBFORMS_FORM_MISSING');
+  }
+
+  const payload = serializeSuccessfulControls($, form);
+  payload.set('__EVENTTARGET', target);
+  payload.set('__EVENTARGUMENT', '');
+  const scriptManagerName = form.find('input[type="hidden"][name$="$ScriptManager1"]').attr('name');
+  if (scriptManagerName) {
+    payload.set(scriptManagerName, `ctl00$UpdatePanelContenido|${target}`);
+  }
+
+  return {
+    payload,
+    formAction: form.attr('action') ?? '',
+    requestContract: structuredClone(REQUEST_CONTRACT),
+    derivedLimits: structuredClone(DERIVED_LIMITS),
+  };
 }
 
 export function buildSearchPayload(html, filtros) {

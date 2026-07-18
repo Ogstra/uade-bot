@@ -3,8 +3,10 @@ import { load } from 'cheerio/slim';
 import { FiltrosSchema } from '../schemas.js';
 import { parseDeltaResponse } from './delta-response.js';
 import {
+  buildMateriaCatalogPayload,
   buildSearchPayload,
   extractReflectedSearchState,
+  hasMateriaCheckboxes,
   verifyPostbackMatchesQuery,
 } from './webforms.js';
 
@@ -58,6 +60,7 @@ function webformsFailure(error) {
     WEBFORMS_SUBMIT_MISSING: 'submit_missing',
     WEBFORMS_SUBMIT_AMBIGUOUS: 'submit_ambiguous',
     WEBFORMS_MATERIA_MISSING: 'materia_missing',
+    WEBFORMS_MATERIA_TRIGGER_MISSING: 'materia_missing',
     WEBFORMS_OFRECIMIENTO_MISSING: 'ofrecimiento_missing',
     WEBFORMS_TURNO_MISSING: 'turno_missing',
   };
@@ -138,6 +141,67 @@ function parseVerifiedBody(response, limits, initialHtml, payload) {
   return html === null ? { failure: searchFailed('form_missing') } : { html };
 }
 
+async function loadMateriaCatalogIfNeeded(session, initialResponse, limits, memoryCheckpoint) {
+  if (hasMateriaCheckboxes(initialResponse.body)) {
+    return { html: initialResponse.body };
+  }
+
+  let catalogForm;
+  try {
+    catalogForm = buildMateriaCatalogPayload(initialResponse.body);
+    memoryCheckpoint('materia_catalog_payload_parse_complete');
+  } catch (error) {
+    return { failure: webformsFailure(error) };
+  }
+
+  let postUrl;
+  try {
+    postUrl = new URL(catalogForm.formAction, initialResponse.url);
+  } catch {
+    return { failure: searchFailed('form_action_invalid') };
+  }
+
+  const effectiveLimits = {
+    maxBodyBytes: limits.maxBodyBytes ?? catalogForm.derivedLimits.maxBodyBytes,
+    maxDeltaChars: limits.maxDeltaChars ?? catalogForm.derivedLimits.maxDeltaChars,
+    maxDeltaNodes: limits.maxDeltaNodes ?? catalogForm.derivedLimits.maxDeltaNodes,
+  };
+
+  let catalogResponse;
+  try {
+    catalogResponse = await session.request(postUrl, {
+      method: 'POST',
+      timeoutMs: limits.timeoutMs,
+      maxBodyBytes: effectiveLimits.maxBodyBytes,
+      headers: {
+        accept: 'text/html, text/plain;q=0.9',
+        'content-type': catalogForm.requestContract.contentType,
+        origin: postUrl.origin,
+        referer: initialResponse.url,
+      },
+      body: catalogForm.payload,
+    });
+    memoryCheckpoint('materia_catalog_response_accumulated');
+  } catch (error) {
+    return { failure: transportFailure(error) };
+  }
+
+  const status = statusOutcome(catalogResponse.status);
+  if (status) {
+    return { failure: status };
+  }
+  if (catalogResponse.status < 200 || catalogResponse.status >= 300) {
+    return { failure: searchFailed('http_status_error') };
+  }
+
+  const parsedBody = parseVerifiedBody(catalogResponse, effectiveLimits, initialResponse.body, catalogForm.payload);
+  memoryCheckpoint('materia_catalog_body_parse_complete');
+  if (parsedBody.failure) {
+    return { failure: parsedBody.failure };
+  }
+  return { html: parsedBody.html };
+}
+
 /**
  * Runs one browserless WebForms search using an already-scoped HTTP session.
  * `startUrl` is mandatory and never falls back to process configuration.
@@ -179,9 +243,14 @@ export async function runHttpSearch(session, filtros, { startUrl, limits = {}, m
   }
   memoryCheckpoint('initial_turno_parse_complete');
 
+  const catalog = await loadMateriaCatalogIfNeeded(session, initialResponse, limits, memoryCheckpoint);
+  if (catalog.failure) {
+    return catalog.failure;
+  }
+
   let searchForm;
   try {
-    searchForm = buildSearchPayload(initialResponse.body, parsedFiltros);
+    searchForm = buildSearchPayload(catalog.html, parsedFiltros);
     memoryCheckpoint('search_form_parse_complete');
   } catch (error) {
     return webformsFailure(error);
@@ -234,7 +303,7 @@ export async function runHttpSearch(session, filtros, { startUrl, limits = {}, m
     return searchFailed('http_status_error');
   }
 
-  const parsedBody = parseVerifiedBody(postResponse, effectiveLimits, initialResponse.body, searchForm.payload);
+  const parsedBody = parseVerifiedBody(postResponse, effectiveLimits, catalog.html, searchForm.payload);
   memoryCheckpoint('post_body_parse_complete');
   if (parsedBody.failure) {
     return parsedBody.failure;

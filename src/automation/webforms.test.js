@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 
 import {
+  buildMateriaCatalogPayload,
   buildSearchPayload,
   extractReflectedSearchState,
+  hasMateriaCheckboxes,
   verifyPostbackMatchesQuery,
 } from './webforms.js';
 
@@ -56,6 +58,22 @@ test('buildSearchPayload accepts materia code and name in the same cell', async 
 
   assert.equal(result.materiaNombre, 'Física II');
   assert.equal(result.payload.get('ctl00$ContentPlaceHolder1$ucMateriaInscripcionBuscador$rptMaterias$ctl00$grdMaterias$ctl02$chkSeleccionar'), 'on');
+});
+
+test('buildMateriaCatalogPayload posts the seleccionar materias WebForms event without a search submit', async () => {
+  const html = (await readFixture('initial-form.html'))
+    .replace(
+      /<table id="ContentPlaceHolder1_ucMateriaInscripcionBuscador_grdMaterias">[\s\S]*?<\/table>/,
+      `<a id="ContentPlaceHolder1_btnSeleccionarMaterias" href="javascript:__doPostBack('ctl00$ContentPlaceHolder1$btnSeleccionarMaterias','')">Seleccionar materias</a>`,
+    );
+  const result = buildMateriaCatalogPayload(html);
+
+  assert.equal(hasMateriaCheckboxes(html), false);
+  assert.equal(result.formAction, '/InscripcionClaseBuscar.aspx');
+  assert.equal(result.payload.get('__EVENTTARGET'), 'ctl00$ContentPlaceHolder1$btnSeleccionarMaterias');
+  assert.equal(result.payload.get('__EVENTARGUMENT'), '');
+  assert.equal(result.payload.get('ctl00$ScriptManager1'), 'ctl00$UpdatePanelContenido|ctl00$ContentPlaceHolder1$btnSeleccionarMaterias');
+  assert.equal(result.payload.has('ctl00$ContentPlaceHolder1$btnBuscar'), false);
 });
 
 test('buildSearchPayload rejects ambiguous Buscar forms', async () => {

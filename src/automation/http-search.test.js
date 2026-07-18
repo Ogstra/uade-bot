@@ -26,6 +26,13 @@ const filtros = Object.freeze({
 const credentials = Object.freeze({ username: 'dummy-user', password: 'dummy-pass' });
 const expectedAuth = `Basic ${Buffer.from('dummy-user:dummy-pass').toString('base64')}`;
 
+function initialFormWithoutMateriaRows() {
+  return initialForm.replace(
+    /<table id="ContentPlaceHolder1_ucMateriaInscripcionBuscador_grdMaterias">[\s\S]*?<\/table>/,
+    `<a id="ContentPlaceHolder1_btnSeleccionarMaterias" href="javascript:__doPostBack('ctl00$ContentPlaceHolder1$btnSeleccionarMaterias','')">Seleccionar materias</a>`,
+  );
+}
+
 async function listen(t, handler) {
   const server = http.createServer(handler);
   await new Promise((resolve, reject) => {
@@ -96,6 +103,15 @@ async function createWebFormsServer(t, scenario = {}) {
       protocolErrors.push('content type mismatch');
     }
     const form = new URLSearchParams(body);
+    if (scenario.catalogHtml && form.get('__EVENTTARGET') === 'ctl00$ContentPlaceHolder1$btnSeleccionarMaterias') {
+      if (form.has('ctl00$ContentPlaceHolder1$btnBuscar')) {
+        protocolErrors.push('catalog post included search submit');
+      }
+      res.writeHead(200, { 'content-type': scenario.catalogContentType ?? 'text/html; charset=utf-8' });
+      res.end(scenario.catalogHtml);
+      return;
+    }
+
     const expectedFields = {
       __VIEWSTATE: 'DUMMY_VIEWSTATE',
       __EVENTVALIDATION: 'DUMMY_EVENTVALIDATION',
@@ -149,6 +165,25 @@ test('validates filtros before any I/O', async () => {
     }),
   );
   assert.equal(requests, 0);
+});
+
+test('loads the materia catalog with an intermediate WebForms postback when the initial page has no materia rows', async (t) => {
+  const { result, requests, protocolErrors } = await searchAgainst(t, {
+    initialHtml: initialFormWithoutMateriaRows(),
+    catalogHtml: initialForm,
+  });
+
+  assert.deepEqual(protocolErrors, []);
+  assert.deepEqual(requests.map(({ method, path }) => [method, path]), [
+    ['GET', '/start?param=dummy'],
+    ['GET', '/InscripcionClaseBuscar.aspx'],
+    ['POST', '/InscripcionClaseBuscar.aspx'],
+    ['POST', '/InscripcionClaseBuscar.aspx'],
+  ]);
+  assert.equal(new URLSearchParams(requests[2].body).get('__EVENTTARGET'), 'ctl00$ContentPlaceHolder1$btnSeleccionarMaterias');
+  assert.equal(new URLSearchParams(requests[3].body).get('ctl00$ContentPlaceHolder1$btnBuscar'), 'Buscar');
+  assert.equal(result.status, 'verified');
+  assert.equal(result.materiaNombre, 'Física II');
 });
 
 test('performs strict redirected GET and full WebForms POST before returning verified found HTML', async (t) => {
