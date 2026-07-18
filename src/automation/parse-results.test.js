@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { parseResults, filterVacancies } from './parse-results.js';
 import { getBrowser } from './browser.js';
+import logger from '../logger.js';
 
 // parseResults() launches (and reuses) a shared headless Chromium instance
 // purely to run Playwright's DOM/CSS locator engine over already-captured
@@ -36,6 +37,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // remains a good follow-up but is not required for this plan's automated
 // tests to be meaningful.
 const SAMPLE_HTML_PATH = path.join(__dirname, '__fixtures__', 'results-sample.html');
+const PARSER_SOURCE_PATH = path.join(__dirname, 'parse-results.js');
 
 const ZERO_ROWS_HTML = `<!DOCTYPE html>
 <html><body>
@@ -75,6 +77,13 @@ const MIXED_VALID_INVALID_HTML = `<!DOCTYPE html>
 </body></html>`;
 
 describe('parseResults', () => {
+  test('uses the browserless Cheerio slim parser without browser or Playwright imports', () => {
+    const source = readFileSync(PARSER_SOURCE_PATH, 'utf8');
+
+    assert.match(source, /from ['"]cheerio\/slim['"]/);
+    assert.doesNotMatch(source, /from ['"].*(?:browser|playwright).*['"]/);
+  });
+
   test('returns a non-empty VacancyRow[] from a fixture with real result rows', async () => {
     const html = readFileSync(SAMPLE_HTML_PATH, 'utf8');
     const rows = await parseResults(html);
@@ -99,7 +108,14 @@ describe('parseResults', () => {
     assert.deepEqual(rows, []);
   });
 
-  test('drops a row that fails VacancyRowSchema validation without crashing the parse', async () => {
+  test('drops a row that fails VacancyRowSchema validation without crashing the parse', async (t) => {
+    const warnings = [];
+    const originalWarn = logger.warn;
+    logger.warn = (...args) => warnings.push(args);
+    t.after(() => {
+      logger.warn = originalWarn;
+    });
+
     const rows = await parseResults(MIXED_VALID_INVALID_HTML);
 
     // Only the valid row (NOCHE/MONSERRAT/2 cupos/LU) should survive.
@@ -108,6 +124,13 @@ describe('parseResults', () => {
     assert.equal(rows[0].sede, 'MONSERRAT');
     assert.equal(rows[0].cupos, 2);
     assert.deepEqual(rows[0].dias, ['LU']);
+
+    assert.equal(warnings.length, 1);
+    const [metadata] = warnings[0];
+    assert.deepEqual(Object.keys(metadata).sort(), ['event', 'issues']);
+    assert.equal(metadata.event, 'vacancy_row_invalid');
+    assert.ok(Array.isArray(metadata.issues) && metadata.issues.length > 0);
+    assert.doesNotMatch(JSON.stringify(warnings), /no-es-un-numero|<tr|cookie|authorization/i);
   });
 });
 
