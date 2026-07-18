@@ -210,7 +210,7 @@ test('rotateCredentialValues supports password-only and start-url-only updates',
   }
 });
 
-test('runFullCredentialOnboarding warms the shared browser after a successful save', async () => {
+test('runFullCredentialOnboarding does not launch a browser after a successful save', async () => {
   const db = createDatabase(':memory:');
   try {
     const dm = createDm(['usuario', 'password']);
@@ -230,7 +230,7 @@ test('runFullCredentialOnboarding warms the shared browser after a successful sa
     });
 
     assert.equal(result.ok, true);
-    assert.equal(warmCalls, 1);
+    assert.equal(warmCalls, 0);
   } finally {
     db.close();
   }
@@ -292,7 +292,7 @@ test('runFullCredentialOnboarding does not reject even if the background browser
   }
 });
 
-test('runCredentialRotation warms the shared browser after any successful mode', async () => {
+test('runCredentialRotation does not launch a browser after a successful update', async () => {
   const db = createDatabase(':memory:');
   try {
     const masterKey = randomBytes(32).toString('hex');
@@ -318,7 +318,7 @@ test('runCredentialRotation warms the shared browser after any successful mode',
     const result = await runCredentialRotation(interaction, { db, env: { CREDENTIALS_MASTER_KEY: masterKey }, getBrowserFn });
 
     assert.equal(result.ok, true);
-    assert.equal(warmCalls, 1);
+    assert.equal(warmCalls, 0);
   } finally {
     db.close();
   }
