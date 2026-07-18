@@ -1,6 +1,9 @@
 import { FiltrosSchema } from '../schemas.js';
 import { loadEnv } from '../config/env.js';
 import logger from '../logger.js';
+import { verifyPostbackMatchesQuery } from './webforms.js';
+
+export { verifyPostbackMatchesQuery } from './webforms.js';
 
 export const SEARCH_URL = 'https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx';
 
@@ -281,46 +284,6 @@ async function readReflectedFormState(page, expectedMateriaCodigo) {
   }
 
   return { materiaCodigo, materiaNombre, ofrecimiento, turno, dias };
-}
-
-/**
- * Pure function: returns `true` only when every reflected value in
- * `reflectedState` matches what was submitted in `filtros`. Never treats
- * a mismatch as "0 vacancies" — the caller is responsible for mapping a
- * `false` result to a `search_failed` status (SEARCH-04).
- *
- * @param {{ materiaCodigo: string|null, materiaNombre?: string|null, ofrecimiento: string|null, turno: string|null, dias: string[] }} reflectedState
- * @param {import('zod').infer<typeof FiltrosSchema>} filtros
- * @returns {boolean}
- */
-export function verifyPostbackMatchesQuery(reflectedState, filtros) {
-  if (!reflectedState) {
-    return false;
-  }
-
-  if (reflectedState.materiaCodigo !== filtros.materiaCodigo) {
-    return false;
-  }
-
-  if (reflectedState.ofrecimiento !== filtros.ofrecimiento) {
-    return false;
-  }
-
-  // Case/accent-insensitive: reflectedState.turno is the live select's
-  // visible option text (e.g. "MAÑANA"), filtros.turno is the human-typed
-  // label (e.g. "mañana") — see resolveTurnoOptionValue's docstring.
-  if (reflectedState.turno == null || reflectedState.turno.localeCompare(filtros.turno, 'es', { sensitivity: 'base' }) !== 0) {
-    return false;
-  }
-
-  const reflectedDias = [...reflectedState.dias].sort();
-  const submittedDias = [...filtros.dias].sort();
-
-  if (reflectedDias.length !== submittedDias.length) {
-    return false;
-  }
-
-  return reflectedDias.every((dia, index) => dia === submittedDias[index]);
 }
 
 function isAuthChallengeError(err) {
