@@ -236,60 +236,24 @@ test('runFullCredentialOnboarding does not launch a browser after a successful s
   }
 });
 
-test('runFullCredentialOnboarding does not warm the browser when the DM cannot be opened', async () => {
+test('runFullCredentialOnboarding reports when the DM cannot be opened', async () => {
   const interaction = createInteraction({ dm: null });
-  let warmCalls = 0;
-  const getBrowserFn = async () => {
-    warmCalls += 1;
-    return {};
-  };
 
-  const result = await runFullCredentialOnboarding(interaction, { getBrowserFn });
+  const result = await runFullCredentialOnboarding(interaction);
 
   assert.equal(result.ok, false);
-  assert.equal(warmCalls, 0);
 });
 
-test('runFullCredentialOnboarding does not warm the browser when credential collection fails', async () => {
+test('runFullCredentialOnboarding reports when credential collection fails', async () => {
   const dm = createDm(['usuario']); // times out waiting for password/start URL
   const interaction = createInteraction({ dm });
-  let warmCalls = 0;
-  const getBrowserFn = async () => {
-    warmCalls += 1;
-    return {};
-  };
 
   const result = await runFullCredentialOnboarding(interaction, {
     db: createDatabase(':memory:'),
     env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
-    getBrowserFn,
   });
 
   assert.equal(result.ok, false);
-  assert.equal(warmCalls, 0);
-});
-
-test('runFullCredentialOnboarding does not reject even if the background browser warm-up fails', async () => {
-  const db = createDatabase(':memory:');
-  try {
-    const dm = createDm(['usuario', 'password']);
-    const interaction = createInteraction({ dm });
-    const getBrowserFn = async () => {
-      throw new Error('browser launch failed');
-    };
-
-    const result = await runFullCredentialOnboarding(interaction, {
-      db,
-      env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
-      getBrowserFn,
-      withPlainContextFn: noopWithPlainContext,
-      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=abc'),
-    });
-
-    assert.equal(result.ok, true);
-  } finally {
-    db.close();
-  }
 });
 
 test('runCredentialRotation does not launch a browser after a successful update', async () => {
@@ -324,25 +288,17 @@ test('runCredentialRotation does not launch a browser after a successful update'
   }
 });
 
-test('runCredentialRotation does not warm the browser when rotation fails', async () => {
+test('runCredentialRotation reports when rotation fails', async () => {
   const db = createDatabase(':memory:');
   try {
     const dm = createDm([]); // no queued values -- ask() times out immediately
     const interaction = createInteraction({ dm, modo: 'link' });
-    let warmCalls = 0;
-    const getBrowserFn = async () => {
-      warmCalls += 1;
-      return {};
-    };
-
     const result = await runCredentialRotation(interaction, {
       db,
       env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
-      getBrowserFn,
     });
 
     assert.equal(result.ok, false);
-    assert.equal(warmCalls, 0);
   } finally {
     db.close();
   }
@@ -365,7 +321,6 @@ test('runCredentialRotation modo:usuario_password also obtains the link, fixing 
     const result = await runCredentialRotation(interaction, {
       db,
       env: { CREDENTIALS_MASTER_KEY: masterKey },
-      getBrowserFn: async () => ({}),
       withPlainContextFn: noopWithPlainContext,
       obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=refreshed'),
     });
@@ -391,7 +346,6 @@ test('runFullCredentialOnboarding triggers onCredentialsUpdated with the discord
     const result = await runFullCredentialOnboarding(interaction, {
       db,
       env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
-      getBrowserFn: async () => ({}),
       withPlainContextFn: noopWithPlainContext,
       obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=abc'),
       onCredentialsUpdated: (discordUserId) => calls.push(discordUserId),
@@ -412,7 +366,6 @@ test('runFullCredentialOnboarding does not call onCredentialsUpdated when the sa
   const result = await runFullCredentialOnboarding(interaction, {
     db: createDatabase(':memory:'),
     env: { CREDENTIALS_MASTER_KEY: randomBytes(32).toString('hex') },
-    getBrowserFn: async () => ({}),
     onCredentialsUpdated: (discordUserId) => calls.push(discordUserId),
   });
 
@@ -442,7 +395,6 @@ test('runCredentialRotation triggers onCredentialsUpdated after a successful mod
     const result = await runCredentialRotation(interaction, {
       db,
       env: { CREDENTIALS_MASTER_KEY: masterKey },
-      getBrowserFn: async () => ({}),
       onCredentialsUpdated: (discordUserId) => calls.push(discordUserId),
     });
 
@@ -479,7 +431,6 @@ test('runCredentialRotation modo:link rejects a link on the wrong domain without
     const result = await runCredentialRotation(interaction, {
       db,
       env: { CREDENTIALS_MASTER_KEY: masterKey },
-      getBrowserFn: async () => ({}),
     });
 
     assert.equal(result.ok, false);
@@ -515,7 +466,6 @@ test('runCredentialRotation modo:link rejects a non-link reply without saving it
     const result = await runCredentialRotation(interaction, {
       db,
       env: { CREDENTIALS_MASTER_KEY: masterKey },
-      getBrowserFn: async () => ({}),
     });
 
     assert.equal(result.ok, false);

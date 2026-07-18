@@ -2,7 +2,7 @@ import { getCredentials, upsertCredentials } from '../db/credentials.repository.
 import { upsertUser } from '../db/users.repository.js';
 import { encryptCredentials, decryptCredentials } from '../crypto/credentials-crypto.js';
 import { loadEnv } from '../config/env.js';
-import { getBrowser, withPlainContext } from '../automation/browser.js';
+import { withPlainContext } from '../automation/browser.js';
 import { obtainStartUrl, isValidStartUrl } from '../automation/sso-link.js';
 import logger from '../logger.js';
 import {
@@ -18,30 +18,12 @@ import {
 const DEFAULT_TIMEOUT_MS = 120000;
 
 /**
- * Fires off a shared-browser launch in the background right after
- * credentials are saved/rotated, so the account's first real search
- * doesn't pay Chromium's cold-start latency on top of its own postback
- * settle wait. Not awaited -- must never delay the Discord reply. The
- * browser closes itself on the next idle scheduler tick (queue.js) if
- * nothing ends up polling it, so no explicit close-after-N-seconds timer
- * is needed here.
- */
-function warmBrowser(getBrowserFn) {
-  getBrowserFn().catch((err) => {
-    logger.error(
-      { event: 'browser_warm_failed', message: err.message },
-      'Failed to pre-warm the shared browser after credential submission',
-    );
-  });
-}
-
-/**
  * Fires an immediate poll for every active job belonging to `discordUserId`
  * right after their credentials are saved/rotated, instead of leaving them
  * to wait up to POLL_INTERVAL_MS for the next scheduled tick -- same
  * immediacy `/reanudar`'s `onJobResumed` already gives a single job.
- * Fire-and-forget, same reasoning as `warmBrowser`: must never delay the
- * Discord reply, and a failure here shouldn't fail the credential save
+ * Fire-and-forget: it must never delay the Discord reply, and a failure
+ * here shouldn't fail the credential save
  * itself (the jobs simply get polled on the next normal tick instead).
  */
 function pollActiveJobsNow(onCredentialsUpdated, discordUserId) {
@@ -175,7 +157,6 @@ export async function runFullCredentialOnboarding(
   {
     db,
     env,
-    getBrowserFn = getBrowser,
     withPlainContextFn = withPlainContext,
     obtainStartUrlFn = obtainStartUrl,
     onCredentialsUpdated,
@@ -200,7 +181,6 @@ export async function runFullCredentialOnboarding(
       masterKey: resolvedEnv.CREDENTIALS_MASTER_KEY,
       values,
     });
-    warmBrowser(getBrowserFn);
     pollActiveJobsNow(onCredentialsUpdated, interaction.user.id);
     return { ok: true, message: credentialsSavedMessage() };
   } catch (err) {
@@ -220,7 +200,6 @@ export async function runCredentialRotation(
   {
     db,
     env,
-    getBrowserFn = getBrowser,
     withPlainContextFn = withPlainContext,
     obtainStartUrlFn = obtainStartUrl,
     onCredentialsUpdated,
@@ -277,7 +256,6 @@ export async function runCredentialRotation(
       });
     }
 
-    warmBrowser(getBrowserFn);
     pollActiveJobsNow(onCredentialsUpdated, interaction.user.id);
     return { ok: true, message: mode === 'todo' ? credentialsSavedMessage() : credentialsUpdatedMessage() };
   } catch (err) {
