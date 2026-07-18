@@ -4,13 +4,10 @@ import { getCredentials } from '../db/credentials.repository.js';
 import { getUser, updateAccountPauseState } from '../db/users.repository.js';
 import { upsertMateriaNombre } from '../db/materias.repository.js';
 import { decryptCredentials } from '../crypto/credentials-crypto.js';
-import { withPlainContext } from '../automation/browser.js';
 import { withHttpSession } from '../automation/http-session.js';
 import { runHttpSearch } from '../automation/http-search.js';
-import { obtainStartUrl } from '../automation/sso-link.js';
 import { parseResults, filterVacancies } from '../automation/parse-results.js';
 import { classifySearchResult } from '../automation/classify.js';
-import { rotateCredentialValues } from '../discord/credentials-flow.js';
 import { nextBackoffState } from './backoff.js';
 import logger from '../logger.js';
 
@@ -72,72 +69,14 @@ function userToCurrentPauseState(user) {
 }
 
 /**
- * AUTOLINK-01/02/03: attempts a fully automated SSO relink for the account
- * that owns `job`, using the SAME already-decrypted credentials `pollOnce`
- * passes in — never re-reads/re-decrypts anything from the DB itself. Opens
- * its OWN `withPlainContextFn` (not nested inside the `withUadeContext` this
- * job's search run already closed) so the credential-free SSO login form
- * flow never shares a `BrowserContext` with the Basic Auth search flow.
- *
- * A `success` from `obtainStartUrlFn` persists the new `uadeStartUrl`
- * through the exact same encrypted path `/credenciales modo:link` already
- * uses (`rotateCredentialValuesFn`) and reports `{ status: 'success' }`. Any
- * other result (`mfa_required` or `failed`) leaves the stored credentials
- * untouched and reports `{ status: 'fallback' }` — the caller is
- * responsible for preserving the pre-existing manual pause/DM flow in that
- * case. Only ever returns an object with a single `status` key — never the
- * obtained `startUrl` or any credential (T-03.1-05/AUTOLINK-04): that value
- * must never flow into anything `pollOnce` persists as `lastOutcome`.
- *
- * @param {import('better-sqlite3').Database} db
- * @param {import('zod').infer<typeof import('../schemas.js').SearchJobSchema>} job
- * @param {{ username: string, password: string, masterKey: string }} credentials
- * @param {{
- *   withPlainContextFn?: typeof withPlainContext,
- *   obtainStartUrlFn?: typeof obtainStartUrl,
- *   rotateCredentialValuesFn?: typeof rotateCredentialValues,
- * }} [deps]
- * @returns {Promise<{ status: 'success' } | { status: 'fallback' }>}
- */
-export async function attemptAutoRelink(
-  db,
-  job,
-  { username, password, masterKey },
-  {
-    withPlainContextFn = withPlainContext,
-    obtainStartUrlFn = obtainStartUrl,
-    rotateCredentialValuesFn = rotateCredentialValues,
-  } = {},
-) {
-  const result = await withPlainContextFn((context) => obtainStartUrlFn(context, { username, password }));
-
-  if (result.status === 'success') {
-    rotateCredentialValuesFn(db, {
-      discordUserId: job.discordUserId,
-      masterKey,
-      updates: { uadeStartUrl: result.startUrl },
-    });
-    logger.info({ event: 'auto_relink_applied', jobId: job.id }, 'Automatic SSO relink succeeded; uadeStartUrl rotated');
-    return { status: 'success' };
-  }
-
-  const reason = result.status === 'mfa_required' ? 'mfa_required' : result.reason;
-  logger.info(
-    { event: 'auto_relink_fallback', jobId: job.id, reason },
-    'Automatic SSO relink did not succeed; falling back to the manual credential flow',
-  );
-  return { status: 'fallback' };
-}
-
-/**
  * Runs one complete poll for a single search job: decrypts that job's
  * account credentials transiently, drives the real Phase-1 search chain
  * (`withHttpSession` -> `runHttpSearch` -> `parseResults` -> `filterVacancies` ->
  * `classifySearchResult`) with the job's own decrypted `uadeStartUrl`, and
  * persists the resulting outcome onto the job's row.
  *
- * AUTOLINK-03: `attemptAutoRelinkFn` runs only when this poll's outcome is
- * `stale_start_url` — every other outcome branch never reaches it. A
+ * AUTOLINK-03: `loadRelinkFn` resolves only when this poll's outcome is
+ * `stale_start_url` — every other outcome branch never loads it. A
  * successful relink overrides only the LOCAL backoff signal fed into
  * `nextBackoffState` (so this account comes out of this call unpaused with
  * no DM); it never mutates `outcome` itself, which is persisted via
@@ -146,7 +85,7 @@ export async function attemptAutoRelink(
  *
  * CRED-04/CRED-05 discipline: `decryptCredentials`'s output is destructured
  * into a single local `const` used only inside this function body, passed
- * directly into `withHttpSessionFn`/`runHttpSearchFn`/`attemptAutoRelinkFn`,
+ * directly into `withHttpSessionFn`/`runHttpSearchFn`/the lazy relink,
  * never assigned to any object that outlives this call, and never logged —
  * only the final `outcome.outcome` string is logged.
  *
@@ -156,7 +95,7 @@ export async function attemptAutoRelink(
  *   masterKey: string,
  *   withHttpSessionFn?: typeof withHttpSession,
  *   runHttpSearchFn?: typeof runHttpSearch,
- *   attemptAutoRelinkFn?: typeof attemptAutoRelink,
+ *   loadRelinkFn?: () => Promise<{ attemptAutoRelink: Function }>,
  * }} deps
  * @returns {Promise<import('zod').infer<typeof import('../schemas.js').SearchOutcomeSchema> | { outcome: string }>}
  */
@@ -167,7 +106,7 @@ export async function pollOnce(
     masterKey,
     withHttpSessionFn = withHttpSession,
     runHttpSearchFn = runHttpSearch,
-    attemptAutoRelinkFn = attemptAutoRelink,
+    loadRelinkFn = () => import('./relink.js'),
   } = {},
 ) {
   if (typeof masterKey !== 'string' || masterKey.length === 0) {
@@ -227,7 +166,8 @@ export async function pollOnce(
   // this call already decrypted above, never re-reading/re-decrypting them.
   let relinkSucceeded = false;
   if (outcome.outcome === 'stale_start_url') {
-    const relinkResult = await attemptAutoRelinkFn(db, job, {
+    const { attemptAutoRelink } = await loadRelinkFn();
+    const relinkResult = await attemptAutoRelink(db, job, {
       username: uadeUsername,
       password: uadePassword,
       masterKey,

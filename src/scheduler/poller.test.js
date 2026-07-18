@@ -9,7 +9,12 @@ import { createJob, getJob } from '../db/jobs.repository.js';
 import { getMateriaNombre } from '../db/materias.repository.js';
 import { listHistoryForJob } from '../db/poll-history.repository.js';
 import { encryptCredentials } from '../crypto/credentials-crypto.js';
-import { pollOnce, attemptAutoRelink } from './poller.js';
+import { pollOnce } from './poller.js';
+
+async function attemptAutoRelink(...args) {
+  const relink = await import('./relink.js');
+  return relink.attemptAutoRelink(...args);
+}
 const MASTER_KEY = randomBytes(32).toString('hex');
 
 const FILTROS = {
@@ -236,7 +241,7 @@ test('pollOnce persists needs_credentials account-level pause state after an inv
   }
 });
 
-// --- AUTOLINK-03: attemptAutoRelinkFn is only reachable from the
+// --- AUTOLINK-03: the relink loader is only reachable from the
 // stale_start_url branch of pollOnce -------------------------------------
 
 test('pollOnce never calls attemptAutoRelinkFn for a verified/no_vacancies outcome', async () => {
@@ -337,8 +342,9 @@ test('a successful automatic relink clears the account pause state after a stale
   try {
     const job = seedJob(db);
     const attemptAutoRelinkFn = async () => ({ status: 'success' });
+    const loadRelinkFn = async () => ({ attemptAutoRelink: attemptAutoRelinkFn });
     const runHttpSearchFn = async () => ({ status: 'stale_start_url' });
-    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { loadRelinkFn }));
 
     const after = getUser(db, job.discordUserId);
     assert.equal(after.pauseReason, null);
@@ -352,8 +358,9 @@ test('a fallback automatic relink preserves the exact pre-existing needs_new_sta
   try {
     const job = seedJob(db);
     const attemptAutoRelinkFn = async () => ({ status: 'fallback' });
+    const loadRelinkFn = async () => ({ attemptAutoRelink: attemptAutoRelinkFn });
     const runHttpSearchFn = async () => ({ status: 'stale_start_url' });
-    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { loadRelinkFn }));
 
     const after = getUser(db, job.discordUserId);
     assert.equal(after.pauseReason, 'needs_new_start_url');
@@ -367,8 +374,9 @@ test('a successful automatic relink never mutates the persisted outcome — last
   try {
     const job = seedJob(db);
     const attemptAutoRelinkFn = async () => ({ status: 'success' });
+    const loadRelinkFn = async () => ({ attemptAutoRelink: attemptAutoRelinkFn });
     const runHttpSearchFn = async () => ({ status: 'stale_start_url' });
-    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { attemptAutoRelinkFn }));
+    await pollOnce(db, job.id, pollDeps(runHttpSearchFn, { loadRelinkFn }));
 
     const updated = getJob(db, job.id);
     assert.equal(updated.lastOutcome, JSON.stringify({ outcome: 'stale_start_url' }));
