@@ -2,6 +2,7 @@ import { loadEnv } from './config/env.js';
 import { getDb } from './db/database.js';
 import { createScheduler } from './scheduler/queue.js';
 import { reconstructActiveJobs } from './scheduler/bootstrap.js';
+import { pollOnce } from './scheduler/poller.js';
 import logger from './logger.js';
 
 /**
@@ -14,9 +15,12 @@ import logger from './logger.js';
  * redacting `logger` — never a direct console call (T-02-12).
  */
 async function main() {
-  loadEnv();
+  const env = loadEnv();
   const db = getDb();
-  const scheduler = createScheduler({ db });
+  const scheduler = createScheduler({
+    db,
+    pollOnceFn: (database, jobId) => pollOnce(database, jobId, { masterKey: env.CREDENTIALS_MASTER_KEY }),
+  });
 
   await reconstructActiveJobs(db, scheduler);
 

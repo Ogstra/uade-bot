@@ -4,9 +4,9 @@ import { getCredentials } from '../db/credentials.repository.js';
 import { getUser, updateAccountPauseState } from '../db/users.repository.js';
 import { upsertMateriaNombre } from '../db/materias.repository.js';
 import { decryptCredentials } from '../crypto/credentials-crypto.js';
-import { loadEnv } from '../config/env.js';
-import { withUadeContext, withPlainContext } from '../automation/browser.js';
-import { runSearch } from '../automation/search.js';
+import { withPlainContext } from '../automation/browser.js';
+import { withHttpSession } from '../automation/http-session.js';
+import { runHttpSearch } from '../automation/http-search.js';
 import { obtainStartUrl } from '../automation/sso-link.js';
 import { parseResults, filterVacancies } from '../automation/parse-results.js';
 import { classifySearchResult } from '../automation/classify.js';
@@ -132,7 +132,7 @@ export async function attemptAutoRelink(
 /**
  * Runs one complete poll for a single search job: decrypts that job's
  * account credentials transiently, drives the real Phase-1 search chain
- * (`withUadeContext` -> `runSearch` -> `parseResults` -> `filterVacancies` ->
+ * (`withHttpSession` -> `runHttpSearch` -> `parseResults` -> `filterVacancies` ->
  * `classifySearchResult`) with the job's own decrypted `uadeStartUrl`, and
  * persists the resulting outcome onto the job's row.
  *
@@ -146,24 +146,34 @@ export async function attemptAutoRelink(
  *
  * CRED-04/CRED-05 discipline: `decryptCredentials`'s output is destructured
  * into a single local `const` used only inside this function body, passed
- * directly into `withUadeContextFn`/`runSearchFn`/`attemptAutoRelinkFn`,
+ * directly into `withHttpSessionFn`/`runHttpSearchFn`/`attemptAutoRelinkFn`,
  * never assigned to any object that outlives this call, and never logged —
  * only the final `outcome.outcome` string is logged.
  *
  * @param {import('better-sqlite3').Database} db
  * @param {number} jobId
  * @param {{
- *   withUadeContextFn?: typeof withUadeContext,
- *   runSearchFn?: typeof runSearch,
+ *   masterKey: string,
+ *   withHttpSessionFn?: typeof withHttpSession,
+ *   runHttpSearchFn?: typeof runHttpSearch,
  *   attemptAutoRelinkFn?: typeof attemptAutoRelink,
- * }} [deps]
+ * }} deps
  * @returns {Promise<import('zod').infer<typeof import('../schemas.js').SearchOutcomeSchema> | { outcome: string }>}
  */
 export async function pollOnce(
   db,
   jobId,
-  { withUadeContextFn = withUadeContext, runSearchFn = runSearch, attemptAutoRelinkFn = attemptAutoRelink } = {},
+  {
+    masterKey,
+    withHttpSessionFn = withHttpSession,
+    runHttpSearchFn = runHttpSearch,
+    attemptAutoRelinkFn = attemptAutoRelink,
+  } = {},
 ) {
+  if (typeof masterKey !== 'string' || masterKey.length === 0) {
+    throw new Error('pollOnce: masterKey is required');
+  }
+
   const job = getJob(db, jobId);
   if (!job) {
     throw new Error(`pollOnce: job ${jobId} not found`);
@@ -174,15 +184,14 @@ export async function pollOnce(
     throw new Error(`pollOnce: no credentials found for discordUserId ${job.discordUserId}`);
   }
 
-  const { CREDENTIALS_MASTER_KEY } = loadEnv();
   const { uadeUsername, uadePassword, uadeStartUrl } = decryptCredentials(
-    CREDENTIALS_MASTER_KEY,
+    masterKey,
     job.discordUserId,
     credentialsRow,
   );
 
-  const outcome = await withUadeContextFn({ username: uadeUsername, password: uadePassword }, async (context) => {
-    const result = await runSearchFn(context, job.filtros, { startUrl: uadeStartUrl });
+  const outcome = await withHttpSessionFn({ username: uadeUsername, password: uadePassword }, async (session) => {
+    const result = await runHttpSearchFn(session, job.filtros, { startUrl: uadeStartUrl });
 
     if (result.status === 'verified') {
       const rows = await parseResults(result.html);
@@ -199,12 +208,10 @@ export async function pollOnce(
       return classifySearchResult({ searchStatus: 'invalid_credentials' });
     }
 
-    // Statuses introduced by Plan 02-03 ('rate_limited' / 'stale_start_url')
-    // — not yet returned by runSearchFn in this plan, but this branch must
-    // exist so pollOnce doesn't throw once Plan 02-03 lands. Intentionally
-    // NOT passed to classifySearchResult/SearchOutcomeSchema, which don't
-    // recognize these — this is a scheduler-internal status, not a
-    // SearchOutcome.
+    // Scheduler-only statuses ('rate_limited' / 'stale_start_url') are
+    // intentionally NOT passed to classifySearchResult/SearchOutcomeSchema,
+    // which don't recognize them. This preserves the transport's exact
+    // discriminant for account-level backoff and relink handling.
     return { outcome: result.status };
   });
 
@@ -223,7 +230,7 @@ export async function pollOnce(
     const relinkResult = await attemptAutoRelinkFn(db, job, {
       username: uadeUsername,
       password: uadePassword,
-      masterKey: CREDENTIALS_MASTER_KEY,
+      masterKey,
     });
     relinkSucceeded = relinkResult.status === 'success';
   }
