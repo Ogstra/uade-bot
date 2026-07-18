@@ -112,16 +112,28 @@ function optionMatchesLabel(optionText, label) {
   return normalizeText(optionText).localeCompare(normalizeText(label), 'es', { sensitivity: 'base' }) === 0;
 }
 
+function extractMateriaCode(cell) {
+  return cell.match(/(?:^|[^\d.])(\d+\.\d+\.\d+)(?![\d.])/)?.[1] ?? null;
+}
+
+function materiaNameFromCodeCell(cell, materiaCodigo) {
+  const remainder = normalizeText(cell.replace(materiaCodigo, '').replace(/^[\s:-]+/, ''));
+  return remainder || null;
+}
+
 function extractMateriaFromRow($, row) {
   const cells = $(row).find('td').map((_, cell) => normalizeText($(cell).text())).get();
-  const codeCellIndex = cells.findIndex((cell) => /^\d+\.\d+\.\d+$/.test(cell));
+  const codeCellIndex = cells.findIndex((cell) => extractMateriaCode(cell) !== null);
   if (codeCellIndex === -1) {
     return { materiaCodigo: null, materiaNombre: null };
   }
+  const materiaCodigo = extractMateriaCode(cells[codeCellIndex]);
 
   return {
-    materiaCodigo: cells[codeCellIndex],
-    materiaNombre: cells.slice(codeCellIndex + 1).find(Boolean) || null,
+    materiaCodigo,
+    materiaNombre: materiaNameFromCodeCell(cells[codeCellIndex], materiaCodigo)
+      ?? cells.slice(codeCellIndex + 1).find(Boolean)
+      ?? null,
   };
 }
 
