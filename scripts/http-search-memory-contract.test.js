@@ -66,7 +66,8 @@ function manifest(records = fixtureRecords()) {
 }
 
 function worker(concurrency = 1) {
-  const outcomes = Array.from({ length: concurrency }, () => ({ outcome: 'found', vacancies: [{ cupos: 1 }] }));
+  const vacancy = { turno: 'NOCHE', sede: 'MONSERRAT', horario: '18:45 22:15', dias: ['LU', 'MI'], cupos: 1 };
+  const outcomes = Array.from({ length: concurrency }, () => ({ outcome: 'found', vacancies: [{ ...vacancy, dias: [...vacancy.dias] }] }));
   const baselineRss = 100000;
   const deltaRss = concurrency * 1024;
   const peakRss = baselineRss + deltaRss;
@@ -228,6 +229,23 @@ test('both worker validators recompute and enforce the fixed exclusive per-searc
   assert.throws(() => validateIndependentWorker(changed, { execPath: EXEC_PATH, nodeVersion: VERSION }, 1), /exclusive 10 MiB threshold/);
 });
 
+for (const [label, replacement] of [
+  ['found without vacancies', { outcome: 'found' }],
+  ['found with empty vacancies', { outcome: 'found', vacancies: [] }],
+  ['found with an invalid vacancy', { outcome: 'found', vacancies: [{ cupos: 1 }] }],
+  ['found with an unexpected field', { outcome: 'found', vacancies: [{ turno: 'NOCHE', sede: 'MONSERRAT', horario: '18:45', dias: ['LU'], cupos: 1 }], secret: 'extra' }],
+  ['a valid non-found outcome for this retained fixture', { outcome: 'no_vacancies' }],
+]) {
+  test(`both worker validators reject ${label} before accepting its recomputed hash`, () => {
+    const changed = worker();
+    changed.outcomes = [replacement];
+    changed.outcomeHash = createHash('sha256').update(JSON.stringify(changed.outcomes)).digest('hex');
+    const runtime = { expectedExecPath: EXEC_PATH, expectedNodeVersion: VERSION };
+    assert.throws(() => validateWorkerResult(changed, runtime), /SearchOutcomeSchema|outside|must be found|vacancies/i);
+    assert.throws(() => validateIndependentWorker(changed, { execPath: EXEC_PATH, nodeVersion: VERSION }, 1), /SearchOutcomeSchema|outside|must be found|vacancies/i);
+  });
+}
+
 for (const [label, mutate] of [
   ['missing checkpoint object', (value) => { delete value.checkpointRss; }],
   ['empty checkpoint object', (value) => { value.checkpointRss = {}; }],
@@ -280,7 +298,8 @@ test('summary rejects incomplete or failed evidence and cannot publish pass', ()
 
 test('summary rejects inconsistent functional outcomes across isolated runs', () => {
   const isolatedRows = Array.from({ length: 5 }, (_, index) => ({ scenario: 'isolated', run: index + 1, ...worker() }));
-  isolatedRows[4] = { ...isolatedRows[4], ...worker(), outcomes: [{ outcome: 'found', vacancies: [{ cupos: 2 }] }] };
+  isolatedRows[4] = { ...isolatedRows[4], ...worker() };
+  isolatedRows[4].outcomes[0].vacancies[0].cupos = 2;
   isolatedRows[4].outcomeHash = createHash('sha256').update(JSON.stringify(isolatedRows[4].outcomes)).digest('hex');
   const isolatedSummary = {
     scenario: 'isolated-summary', nodeVersion: VERSION, execPath: EXEC_PATH, runs: 5,
@@ -292,4 +311,18 @@ test('summary rejects inconsistent functional outcomes across isolated runs', ()
     concurrentRow: { scenario: 'concurrent', ...worker(2), status: 'pass' },
     sourceCommit: 'c'.repeat(40),
   }), /outcome hashes differ/);
+});
+
+test('summary rejects a concurrent outcome that differs from the isolated canonical outcome', () => {
+  const isolatedRows = Array.from({ length: 5 }, (_, index) => ({ scenario: 'isolated', run: index + 1, ...worker() }));
+  const isolatedSummary = {
+    scenario: 'isolated-summary', nodeVersion: VERSION, execPath: EXEC_PATH, runs: 5,
+    worstDeltaRss: 1024, limitBytesExclusive: LIMIT_BYTES_EXCLUSIVE, status: 'pass',
+  };
+  const concurrentRow = { scenario: 'concurrent', ...worker(2), status: 'pass' };
+  concurrentRow.outcomes[1].vacancies[0].cupos = 2;
+  concurrentRow.outcomeHash = createHash('sha256').update(JSON.stringify(concurrentRow.outcomes)).digest('hex');
+  assert.throws(() => buildEvidenceSummary({
+    isolatedRows, isolatedSummary, concurrentRow, sourceCommit: 'c'.repeat(40),
+  }), /concurrent functional outcomes differ/);
 });

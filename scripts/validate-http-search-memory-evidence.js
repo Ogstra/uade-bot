@@ -5,6 +5,8 @@ import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { SearchOutcomeSchema } from '../src/schemas.js';
+
 const LIMIT_BYTES_EXCLUSIVE = 10 * 1024 * 1024;
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MANIFEST_FILE = path.join(REPO_ROOT, '.planning/phases/03.2-motor-http-sin-navegador/evidence/webforms-capture-sanitized/manifest.json');
@@ -65,6 +67,14 @@ function canonical(value) {
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
+function validateCanonicalOutcome(outcome, label) {
+  const parsed = SearchOutcomeSchema.safeParse(outcome);
+  assert(parsed.success, `${label} does not match SearchOutcomeSchema`);
+  assert.deepEqual(parsed.data, outcome, `${label} contains fields outside SearchOutcomeSchema`);
+  assert.equal(parsed.data.outcome, 'found', `${label} must be found for the retained benchmark fixture`);
+  assert(parsed.data.vacancies.length > 0, `${label} found outcome must contain vacancies`);
+}
+
 export function validateWorker(row, runtime, concurrency) {
   assert.equal(row.kind, 'worker-result', 'row is not a worker result');
   assert.equal(row.nodeVersion, runtime.nodeVersion, 'worker runtime version differs from summary');
@@ -94,7 +104,7 @@ export function validateWorker(row, runtime, concurrency) {
   assert.equal(row.perSearchDeltaRss, measuredPerSearchDeltaRss, 'worker per-search delta differs from deltaRss / concurrency');
   assert(measuredPerSearchDeltaRss < LIMIT_BYTES_EXCLUSIVE, 'worker reached the exclusive 10 MiB threshold');
   assert(Array.isArray(row.outcomes) && row.outcomes.length === concurrency, 'worker outcomes do not match concurrency');
-  assert(row.outcomes.every((outcome) => outcome?.outcome === 'found'), 'worker outcomes must all be found');
+  row.outcomes.forEach((outcome, index) => validateCanonicalOutcome(outcome, `worker outcomes[${index}]`));
   assert(/^[a-f0-9]{64}$/.test(row.outcomeHash), 'worker outcome hash is invalid');
   assert.equal(row.outcomeHash, sha256(JSON.stringify(row.outcomes)), 'worker outcome hash differs from canonical outcomes');
   assert(/^[a-f0-9]{64}$/.test(row.inputManifestHash), 'worker input manifest hash is invalid');
@@ -153,6 +163,9 @@ async function main() {
   workers.forEach((row) => validateWorker(row, summary.runtime, 1));
   validateWorker(concurrentRows[0], summary.runtime, 2);
   assert(workers.every(({ outcomeHash }) => outcomeHash === workers[0].outcomeHash), 'isolated outcome hashes differ');
+  const canonicalOutcome = workers[0].outcomes[0];
+  assert(workers.every(({ outcomes }) => JSON.stringify(outcomes[0]) === JSON.stringify(canonicalOutcome)), 'isolated functional outcomes differ');
+  assert(concurrentRows[0].outcomes.every((outcome) => JSON.stringify(outcome) === JSON.stringify(canonicalOutcome)), 'concurrent functional outcomes differ from isolated outcome');
   const isolatedSummary = isolatedSummaryRows[0];
   assert.equal(isolatedSummary.status, 'pass', 'isolated summary did not pass');
   assert.equal(isolatedSummary.nodeVersion, summary.runtime.nodeVersion, 'isolated summary runtime differs');
