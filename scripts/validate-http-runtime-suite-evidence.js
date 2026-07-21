@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
 export const APPROVED_TEST_FILES = Object.freeze([
   'src/automation/http-session.test.js',
   'src/automation/http-search.test.js',
@@ -92,7 +94,7 @@ function validatePackageFiles(packageFiles) {
     if (record.beforeSha256 !== record.afterSha256) {
       fail(`${expectedPath} hash changed across npm ci`);
     }
-    const currentHash = sha256(readFileSync(expectedPath));
+    const currentHash = sha256(readFileSync(path.join(REPO_ROOT, expectedPath)));
     if (record.afterSha256 !== currentHash) {
       fail(`${expectedPath} hash does not match the current file`);
     }
@@ -100,7 +102,11 @@ function validatePackageFiles(packageFiles) {
 }
 
 function gitOutput(args) {
-  return execFileSync('git', ['-c', 'safe.directory=G:/github/uade-bot', ...args], {
+  return execFileSync('git', [
+    '-c', `safe.directory=${REPO_ROOT.replaceAll('\\', '/')}`,
+    '-C', REPO_ROOT,
+    ...args,
+  ], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
@@ -110,10 +116,14 @@ function validateSourceCommit(commit) {
   if (typeof commit !== 'string' || !/^[0-9a-f]{40}$/.test(commit)) {
     fail('manifest commit must be a full lowercase Git object id');
   }
+  let head;
   try {
-    gitOutput(['merge-base', '--is-ancestor', commit, 'HEAD']);
+    head = gitOutput(['rev-parse', 'HEAD']);
   } catch {
-    fail('manifest commit is not HEAD or an ancestor of HEAD');
+    fail('manifest commit could not be compared with HEAD');
+  }
+  if (commit !== head) {
+    fail('manifest commit must exactly match HEAD');
   }
 }
 

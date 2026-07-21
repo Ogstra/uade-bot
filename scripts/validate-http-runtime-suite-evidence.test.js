@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   APPROVED_TEST_FILES,
@@ -13,7 +14,12 @@ import {
 } from './validate-http-runtime-suite-evidence.js';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
-const head = execFileSync('git', ['-c', 'safe.directory=G:/github/uade-bot', 'rev-parse', 'HEAD'], {
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const gitArgs = ['-c', `safe.directory=${repoRoot.replaceAll('\\', '/')}`, '-C', repoRoot];
+const head = execFileSync('git', [...gitArgs, 'rev-parse', 'HEAD'], {
+  encoding: 'utf8',
+}).trim();
+const parentCommit = execFileSync('git', [...gitArgs, 'rev-parse', 'HEAD^'], {
   encoding: 'utf8',
 }).trim();
 
@@ -47,7 +53,7 @@ function completeTap(overrides = {}) {
 }
 
 function currentFileRecord(filePath) {
-  const bytes = readFileSync(filePath);
+  const bytes = readFileSync(path.join(repoRoot, filePath));
   const digest = sha256(bytes);
   return { path: filePath, beforeSha256: digest, afterSha256: digest };
 }
@@ -170,6 +176,24 @@ test('rejects a changed execPath', () => {
 
 test('rejects a changed commit', () => {
   rejectsEvidence({ mutate: (manifest) => { manifest.commit = '0'.repeat(40); } }, /commit/i);
+});
+
+test('rejects a real ancestor commit because evidence must certify exact HEAD', () => {
+  rejectsEvidence({ mutate: (manifest) => { manifest.commit = parentCommit; } }, /exactly match HEAD/i);
+});
+
+test('validates package hashes and Git commit independently of the current working directory', () => {
+  const directory = makeEvidence();
+  const previousCwd = process.cwd();
+  const foreignCwd = mkdtempSync(path.join(tmpdir(), 'runtime-suite-cwd-'));
+  try {
+    process.chdir(foreignCwd);
+    assert.equal(validateEvidenceDirectory(directory).counts.fail, 0);
+  } finally {
+    process.chdir(previousCwd);
+    rmSync(foreignCwd, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('rejects a changed command', () => {
