@@ -33,7 +33,9 @@ func ExtractFormState(html string) (FormState, error) {
 func (c *Client) Postback(ctx context.Context, path string, state FormState, fields map[string]string) (string, error) {
 	body := url.Values{}
 	for k, v := range state.Fields {
-		body.Set(k, v)
+		if len(v) > 0 {
+			body.Set(k, v[0])
+		}
 	}
 	for k, v := range fields {
 		body.Set(k, v)
