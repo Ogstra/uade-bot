@@ -9,7 +9,9 @@ import { fileURLToPath } from 'node:url';
 
 import {
   APPROVED_TEST_FILES,
+  APPROVED_SOURCE_SCOPE,
   buildCanonicalTestCommand,
+  validateScopedGitStatus,
   validateEvidenceDirectory,
 } from './validate-http-runtime-suite-evidence.js';
 
@@ -66,6 +68,7 @@ function makeEvidence({ tap = completeTap(), mutate } = {}) {
     evidenceSha256: sha256(tap),
     testFiles: [...APPROVED_TEST_FILES],
     testCommand: buildCanonicalTestCommand(APPROVED_TEST_FILES),
+    sourceScope: [...APPROVED_SOURCE_SCOPE],
     counts: { tests: 3, pass: 3, fail: 0, skipped: 0, todo: 0 },
     packageFiles: [currentFileRecord('package.json'), currentFileRecord('package-lock.json')],
     runtime: { version: process.version, execPath: process.execPath },
@@ -80,7 +83,7 @@ function makeEvidence({ tap = completeTap(), mutate } = {}) {
 function rejectsEvidence(options, pattern) {
   const directory = makeEvidence(options);
   try {
-    assert.throws(() => validateEvidenceDirectory(directory), pattern);
+    assert.throws(() => validateEvidenceDirectory(directory, { scopedGitStatus: '' }), pattern);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -89,7 +92,7 @@ function rejectsEvidence(options, pattern) {
 test('accepts one complete terminal TAP footer and a matching manifest', () => {
   const directory = makeEvidence();
   try {
-    assert.deepEqual(validateEvidenceDirectory(directory).counts, {
+    assert.deepEqual(validateEvidenceDirectory(directory, { scopedGitStatus: '' }).counts, {
       tests: 3,
       suites: 0,
       pass: 3,
@@ -110,7 +113,7 @@ test('accepts a top-level plan smaller than total tests when suites contain nest
   );
   const directory = makeEvidence({ tap });
   try {
-    assert.equal(validateEvidenceDirectory(directory).counts.tests, 3);
+    assert.equal(validateEvidenceDirectory(directory, { scopedGitStatus: '' }).counts.tests, 3);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -202,7 +205,7 @@ test('validates package hashes and Git commit independently of the current worki
   const foreignCwd = mkdtempSync(path.join(tmpdir(), 'runtime-suite-cwd-'));
   try {
     process.chdir(foreignCwd);
-    assert.equal(validateEvidenceDirectory(directory).counts.fail, 0);
+    assert.equal(validateEvidenceDirectory(directory, { scopedGitStatus: '' }).counts.fail, 0);
   } finally {
     process.chdir(previousCwd);
     rmSync(foreignCwd, { recursive: true, force: true });
@@ -212,6 +215,21 @@ test('validates package hashes and Git commit independently of the current worki
 
 test('rejects a changed command', () => {
   rejectsEvidence({ mutate: (manifest) => { manifest.testCommand += ' src/extra.test.js'; } }, /command/i);
+});
+
+test('rejects a changed source scope', () => {
+  rejectsEvidence({ mutate: (manifest) => { manifest.sourceScope.pop(); } }, /sourceScope/i);
+});
+
+test('rejects staged, unstaged and untracked changes reported inside the approved scope', () => {
+  for (const status of [
+    'M  src/automation/http-search.js',
+    ' M scripts/validate-http-runtime-suite-evidence.js',
+    '?? src/automation/untracked.js',
+  ]) {
+    assert.throws(() => validateScopedGitStatus(status), /differs from HEAD/i);
+  }
+  assert.doesNotThrow(() => validateScopedGitStatus(''));
 });
 
 test('rejects package hashes changed across npm ci', () => {

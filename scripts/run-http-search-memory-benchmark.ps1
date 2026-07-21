@@ -43,6 +43,20 @@ try {
 
     $benchmarkScript = Join-Path $PSScriptRoot 'benchmark-http-search-memory.js'
     $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+    $sourceScope = @(
+        'package.json',
+        'package-lock.json',
+        'scripts/benchmark-http-search-memory.js',
+        'scripts/http-search-memory-contract.js',
+        'scripts/run-http-search-memory-benchmark.ps1',
+        'scripts/validate-http-search-memory-evidence.js',
+        ':(glob)src/automation/**/*.js',
+        'src/schemas.js',
+        'src/logger.js'
+    )
+    $dirtyBefore = @(& git -c "safe.directory=$($repoRoot.Replace('\','/'))" -C $repoRoot status --porcelain=v1 --untracked-files=all -- @sourceScope)
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect benchmark source scope.' }
+    if ($dirtyBefore.Count -ne 0) { throw "Benchmark source scope differs from HEAD: $($dirtyBefore[0])" }
     $sourceCommit = (& git -c "safe.directory=$($repoRoot.Replace('\','/'))" -C $repoRoot rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Unable to resolve source commit.' }
 
@@ -66,6 +80,11 @@ try {
     if ($pendingSummary.pass -ne $true -or $pendingSummary.sourceCommit -ne $sourceCommit) {
         throw 'Aggregated evidence did not produce a pass for the current source commit.'
     }
+    $sourceCommitAfter = (& git -c "safe.directory=$($repoRoot.Replace('\','/'))" -C $repoRoot rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $sourceCommitAfter -ne $sourceCommit) { throw 'Source commit changed during benchmark execution.' }
+    $dirtyAfter = @(& git -c "safe.directory=$($repoRoot.Replace('\','/'))" -C $repoRoot status --porcelain=v1 --untracked-files=all -- @sourceScope)
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to re-inspect benchmark source scope.' }
+    if ($dirtyAfter.Count -ne 0) { throw "Benchmark source scope changed during execution: $($dirtyAfter[0])" }
 
     Move-Item -LiteralPath $pendingIsolatedFile -Destination $isolatedFile -Force
     Move-Item -LiteralPath $pendingConcurrentFile -Destination $concurrentFile -Force

@@ -8,6 +8,17 @@ import { fileURLToPath } from 'node:url';
 import { SearchOutcomeSchema } from '../src/schemas.js';
 
 const LIMIT_BYTES_EXCLUSIVE = 10 * 1024 * 1024;
+export const MEMORY_SOURCE_SCOPE = Object.freeze([
+  'package.json',
+  'package-lock.json',
+  'scripts/benchmark-http-search-memory.js',
+  'scripts/http-search-memory-contract.js',
+  'scripts/run-http-search-memory-benchmark.ps1',
+  'scripts/validate-http-search-memory-evidence.js',
+  ':(glob)src/automation/**/*.js',
+  'src/schemas.js',
+  'src/logger.js',
+]);
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MANIFEST_FILE = path.join(REPO_ROOT, '.planning/phases/03.2-motor-http-sin-navegador/evidence/webforms-capture-sanitized/manifest.json');
 const EXPECTED_FIXTURES = [
@@ -65,6 +76,11 @@ function canonical(value) {
   assert(path.isAbsolute(value), 'runtime execPath must be absolute');
   const normalized = path.normalize(value);
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+export function validateScopedGitStatus(status) {
+  assert.equal(typeof status, 'string', 'scoped Git status must be a string');
+  assert.equal(status.trim(), '', `memory source scope differs from HEAD: ${status.trim().split(/\r?\n/)[0] ?? ''}`);
 }
 
 function validateCanonicalOutcome(outcome, label) {
@@ -152,6 +168,7 @@ async function main() {
   const concurrentRows = parseJsonl(concurrentBytes, 'concurrent.jsonl');
   const summary = parseJson(summaryBytes, 'summary.json');
   assert.equal(summary.pass, true, 'summary pass must be true');
+  assert.deepEqual(summary.sourceScope, MEMORY_SOURCE_SCOPE, 'summary sourceScope differs from approved scope');
   assert.equal(summary.limitBytesExclusive, LIMIT_BYTES_EXCLUSIVE, 'summary threshold differs');
   const workers = isolatedRows.filter(({ scenario }) => scenario === 'isolated');
   const isolatedSummaryRows = isolatedRows.filter(({ scenario }) => scenario === 'isolated-summary');
@@ -190,6 +207,12 @@ async function main() {
   assert.equal(concurrentRows[0].inputManifestHash, manifestHash, 'concurrent input manifest hash differs');
   const head = execFileSync('git', ['-c', `safe.directory=${REPO_ROOT.replaceAll('\\', '/')}`, '-C', REPO_ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   assert.equal(summary.sourceCommit, head, 'summary sourceCommit differs from HEAD');
+  const scopedStatus = execFileSync('git', [
+    '-c', `safe.directory=${REPO_ROOT.replaceAll('\\', '/')}`,
+    '-C', REPO_ROOT,
+    'status', '--porcelain=v1', '--untracked-files=all', '--', ...MEMORY_SOURCE_SCOPE,
+  ], { encoding: 'utf8' });
+  validateScopedGitStatus(scopedStatus);
   assert.equal(summary.runtime.nodeMajor, Number.parseInt(summary.runtime.nodeVersion.split('.')[0], 10), 'runtime major differs');
   assert(summary.runtime.nodeMajor >= 24, 'runtime major is below 24');
   if (summary.runtime.nodeMajor !== 24) {

@@ -16,6 +16,13 @@ export const APPROVED_TEST_FILES = Object.freeze([
   'src/scheduler/queue.test.js',
   'src/discord/credentials-flow.test.js',
 ]);
+export const APPROVED_SOURCE_SCOPE = Object.freeze([
+  'package.json',
+  'package-lock.json',
+  ':(glob)scripts/*.js',
+  'scripts/run-http-search-memory-benchmark.ps1',
+  ':(glob)src/**/*.js',
+]);
 
 export function buildCanonicalTestCommand(testFiles = APPROVED_TEST_FILES) {
   return `node --test --test-reporter=tap ${testFiles.join(' ')}`;
@@ -130,7 +137,16 @@ function gitOutput(args) {
   }).trim();
 }
 
-function validateSourceCommit(commit) {
+export function validateScopedGitStatus(status) {
+  if (typeof status !== 'string') {
+    fail('scoped Git status must be a string');
+  }
+  if (status.trim() !== '') {
+    fail(`source scope differs from HEAD: ${status.trim().split(/\r?\n/)[0]}`);
+  }
+}
+
+function validateSourceCommit(commit, scopedGitStatus) {
   if (typeof commit !== 'string' || !/^[0-9a-f]{40}$/.test(commit)) {
     fail('manifest commit must be a full lowercase Git object id');
   }
@@ -143,9 +159,18 @@ function validateSourceCommit(commit) {
   if (commit !== head) {
     fail('manifest commit must exactly match HEAD');
   }
+  let scopedStatus = scopedGitStatus;
+  if (scopedStatus === undefined) {
+    try {
+      scopedStatus = gitOutput(['status', '--porcelain=v1', '--untracked-files=all', '--', ...APPROVED_SOURCE_SCOPE]);
+    } catch {
+      fail('source scope could not be compared with HEAD');
+    }
+  }
+  validateScopedGitStatus(scopedStatus);
 }
 
-export function validateEvidenceDirectory(evidenceDirectory) {
+export function validateEvidenceDirectory(evidenceDirectory, { scopedGitStatus } = {}) {
   const manifestPath = path.join(evidenceDirectory, 'manifest.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   if (manifest.schemaVersion !== 1) {
@@ -168,6 +193,9 @@ export function validateEvidenceDirectory(evidenceDirectory) {
   if (manifest.testCommand !== buildCanonicalTestCommand()) {
     fail('manifest test command does not match the approved allowlist');
   }
+  if (JSON.stringify(manifest.sourceScope) !== JSON.stringify(APPROVED_SOURCE_SCOPE)) {
+    fail('manifest sourceScope must exactly match the approved ordered scope');
+  }
   validatePackageFiles(manifest.packageFiles);
 
   if (manifest.runtime?.version !== process.version) {
@@ -176,7 +204,7 @@ export function validateEvidenceDirectory(evidenceDirectory) {
   if (manifest.runtime?.execPath !== process.execPath) {
     fail(`runtime execPath does not match current execPath ${process.execPath}`);
   }
-  validateSourceCommit(manifest.commit);
+  validateSourceCommit(manifest.commit, scopedGitStatus);
 
   return { manifest, counts: tapCounts };
 }

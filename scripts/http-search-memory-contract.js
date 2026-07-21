@@ -5,6 +5,17 @@ import path from 'node:path';
 import { SearchOutcomeSchema } from '../src/schemas.js';
 
 export const LIMIT_BYTES_EXCLUSIVE = 10 * 1024 * 1024;
+export const MEMORY_SOURCE_SCOPE = Object.freeze([
+  'package.json',
+  'package-lock.json',
+  'scripts/benchmark-http-search-memory.js',
+  'scripts/http-search-memory-contract.js',
+  'scripts/run-http-search-memory-benchmark.ps1',
+  'scripts/validate-http-search-memory-evidence.js',
+  ':(glob)src/automation/**/*.js',
+  'src/schemas.js',
+  'src/logger.js',
+]);
 export const EXPECTED_FIXTURE_PATHS = Object.freeze([
   'src/automation/__fixtures__/webforms/initial-form.html',
   'src/automation/__fixtures__/webforms/postback-found.html',
@@ -192,6 +203,7 @@ export function buildEvidenceSummary({
     schemaVersion: 1,
     pass: true,
     sourceCommit,
+    sourceScope: [...MEMORY_SOURCE_SCOPE],
     runtime: {
       nodeVersion: runtime.expectedNodeVersion,
       nodeMajor: Number.parseInt(runtime.expectedNodeVersion.split('.')[0], 10),

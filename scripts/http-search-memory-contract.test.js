@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import {
   EXPECTED_FIXTURE_PATHS,
   LIMIT_BYTES_EXCLUSIVE,
+  MEMORY_SOURCE_SCOPE,
   REQUIRED_CHECKPOINT_STAGES,
   buildEvidenceSummary,
   validateManifest,
@@ -20,6 +21,8 @@ import {
 } from './http-search-memory-contract.js';
 import {
   validateManifestShape as validateIndependentManifestShape,
+  MEMORY_SOURCE_SCOPE as INDEPENDENT_MEMORY_SOURCE_SCOPE,
+  validateScopedGitStatus as validateIndependentScopedGitStatus,
   validateWorker as validateIndependentWorker,
 } from './validate-http-search-memory-evidence.js';
 import { collectWorkerResult, positiveInteger } from './benchmark-http-search-memory.js';
@@ -276,6 +279,8 @@ test('summary accepts exactly five isolated workers, their summary and concurren
   const concurrentRow = { scenario: 'concurrent', ...worker(2), status: 'pass' };
   const summary = buildEvidenceSummary({ isolatedRows, isolatedSummary, concurrentRow, sourceCommit: 'c'.repeat(40) });
   assert.equal(summary.pass, true);
+  assert.deepEqual(summary.sourceScope, MEMORY_SOURCE_SCOPE);
+  assert.deepEqual(summary.sourceScope, INDEPENDENT_MEMORY_SOURCE_SCOPE);
   assert.equal(summary.isolated.runs, 5);
   assert.equal(summary.concurrent.concurrency, 2);
 });
@@ -311,6 +316,17 @@ test('summary rejects inconsistent functional outcomes across isolated runs', ()
     concurrentRow: { scenario: 'concurrent', ...worker(2), status: 'pass' },
     sourceCommit: 'c'.repeat(40),
   }), /outcome hashes differ/);
+});
+
+test('memory scope policy rejects staged, unstaged and untracked changes without requiring a globally clean tree', () => {
+  for (const status of [
+    'M  src/automation/http-search.js',
+    ' M scripts/benchmark-http-search-memory.js',
+    '?? src/automation/untracked.js',
+  ]) {
+    assert.throws(() => validateIndependentScopedGitStatus(status), /differs from HEAD/i);
+  }
+  assert.doesNotThrow(() => validateIndependentScopedGitStatus(''));
 });
 
 test('summary rejects a concurrent outcome that differs from the isolated canonical outcome', () => {
