@@ -153,6 +153,19 @@ test('rejects a non-zero cancelled count', () => {
   rejectsEvidence({ tap: completeTap({ pass: 2, cancelled: 1 }) }, /cancelled/i);
 });
 
+test('counts top-level TAP results correctly when preceding results include YAML diagnostics', () => {
+  const tap = completeTap().replace(
+    'ok 1 - first\nok 2 - second',
+    "ok 1 - first\n  ---\n  duration_ms: 1.5\n  type: 'test'\n  ...\nok 2 - second",
+  );
+  const directory = makeEvidence({ tap });
+  try {
+    assert.equal(validateEvidenceDirectory(directory, { scopedGitStatus: '' }).counts.pass, 3);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('rejects a not ok test point even when the footer claims zero failures', () => {
   rejectsEvidence({ tap: completeTap().replace('ok 2 - second', 'not ok 2 - second') }, /failing test point/i);
 });

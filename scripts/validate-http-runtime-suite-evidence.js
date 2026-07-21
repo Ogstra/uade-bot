@@ -58,7 +58,7 @@ function parseTerminalFooter(tap) {
   const [plan, tests, suites, pass, failures, cancelled, skipped, todo] = match
     .slice(1, 9)
     .map(Number);
-  const resultLines = [...tap.matchAll(/^(\s*)(not ok|ok) (\d+)(?:\s+-[^\r\n]*)?$/gm)];
+  const resultLines = [...tap.matchAll(/^([ \t]*)(not ok|ok) (\d+)(?:[ \t]+-[^\r\n]*)?$/gm)];
   const failedResult = resultLines.find(([, , status]) => status === 'not ok');
   if (failedResult) {
     fail(`TAP contains a failing test point: ${failedResult[0].trim()}`);
