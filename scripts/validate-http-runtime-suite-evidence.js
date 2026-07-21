@@ -42,6 +42,55 @@ function requireInteger(value, label) {
   }
 }
 
+function validateTapHierarchy(tapBody, { tests, suites, pass }) {
+  const lines = tapBody.split(/\r?\n/);
+  const results = [];
+  const subtests = [];
+  const nestedPlans = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const result = /^([ \t]*)(not ok|ok) (\d+)(?:[ \t]+-[^\r\n]*)?$/.exec(line);
+    if (result) results.push({ index, indent: result[1].length, status: result[2], line });
+    const subtest = /^([ \t]*)# Subtest:/.exec(line);
+    if (subtest) subtests.push({ index, indent: subtest[1].length });
+    const plan = /^([ \t]+)1\.\.(\d+)[ \t]*$/.exec(line);
+    if (plan) nestedPlans.push({ index, indent: plan[1].length, count: Number(plan[2]) });
+  }
+
+  if (nestedPlans.length !== suites) {
+    fail(`TAP contains ${nestedPlans.length} nested suite plans but footer declares ${suites} suites`);
+  }
+  const parentResultIndexes = new Set();
+  for (const plan of nestedPlans) {
+    const parentIndent = Math.max(0, plan.indent - 4);
+    const opener = subtests.findLast(({ index, indent }) => index < plan.index && indent === parentIndent);
+    if (!opener) {
+      fail(`nested TAP plan 1..${plan.count} has no matching parent subtest`);
+    }
+    const childResults = results.filter(({ index, indent }) => index > opener.index && index < plan.index && indent === plan.indent);
+    if (childResults.length !== plan.count) {
+      fail(`nested TAP plan 1..${plan.count} does not match ${childResults.length} child results`);
+    }
+    const parentResult = results.find(({ index, indent }) => index > plan.index && indent === parentIndent);
+    if (!parentResult) {
+      fail(`nested TAP plan 1..${plan.count} has no terminal parent result`);
+    }
+    parentResultIndexes.add(parentResult.index);
+  }
+  if (parentResultIndexes.size !== suites) {
+    fail('TAP suite plans do not map one-to-one to terminal parent results');
+  }
+
+  const executableResults = results.length - parentResultIndexes.size;
+  const executablePasses = results.filter(({ status, index }) => status === 'ok' && !parentResultIndexes.has(index)).length;
+  if (executableResults !== tests) {
+    fail(`TAP contains ${executableResults} executable test results but footer declares ${tests} tests`);
+  }
+  if (executablePasses !== pass) {
+    fail(`TAP contains ${executablePasses} passing test results but footer declares ${pass} pass`);
+  }
+}
+
 function parseTerminalFooter(tap) {
   const footerPattern = /(?:^|\r?\n)1\.\.(\d+)\r?\n# tests (\d+)\r?\n# suites (\d+)\r?\n# pass (\d+)\r?\n# fail (\d+)\r?\n# cancelled (\d+)\r?\n# skipped (\d+)\r?\n# todo (\d+)\r?\n# duration_ms ([0-9]+(?:\.[0-9]+)?)/g;
   const matches = [...tap.matchAll(footerPattern)];
@@ -89,6 +138,7 @@ function parseTerminalFooter(tap) {
   if (pass !== tests) {
     fail(`TAP pass count ${pass} must equal tests ${tests}`);
   }
+  validateTapHierarchy(tap.slice(0, match.index), { tests, suites, pass });
 
   return { tests, suites, pass, fail: failures, cancelled, skipped, todo };
 }

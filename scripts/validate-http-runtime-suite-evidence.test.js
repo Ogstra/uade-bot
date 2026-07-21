@@ -107,13 +107,16 @@ test('accepts one complete terminal TAP footer and a matching manifest', () => {
 });
 
 test('accepts a top-level plan smaller than total tests when suites contain nested tests', () => {
-  const tap = completeTap({ suites: 1 }).replace(
-    ['ok 1 - first', 'ok 2 - second', 'ok 3 - third', '1..3'].join('\n'),
-    ['# Subtest: grouped', '    ok 1 - nested', '    1..1', 'ok 1 - grouped', 'ok 2 - standalone', '1..2'].join('\n'),
+  const tap = completeTap({ tests: 2, pass: 2, suites: 1 }).replace(
+    ['ok 1 - first', 'ok 2 - second', 'ok 3 - third'].join('\n'),
+    ['# Subtest: grouped', '    ok 1 - nested', '    1..1', 'ok 1 - grouped', 'ok 2 - standalone'].join('\n'),
   );
-  const directory = makeEvidence({ tap });
+  const directory = makeEvidence({ tap, mutate: (manifest) => {
+    manifest.counts.tests = 2;
+    manifest.counts.pass = 2;
+  } });
   try {
-    assert.equal(validateEvidenceDirectory(directory, { scopedGitStatus: '' }).counts.tests, 3);
+    assert.equal(validateEvidenceDirectory(directory, { scopedGitStatus: '' }).counts.tests, 2);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -151,6 +154,27 @@ test('rejects a non-zero failure count', () => {
 
 test('rejects a non-zero cancelled count', () => {
   rejectsEvidence({ tap: completeTap({ pass: 2, cancelled: 1 }) }, /cancelled/i);
+});
+
+test('rejects one retained test point with a falsified 93 tests and 93 pass footer', () => {
+  const tap = [
+    'TAP version 13',
+    'ok 1 - only one test',
+    '1..1',
+    '# tests 93',
+    '# suites 0',
+    '# pass 93',
+    '# fail 0',
+    '# cancelled 0',
+    '# skipped 0',
+    '# todo 0',
+    '# duration_ms 1',
+    '',
+  ].join('\n');
+  rejectsEvidence({ tap, mutate: (manifest) => {
+    manifest.counts.tests = 93;
+    manifest.counts.pass = 93;
+  } }, /executable test results|footer declares 93/i);
 });
 
 test('counts top-level TAP results correctly when preceding results include YAML diagnostics', () => {
