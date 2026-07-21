@@ -20,14 +20,15 @@ func ParseDelta(text string, maxNodes, maxChars int) (DeltaResult, DeltaFailure)
 	if len(text) > maxChars {
 		return DeltaResult{}, "delta_too_large"
 	}
+	chars := []rune(text)
 	cur, n := 0, 0
 	out := DeltaResult{}
 	read := func() (string, bool) {
-		i := strings.IndexByte(text[cur:], '|')
+		i := strings.IndexRune(string(chars[cur:]), '|')
 		if i < 0 {
 			return "", false
 		}
-		v := text[cur : cur+i]
+		v := string(chars[cur : cur+i])
 		cur += i + 1
 		return v, true
 	}
@@ -51,12 +52,12 @@ func ParseDelta(text string, maxNodes, maxChars int) (DeltaResult, DeltaFailure)
 		if !ok {
 			return DeltaResult{}, "delta_missing_delimiter"
 		}
-		if ln > len(text)-cur {
+		if ln > len(chars)-cur {
 			return DeltaResult{}, "delta_truncated"
 		}
-		content := text[cur : cur+ln]
+		content := string(chars[cur : cur+ln])
 		cur += ln
-		if cur >= len(text) || text[cur] != '|' {
+		if cur >= len(chars) || chars[cur] != '|' {
 			return DeltaResult{}, "delta_missing_delimiter"
 		}
 		cur++
