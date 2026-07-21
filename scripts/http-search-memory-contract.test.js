@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 import {
@@ -14,6 +16,7 @@ import {
   validateManifestShape as validateIndependentManifestShape,
   validateWorker as validateIndependentWorker,
 } from './validate-http-search-memory-evidence.js';
+import { collectWorkerResult, positiveInteger } from './benchmark-http-search-memory.js';
 
 const EXEC_PATH = process.execPath;
 const VERSION = '25.8.1';
@@ -110,6 +113,28 @@ test('manifest rejects an altered fixture byte or hash', () => {
   const hashChanged = fixtureRecords();
   hashChanged[0] = { ...hashChanged[0], sha256: '0'.repeat(64) };
   assert.throws(() => validateManifest(manifest(), hashChanged), /fixture .* sha256/);
+});
+
+test('positive integer parser rejects suffixes, decimals, signs and leading zeroes', () => {
+  assert.equal(positiveInteger('5', 'runs'), 5);
+  for (const invalid of ['5junk', '2.9', '+2', '01', '0', '-1']) {
+    assert.throws(() => positiveInteger(invalid, 'runs'), /positive integer/);
+  }
+});
+
+test('worker collection waits for close before parsing the complete stdout stream', async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const expected = worker();
+  const collected = collectWorkerResult(child, { expectedExecPath: EXEC_PATH, expectedNodeVersion: VERSION });
+  child.emit('exit', 0, null);
+  child.stdout.write(`${JSON.stringify(expected).slice(0, -1)}`);
+  child.stdout.write('}\n');
+  child.stdout.end();
+  child.stderr.end();
+  child.emit('close', 0, null);
+  assert.deepEqual(await collected, expected);
 });
 
 const manifestMutations = [

@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -32,8 +33,10 @@ function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function positiveInteger(value, name) {
-  const parsed = Number.parseInt(value, 10);
+export function positiveInteger(value, name) {
+  assert.equal(typeof value, 'string', `${name} must be a positive integer`);
+  assert(/^[1-9]\d*$/.test(value), `${name} must be a positive integer`);
+  const parsed = Number(value);
   assert(Number.isSafeInteger(parsed) && parsed > 0, `${name} must be a positive integer`);
   return parsed;
 }
@@ -248,6 +251,23 @@ async function runWorker(concurrency) {
   }
 }
 
+export async function collectWorkerResult(child, runtime) {
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const { exitCode, signal } = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, closeSignal) => resolve({ exitCode: code, signal: closeSignal }));
+  });
+  assert.equal(signal, null, `worker terminated by signal ${signal}: ${stderr.trim()}`);
+  assert.equal(exitCode, 0, `worker exited ${exitCode}: ${stderr.trim()}`);
+  const result = JSON.parse(stdout.trim().split(/\r?\n/).at(-1));
+  return validateWorkerResult(result, runtime);
+}
+
 async function spawnWorker(concurrency) {
   const child = spawn(process.execPath, [
     '--expose-gc', fileURLToPath(import.meta.url), '--worker', '--scenario',
@@ -258,19 +278,7 @@ async function spawnWorker(concurrency) {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
-  let stdout = '';
-  let stderr = '';
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => { stdout += chunk; });
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
-  const exitCode = await new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', resolve);
-  });
-  assert.equal(exitCode, 0, `worker exited ${exitCode}: ${stderr.trim()}`);
-  const result = JSON.parse(stdout.trim().split(/\r?\n/).at(-1));
-  return validateWorkerResult(result, { expectedExecPath: process.execPath, expectedNodeVersion: process.versions.node });
+  return collectWorkerResult(child, { expectedExecPath: process.execPath, expectedNodeVersion: process.versions.node });
 }
 
 async function runParent(options) {
@@ -319,19 +327,26 @@ async function aggregateEvidence(options) {
   });
 }
 
-const packageJson = JSON.parse(await readFile(PACKAGE_URL, 'utf8'));
-validateRuntime({
-  nodeVersion: process.versions.node,
-  execPath: process.execPath,
-  gcAvailable: typeof global.gc === 'function',
-  engineRange: packageJson.engines?.node,
-});
-const options = parseArgs(process.argv.slice(2));
-try {
-  if (options.aggregate) console.log(JSON.stringify(await aggregateEvidence(options), null, 2));
-  else if (options.worker) console.log(JSON.stringify(await runWorker(options.concurrency)));
-  else await runParent(options);
-} catch (error) {
-  console.error(`benchmark_failed: ${error instanceof Error ? error.message : 'unknown error'}`);
-  process.exitCode = 1;
+async function main() {
+  const packageJson = JSON.parse(await readFile(PACKAGE_URL, 'utf8'));
+  validateRuntime({
+    nodeVersion: process.versions.node,
+    execPath: process.execPath,
+    gcAvailable: typeof global.gc === 'function',
+    engineRange: packageJson.engines?.node,
+  });
+  const options = parseArgs(process.argv.slice(2));
+  try {
+    if (options.aggregate) console.log(JSON.stringify(await aggregateEvidence(options), null, 2));
+    else if (options.worker) console.log(JSON.stringify(await runWorker(options.concurrency)));
+    else await runParent(options);
+  } catch (error) {
+    console.error(`benchmark_failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+    process.exitCode = 1;
+  }
+}
+
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  await main();
 }
