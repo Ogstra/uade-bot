@@ -32,7 +32,10 @@ func ParseDelta(text string, maxNodes, maxChars int) (DeltaResult, DeltaFailure)
 		cur += i + 1
 		return v, true
 	}
-	for cur < len(text) {
+	for cur < len(chars) {
+		if strings.TrimSpace(string(chars[cur:])) == "" {
+			break
+		}
 		if n >= maxNodes {
 			return DeltaResult{}, "delta_too_many_nodes"
 		}
