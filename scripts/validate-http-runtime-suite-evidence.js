@@ -51,7 +51,16 @@ function parseTerminalFooter(tap) {
   const [plan, tests, suites, pass, failures, cancelled, skipped, todo] = match
     .slice(1, 9)
     .map(Number);
-  const topLevelResults = tap.match(/^(?:ok|not ok) \d+(?:\s+-|$)/gm)?.length ?? 0;
+  const resultLines = [...tap.matchAll(/^(\s*)(not ok|ok) (\d+)(?:\s+-[^\r\n]*)?$/gm)];
+  const failedResult = resultLines.find(([, , status]) => status === 'not ok');
+  if (failedResult) {
+    fail(`TAP contains a failing test point: ${failedResult[0].trim()}`);
+  }
+  const directedResult = resultLines.find((matchResult) => /\s+#\s*(?:SKIP|TODO)(?:\s|$)/i.test(matchResult[0]));
+  if (directedResult) {
+    fail(`TAP contains a skipped or todo test point: ${directedResult[0].trim()}`);
+  }
+  const topLevelResults = resultLines.filter(([, indentation]) => indentation.length === 0).length;
   if (plan !== topLevelResults) {
     fail(`TAP plan 1..${plan} does not match ${topLevelResults} top-level results`);
   }
@@ -63,6 +72,15 @@ function parseTerminalFooter(tap) {
   }
   if (cancelled !== 0) {
     fail(`TAP cancelled count must be zero, received ${cancelled}`);
+  }
+  if (skipped !== 0) {
+    fail(`TAP skipped count must be zero, received ${skipped}`);
+  }
+  if (todo !== 0) {
+    fail(`TAP todo count must be zero, received ${todo}`);
+  }
+  if (pass !== tests) {
+    fail(`TAP pass count ${pass} must equal tests ${tests}`);
   }
 
   return { tests, suites, pass, fail: failures, cancelled, skipped, todo };

@@ -150,6 +150,20 @@ test('rejects a non-zero cancelled count', () => {
   rejectsEvidence({ tap: completeTap({ pass: 2, cancelled: 1 }) }, /cancelled/i);
 });
 
+test('rejects a not ok test point even when the footer claims zero failures', () => {
+  rejectsEvidence({ tap: completeTap().replace('ok 2 - second', 'not ok 2 - second') }, /failing test point/i);
+});
+
+test('rejects skipped and todo test points even when footer arithmetic is falsified', () => {
+  rejectsEvidence({ tap: completeTap().replace('ok 2 - second', 'ok 2 - second # SKIP unavailable') }, /skipped or todo/i);
+  rejectsEvidence({ tap: completeTap().replace('ok 2 - second', 'ok 2 - second # TODO later') }, /skipped or todo/i);
+});
+
+test('rejects non-zero skipped and todo footer counts', () => {
+  rejectsEvidence({ tap: completeTap({ pass: 2, skipped: 1 }) }, /skipped/i);
+  rejectsEvidence({ tap: completeTap({ pass: 2, todo: 1 }) }, /todo/i);
+});
+
 test('rejects a plan that disagrees with the test count', () => {
   rejectsEvidence({ tap: completeTap().replace('1..3', '1..2') }, /plan/i);
 });
