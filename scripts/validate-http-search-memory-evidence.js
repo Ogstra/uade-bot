@@ -45,29 +45,49 @@ function canonical(value) {
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
-function validateWorker(row, runtime, concurrency) {
+export function validateWorker(row, runtime, concurrency) {
   assert.equal(row.kind, 'worker-result', 'row is not a worker result');
   assert.equal(row.nodeVersion, runtime.nodeVersion, 'worker runtime version differs from summary');
   assert.equal(canonical(row.execPath), canonical(runtime.execPath), 'worker execPath differs from summary');
   assert.equal(row.concurrency, concurrency, `worker concurrency must be ${concurrency}`);
   assert.equal(row.limitBytesExclusive, LIMIT_BYTES_EXCLUSIVE, 'worker threshold differs from exclusive 10 MiB');
-  assert(Number.isFinite(row.deltaRss) && row.deltaRss >= 0, 'worker deltaRss is invalid');
-  assert(Number.isFinite(row.perSearchDeltaRss) && row.perSearchDeltaRss >= 0, 'worker per-search delta is invalid');
-  assert(row.perSearchDeltaRss < LIMIT_BYTES_EXCLUSIVE, 'worker reached the exclusive 10 MiB threshold');
+  for (const field of ['baselineRss', 'peakRss', 'deltaRss', 'perSearchDeltaRss']) {
+    assert(Number.isSafeInteger(row[field]) && row[field] >= 0, `worker ${field} must be a non-negative safe integer`);
+  }
+  assert(row.peakRss >= row.baselineRss, 'worker peakRss is below baselineRss');
+  const measuredDeltaRss = row.peakRss - row.baselineRss;
+  assert.equal(row.deltaRss, measuredDeltaRss, 'worker deltaRss differs from peakRss - baselineRss');
+  const measuredPerSearchDeltaRss = measuredDeltaRss / concurrency;
+  assert(Number.isSafeInteger(measuredPerSearchDeltaRss), 'worker per-search delta is not an exact safe integer');
+  assert.equal(row.perSearchDeltaRss, measuredPerSearchDeltaRss, 'worker per-search delta differs from deltaRss / concurrency');
+  assert(measuredPerSearchDeltaRss < LIMIT_BYTES_EXCLUSIVE, 'worker reached the exclusive 10 MiB threshold');
+  assert(Array.isArray(row.outcomes) && row.outcomes.length === concurrency, 'worker outcomes do not match concurrency');
+  assert(row.outcomes.every((outcome) => outcome?.outcome === 'found'), 'worker outcomes must all be found');
   assert(/^[a-f0-9]{64}$/.test(row.outcomeHash), 'worker outcome hash is invalid');
+  assert.equal(row.outcomeHash, sha256(JSON.stringify(row.outcomes)), 'worker outcome hash differs from canonical outcomes');
   assert(/^[a-f0-9]{64}$/.test(row.inputManifestHash), 'worker input manifest hash is invalid');
 }
 
-async function validateManifest(manifestBytes) {
-  const manifest = parseJson(manifestBytes, 'fixture manifest');
+export function validateManifestShape(manifest) {
+  assert.equal(manifest.schemaVersion, 1, 'fixture schemaVersion differs');
   assert.equal(manifest.baselineKind, 'rebaseline-retained-contract', 'fixture baselineKind differs');
   assert.equal(manifest.syntheticEnvelope, true, 'fixture syntheticEnvelope differs');
   assert.equal(manifest.postbackModeAccepted, 'accepted', 'fixture postback mode differs');
   assert.deepEqual(manifest.fixtures?.map(({ path: fixturePath }) => fixturePath), EXPECTED_FIXTURES, 'fixture allowlist differs');
   assert.equal(manifest.responses?.initialGet?.bytes, 87340, 'initial envelope differs');
   assert.equal(manifest.responses?.fullPostback?.bytes, 87340, 'postback envelope differs');
+  assert.equal(manifest.responses?.asyncPostback?.bytes, 87340, 'async postback envelope differs');
   assert.equal(manifest.derivedLimits?.measuredMaxBodyBytes, 87340, 'measured envelope differs');
+  assert.equal(manifest.derivedLimits?.measuredDeltaChars, 80154, 'measured delta chars differs');
+  assert.equal(manifest.derivedLimits?.measuredDeltaNodes, 17, 'measured delta nodes differs');
   assert.equal(manifest.derivedLimits?.maxBodyBytes, 300000, 'independent body cap differs');
+  assert.equal(manifest.derivedLimits?.maxDeltaChars, 100193, 'delta char cap differs');
+  assert.equal(manifest.derivedLimits?.maxDeltaNodes, 22, 'delta node cap differs');
+}
+
+async function validateManifest(manifestBytes) {
+  const manifest = parseJson(manifestBytes, 'fixture manifest');
+  validateManifestShape(manifest);
   for (const fixture of manifest.fixtures) {
     const bytes = await readFile(path.join(REPO_ROOT, fixture.path));
     assert.equal(bytes.byteLength, fixture.bytes, `${fixture.path} byte count differs`);
@@ -100,6 +120,7 @@ async function main() {
   assert.equal(concurrentRows.length, 1, 'concurrent evidence must contain exactly one row');
   workers.forEach((row) => validateWorker(row, summary.runtime, 1));
   validateWorker(concurrentRows[0], summary.runtime, 2);
+  assert(workers.every(({ outcomeHash }) => outcomeHash === workers[0].outcomeHash), 'isolated outcome hashes differ');
   const isolatedSummary = isolatedSummaryRows[0];
   assert.equal(isolatedSummary.status, 'pass', 'isolated summary did not pass');
   assert.equal(isolatedSummary.nodeVersion, summary.runtime.nodeVersion, 'isolated summary runtime differs');
@@ -132,9 +153,12 @@ async function main() {
   console.log(`memory-evidence-valid source=${head} runtime=${summary.runtime.nodeVersion} isolatedMax=${worstDeltaRss} concurrentPerSearch=${concurrentRows[0].perSearchDeltaRss}`);
 }
 
-try {
-  await main();
-} catch (error) {
-  console.error(`memory_evidence_invalid: ${error instanceof Error ? error.message : 'unknown error'}`);
-  process.exitCode = 1;
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  try {
+    await main();
+  } catch (error) {
+    console.error(`memory_evidence_invalid: ${error instanceof Error ? error.message : 'unknown error'}`);
+    process.exitCode = 1;
+  }
 }

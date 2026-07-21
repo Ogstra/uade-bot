@@ -239,6 +239,7 @@ async function runWorker(concurrency) {
       checkpointRss,
       limitBytesExclusive: LIMIT_BYTES_EXCLUSIVE,
       inputManifestHash: fixtures.manifestHash,
+      outcomes,
       outcomeHash: sha256(JSON.stringify(outcomes)),
     };
   } finally {

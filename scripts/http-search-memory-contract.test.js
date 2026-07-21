@@ -10,6 +10,10 @@ import {
   validateRuntime,
   validateWorkerResult,
 } from './http-search-memory-contract.js';
+import {
+  validateManifestShape as validateIndependentManifestShape,
+  validateWorker as validateIndependentWorker,
+} from './validate-http-search-memory-evidence.js';
 
 const EXEC_PATH = process.execPath;
 const VERSION = '25.8.1';
@@ -49,15 +53,21 @@ function manifest(records = fixtureRecords()) {
 }
 
 function worker(concurrency = 1) {
+  const outcomes = Array.from({ length: concurrency }, () => ({ outcome: 'found', vacancies: [{ cupos: 1 }] }));
+  const baselineRss = 100000;
+  const deltaRss = concurrency * 1024;
   return {
     kind: 'worker-result',
     nodeVersion: VERSION,
     execPath: EXEC_PATH,
     concurrency,
-    deltaRss: concurrency * 1024,
+    baselineRss,
+    peakRss: baselineRss + deltaRss,
+    deltaRss,
     perSearchDeltaRss: 1024,
     limitBytesExclusive: LIMIT_BYTES_EXCLUSIVE,
-    outcomeHash: 'a'.repeat(64),
+    outcomes,
+    outcomeHash: createHash('sha256').update(JSON.stringify(outcomes)).digest('hex'),
     inputManifestHash: 'b'.repeat(64),
   };
 }
@@ -102,11 +112,62 @@ test('manifest rejects an altered fixture byte or hash', () => {
   assert.throws(() => validateManifest(manifest(), hashChanged), /fixture .* sha256/);
 });
 
+const manifestMutations = [
+  ['schemaVersion', (value) => { value.schemaVersion = 2; }],
+  ['initialGet bytes', (value) => { value.responses.initialGet.bytes += 1; }],
+  ['fullPostback bytes', (value) => { value.responses.fullPostback.bytes += 1; }],
+  ['asyncPostback bytes', (value) => { value.responses.asyncPostback.bytes += 1; }],
+  ['measuredMaxBodyBytes', (value) => { value.derivedLimits.measuredMaxBodyBytes += 1; }],
+  ['measuredDeltaChars', (value) => { value.derivedLimits.measuredDeltaChars += 1; }],
+  ['measuredDeltaNodes', (value) => { value.derivedLimits.measuredDeltaNodes += 1; }],
+  ['maxBodyBytes', (value) => { value.derivedLimits.maxBodyBytes += 1; }],
+  ['maxDeltaChars', (value) => { value.derivedLimits.maxDeltaChars += 1; }],
+  ['maxDeltaNodes', (value) => { value.derivedLimits.maxDeltaNodes += 1; }],
+];
+
+for (const [label, mutate] of manifestMutations) {
+  test(`both manifest validators reject altered ${label}`, () => {
+    const changed = manifest();
+    mutate(changed);
+    assert.throws(() => validateManifest(changed, fixtureRecords()), new RegExp(label.split(' ')[0], 'i'));
+    assert.throws(() => validateIndependentManifestShape(changed));
+  });
+}
+
 test('worker result accepts the expected executable and rejects another one', () => {
   assert.equal(validateWorkerResult(worker(), { expectedExecPath: EXEC_PATH, expectedNodeVersion: VERSION }).concurrency, 1);
   assert.throws(() => validateWorkerResult(worker(), {
     expectedExecPath: `${EXEC_PATH}.other`, expectedNodeVersion: VERSION,
   }), /execPath/);
+});
+
+for (const [label, mutate] of [
+  ['baselineRss', (value) => { value.baselineRss += 1; }],
+  ['peakRss', (value) => { value.peakRss += 1; }],
+  ['deltaRss', (value) => { value.deltaRss += 1; }],
+  ['perSearchDeltaRss', (value) => { value.perSearchDeltaRss += 1; }],
+  ['limitBytesExclusive', (value) => { value.limitBytesExclusive += 1; }],
+  ['outcomeHash', (value) => { value.outcomeHash = 'a'.repeat(64); }],
+  ['outcomes', (value) => { value.outcomes[0].outcome = 'no_vacancies'; }],
+]) {
+  test(`both worker validators reject altered ${label}`, () => {
+    const changed = worker(2);
+    mutate(changed);
+    const runtime = { expectedExecPath: EXEC_PATH, expectedNodeVersion: VERSION };
+    assert.throws(() => validateWorkerResult(changed, runtime), new RegExp(label.replace('BytesExclusive', '|threshold'), 'i'));
+    assert.throws(() => validateIndependentWorker(changed, { execPath: EXEC_PATH, nodeVersion: VERSION }, 2));
+  });
+}
+
+test('both worker validators recompute and enforce the fixed exclusive per-search threshold', () => {
+  const changed = worker();
+  changed.baselineRss = 0;
+  changed.peakRss = LIMIT_BYTES_EXCLUSIVE;
+  changed.deltaRss = LIMIT_BYTES_EXCLUSIVE;
+  changed.perSearchDeltaRss = LIMIT_BYTES_EXCLUSIVE;
+  const runtime = { expectedExecPath: EXEC_PATH, expectedNodeVersion: VERSION };
+  assert.throws(() => validateWorkerResult(changed, runtime), /exclusive 10 MiB limit/);
+  assert.throws(() => validateIndependentWorker(changed, { execPath: EXEC_PATH, nodeVersion: VERSION }, 1), /exclusive 10 MiB threshold/);
 });
 
 test('summary accepts exactly five isolated workers, their summary and concurrency two', () => {
@@ -136,4 +197,20 @@ test('summary rejects incomplete or failed evidence and cannot publish pass', ()
     concurrentRow: { ...concurrentRow, status: 'fail' },
     sourceCommit: 'c'.repeat(40),
   }), /status pass/);
+});
+
+test('summary rejects inconsistent functional outcomes across isolated runs', () => {
+  const isolatedRows = Array.from({ length: 5 }, (_, index) => ({ scenario: 'isolated', run: index + 1, ...worker() }));
+  isolatedRows[4] = { ...isolatedRows[4], ...worker(), outcomes: [{ outcome: 'found', vacancies: [{ cupos: 2 }] }] };
+  isolatedRows[4].outcomeHash = createHash('sha256').update(JSON.stringify(isolatedRows[4].outcomes)).digest('hex');
+  const isolatedSummary = {
+    scenario: 'isolated-summary', nodeVersion: VERSION, execPath: EXEC_PATH, runs: 5,
+    worstDeltaRss: 1024, limitBytesExclusive: LIMIT_BYTES_EXCLUSIVE, status: 'pass',
+  };
+  assert.throws(() => buildEvidenceSummary({
+    isolatedRows,
+    isolatedSummary,
+    concurrentRow: { scenario: 'concurrent', ...worker(2), status: 'pass' },
+    sourceCommit: 'c'.repeat(40),
+  }), /outcome hashes differ/);
 });

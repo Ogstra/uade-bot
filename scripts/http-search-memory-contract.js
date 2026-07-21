@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 export const LIMIT_BYTES_EXCLUSIVE = 10 * 1024 * 1024;
@@ -17,6 +18,15 @@ export const EXPECTED_FIXTURE_PATHS = Object.freeze([
 ]);
 
 const HEX_64 = /^[a-f0-9]{64}$/;
+const EXPECTED_RESPONSES = Object.freeze({ initialGet: 87340, fullPostback: 87340, asyncPostback: 87340 });
+const EXPECTED_DERIVED_LIMITS = Object.freeze({
+  measuredMaxBodyBytes: 87340,
+  measuredDeltaChars: 80154,
+  measuredDeltaNodes: 17,
+  maxBodyBytes: 300000,
+  maxDeltaChars: 100193,
+  maxDeltaNodes: 22,
+});
 
 function canonicalPath(value) {
   assert.equal(typeof value, 'string', 'execPath must be a string');
@@ -43,11 +53,12 @@ export function validateManifest(manifest, fixtureRecords) {
   assert.equal(manifest?.baselineKind, 'rebaseline-retained-contract', 'manifest baselineKind is not the approved rebaseline');
   assert.equal(manifest?.syntheticEnvelope, true, 'manifest syntheticEnvelope must be true');
   assert.equal(manifest?.postbackModeAccepted, 'accepted', 'manifest postbackModeAccepted must be accepted');
-  for (const response of ['initialGet', 'fullPostback', 'asyncPostback']) {
-    assert.equal(manifest?.responses?.[response]?.bytes, 87340, `${response} envelope must be 87340 bytes`);
+  for (const [response, bytes] of Object.entries(EXPECTED_RESPONSES)) {
+    assert.equal(manifest?.responses?.[response]?.bytes, bytes, `${response} envelope must be ${bytes} bytes`);
   }
-  assert.equal(manifest?.derivedLimits?.measuredMaxBodyBytes, 87340, 'measuredMaxBodyBytes must be 87340');
-  assert.equal(manifest?.derivedLimits?.maxBodyBytes, 300000, 'maxBodyBytes must remain the independent 300000-byte cap');
+  for (const [limit, value] of Object.entries(EXPECTED_DERIVED_LIMITS)) {
+    assert.equal(manifest?.derivedLimits?.[limit], value, `${limit} must be ${value}`);
+  }
   assert(Array.isArray(manifest?.fixtures), 'manifest fixtures must be an array');
   assert(Array.isArray(fixtureRecords), 'fixture records must be an array');
   assert.deepEqual(manifest.fixtures.map(({ path: fixturePath }) => fixturePath), EXPECTED_FIXTURE_PATHS, 'manifest fixture allowlist changed');
@@ -61,11 +72,15 @@ export function validateManifest(manifest, fixtureRecords) {
     assert.equal(actual.sha256, declared.sha256, `fixture ${declared.path} sha256 does not match manifest`);
   }
   return {
-    envelopeBytes: 87340,
-    maxBodyBytes: 300000,
-    maxDeltaChars: manifest.derivedLimits.maxDeltaChars,
-    maxDeltaNodes: manifest.derivedLimits.maxDeltaNodes,
+    envelopeBytes: EXPECTED_RESPONSES.initialGet,
+    maxBodyBytes: EXPECTED_DERIVED_LIMITS.maxBodyBytes,
+    maxDeltaChars: EXPECTED_DERIVED_LIMITS.maxDeltaChars,
+    maxDeltaNodes: EXPECTED_DERIVED_LIMITS.maxDeltaNodes,
   };
+}
+
+function outcomeHash(outcomes) {
+  return createHash('sha256').update(JSON.stringify(outcomes)).digest('hex');
 }
 
 export function validateWorkerResult(result, { expectedExecPath, expectedNodeVersion }) {
@@ -74,10 +89,20 @@ export function validateWorkerResult(result, { expectedExecPath, expectedNodeVer
   assert.equal(canonicalPath(result.execPath), canonicalPath(expectedExecPath), 'worker execPath differs from approved execPath');
   assert([1, 2].includes(result.concurrency), 'worker concurrency must be one or two');
   assert.equal(result.limitBytesExclusive, LIMIT_BYTES_EXCLUSIVE, 'worker memory limit changed');
-  assert(Number.isFinite(result.deltaRss) && result.deltaRss >= 0, 'worker deltaRss must be non-negative');
-  assert(Number.isFinite(result.perSearchDeltaRss) && result.perSearchDeltaRss >= 0, 'worker perSearchDeltaRss must be non-negative');
-  assert(result.perSearchDeltaRss < LIMIT_BYTES_EXCLUSIVE, 'worker reached the exclusive 10 MiB limit');
+  for (const field of ['baselineRss', 'peakRss', 'deltaRss', 'perSearchDeltaRss']) {
+    assert(Number.isSafeInteger(result[field]) && result[field] >= 0, `worker ${field} must be a non-negative safe integer`);
+  }
+  assert(result.peakRss >= result.baselineRss, 'worker peakRss must not be below baselineRss');
+  const measuredDeltaRss = result.peakRss - result.baselineRss;
+  assert.equal(result.deltaRss, measuredDeltaRss, 'worker deltaRss must equal peakRss - baselineRss');
+  const measuredPerSearchDeltaRss = measuredDeltaRss / result.concurrency;
+  assert(Number.isSafeInteger(measuredPerSearchDeltaRss), 'worker per-search RSS delta must be an exact safe integer');
+  assert.equal(result.perSearchDeltaRss, measuredPerSearchDeltaRss, 'worker perSearchDeltaRss must equal deltaRss / concurrency');
+  assert(measuredPerSearchDeltaRss < LIMIT_BYTES_EXCLUSIVE, 'worker reached the exclusive 10 MiB limit');
+  assert(Array.isArray(result.outcomes) && result.outcomes.length === result.concurrency, 'worker outcomes must match concurrency');
+  assert(result.outcomes.every((outcome) => outcome?.outcome === 'found'), 'worker outcomes must all be found');
   assert(HEX_64.test(result.outcomeHash), 'worker outcomeHash is invalid');
+  assert.equal(result.outcomeHash, outcomeHash(result.outcomes), 'worker outcomeHash does not match canonical outcomes');
   assert(HEX_64.test(result.inputManifestHash), 'worker inputManifestHash is invalid');
   return result;
 }
@@ -112,6 +137,7 @@ export function buildEvidenceSummary({
   const inputManifestHash = isolatedRows[0].inputManifestHash;
   assert(isolatedRows.every((row) => row.inputManifestHash === inputManifestHash), 'isolated input manifest hashes differ');
   assert.equal(concurrentRow.inputManifestHash, inputManifestHash, 'concurrent input manifest hash differs');
+  assert(isolatedRows.every((row) => row.outcomeHash === isolatedRows[0].outcomeHash), 'isolated outcome hashes differ');
   return {
     schemaVersion: 1,
     pass: true,
