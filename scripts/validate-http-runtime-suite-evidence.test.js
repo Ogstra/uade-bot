@@ -97,6 +97,19 @@ test('accepts one complete terminal TAP footer and a matching manifest', () => {
   }
 });
 
+test('accepts a top-level plan smaller than total tests when suites contain nested tests', () => {
+  const tap = completeTap({ suites: 1 }).replace(
+    ['ok 1 - first', 'ok 2 - second', 'ok 3 - third', '1..3'].join('\n'),
+    ['# Subtest: grouped', '    ok 1 - nested', '    1..1', 'ok 1 - grouped', 'ok 2 - standalone', '1..2'].join('\n'),
+  );
+  const directory = makeEvidence({ tap });
+  try {
+    assert.equal(validateEvidenceDirectory(directory).counts.tests, 3);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('rejects a truncated TAP footer', () => {
   rejectsEvidence({ tap: completeTap().replace(/# duration_ms[^\n]*\n$/, '') }, /footer/i);
 });

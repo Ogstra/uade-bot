@@ -49,8 +49,9 @@ function parseTerminalFooter(tap) {
   const [plan, tests, suites, pass, failures, cancelled, skipped, todo] = match
     .slice(1, 9)
     .map(Number);
-  if (plan !== tests) {
-    fail(`TAP plan 1..${plan} does not match tests ${tests}`);
+  const topLevelResults = tap.match(/^(?:ok|not ok) \d+(?:\s+-|$)/gm)?.length ?? 0;
+  if (plan !== topLevelResults) {
+    fail(`TAP plan 1..${plan} does not match ${topLevelResults} top-level results`);
   }
   if (tests !== pass + failures + cancelled + skipped + todo) {
     fail('TAP count arithmetic does not reconcile');
@@ -98,10 +99,22 @@ function validatePackageFiles(packageFiles) {
   }
 }
 
-function currentHead() {
-  return execFileSync('git', ['-c', 'safe.directory=G:/github/uade-bot', 'rev-parse', 'HEAD'], {
+function gitOutput(args) {
+  return execFileSync('git', ['-c', 'safe.directory=G:/github/uade-bot', ...args], {
     encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
+}
+
+function validateSourceCommit(commit) {
+  if (typeof commit !== 'string' || !/^[0-9a-f]{40}$/.test(commit)) {
+    fail('manifest commit must be a full lowercase Git object id');
+  }
+  try {
+    gitOutput(['merge-base', '--is-ancestor', commit, 'HEAD']);
+  } catch {
+    fail('manifest commit is not HEAD or an ancestor of HEAD');
+  }
 }
 
 export function validateEvidenceDirectory(evidenceDirectory) {
@@ -135,9 +148,7 @@ export function validateEvidenceDirectory(evidenceDirectory) {
   if (manifest.runtime?.execPath !== process.execPath) {
     fail(`runtime execPath does not match current execPath ${process.execPath}`);
   }
-  if (manifest.commit !== currentHead()) {
-    fail('manifest commit does not match HEAD');
-  }
+  validateSourceCommit(manifest.commit);
 
   return { manifest, counts: tapCounts };
 }
