@@ -1,0 +1,140 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readFile, realpath } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const LIMIT_BYTES_EXCLUSIVE = 10 * 1024 * 1024;
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const MANIFEST_FILE = path.join(REPO_ROOT, '.planning/phases/03.2-motor-http-sin-navegador/evidence/webforms-capture-sanitized/manifest.json');
+const EXPECTED_FIXTURES = [
+  'src/automation/__fixtures__/webforms/initial-form.html',
+  'src/automation/__fixtures__/webforms/postback-found.html',
+  'src/automation/__fixtures__/webforms/postback-empty.html',
+  'src/automation/__fixtures__/webforms/postback-mismatch.html',
+  'src/automation/__fixtures__/webforms/delta-found.txt',
+  'src/automation/__fixtures__/webforms/delta-empty.txt',
+  'src/automation/__fixtures__/webforms/delta-error.txt',
+  'src/automation/__fixtures__/webforms/delta-malformed.txt',
+  'src/automation/__fixtures__/webforms/delta-mismatch.txt',
+  'src/automation/__fixtures__/webforms/delta-redirect.txt',
+  'src/automation/__fixtures__/results-sample.html',
+];
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function parseJson(bytes, label) {
+  try { return JSON.parse(bytes.toString('utf8')); } catch { throw new Error(`${label} is not valid JSON`); }
+}
+
+function parseJsonl(bytes, label) {
+  const lines = bytes.toString('utf8').trim().split(/\r?\n/).filter(Boolean);
+  assert(lines.length > 0, `${label} is empty`);
+  return lines.map((line, index) => {
+    try { return JSON.parse(line); } catch { throw new Error(`${label} line ${index + 1} is not valid JSON`); }
+  });
+}
+
+function canonical(value) {
+  assert.equal(typeof value, 'string', 'runtime execPath must be a string');
+  assert(path.isAbsolute(value), 'runtime execPath must be absolute');
+  const normalized = path.normalize(value);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function validateWorker(row, runtime, concurrency) {
+  assert.equal(row.kind, 'worker-result', 'row is not a worker result');
+  assert.equal(row.nodeVersion, runtime.nodeVersion, 'worker runtime version differs from summary');
+  assert.equal(canonical(row.execPath), canonical(runtime.execPath), 'worker execPath differs from summary');
+  assert.equal(row.concurrency, concurrency, `worker concurrency must be ${concurrency}`);
+  assert.equal(row.limitBytesExclusive, LIMIT_BYTES_EXCLUSIVE, 'worker threshold differs from exclusive 10 MiB');
+  assert(Number.isFinite(row.deltaRss) && row.deltaRss >= 0, 'worker deltaRss is invalid');
+  assert(Number.isFinite(row.perSearchDeltaRss) && row.perSearchDeltaRss >= 0, 'worker per-search delta is invalid');
+  assert(row.perSearchDeltaRss < LIMIT_BYTES_EXCLUSIVE, 'worker reached the exclusive 10 MiB threshold');
+  assert(/^[a-f0-9]{64}$/.test(row.outcomeHash), 'worker outcome hash is invalid');
+  assert(/^[a-f0-9]{64}$/.test(row.inputManifestHash), 'worker input manifest hash is invalid');
+}
+
+async function validateManifest(manifestBytes) {
+  const manifest = parseJson(manifestBytes, 'fixture manifest');
+  assert.equal(manifest.baselineKind, 'rebaseline-retained-contract', 'fixture baselineKind differs');
+  assert.equal(manifest.syntheticEnvelope, true, 'fixture syntheticEnvelope differs');
+  assert.equal(manifest.postbackModeAccepted, 'accepted', 'fixture postback mode differs');
+  assert.deepEqual(manifest.fixtures?.map(({ path: fixturePath }) => fixturePath), EXPECTED_FIXTURES, 'fixture allowlist differs');
+  assert.equal(manifest.responses?.initialGet?.bytes, 87340, 'initial envelope differs');
+  assert.equal(manifest.responses?.fullPostback?.bytes, 87340, 'postback envelope differs');
+  assert.equal(manifest.derivedLimits?.measuredMaxBodyBytes, 87340, 'measured envelope differs');
+  assert.equal(manifest.derivedLimits?.maxBodyBytes, 300000, 'independent body cap differs');
+  for (const fixture of manifest.fixtures) {
+    const bytes = await readFile(path.join(REPO_ROOT, fixture.path));
+    assert.equal(bytes.byteLength, fixture.bytes, `${fixture.path} byte count differs`);
+    assert.equal(sha256(bytes), fixture.sha256, `${fixture.path} hash differs`);
+  }
+  return sha256(manifestBytes);
+}
+
+async function main() {
+  const evidenceArg = process.argv[2];
+  assert(evidenceArg, 'usage: node scripts/validate-http-search-memory-evidence.js <evidence-dir>');
+  const evidenceDir = await realpath(path.resolve(evidenceArg));
+  const [isolatedBytes, concurrentBytes, summaryBytes, manifestBytes] = await Promise.all([
+    readFile(path.join(evidenceDir, 'isolated.jsonl')),
+    readFile(path.join(evidenceDir, 'concurrent.jsonl')),
+    readFile(path.join(evidenceDir, 'summary.json')),
+    readFile(MANIFEST_FILE),
+  ]);
+  const isolatedRows = parseJsonl(isolatedBytes, 'isolated.jsonl');
+  const concurrentRows = parseJsonl(concurrentBytes, 'concurrent.jsonl');
+  const summary = parseJson(summaryBytes, 'summary.json');
+  assert.equal(summary.pass, true, 'summary pass must be true');
+  assert.equal(summary.limitBytesExclusive, LIMIT_BYTES_EXCLUSIVE, 'summary threshold differs');
+  const workers = isolatedRows.filter(({ scenario }) => scenario === 'isolated');
+  const isolatedSummaryRows = isolatedRows.filter(({ scenario }) => scenario === 'isolated-summary');
+  assert.equal(workers.length, 5, 'isolated evidence must contain exactly five workers');
+  assert.equal(isolatedSummaryRows.length, 1, 'isolated evidence must contain exactly one summary');
+  assert.equal(isolatedRows.length, 6, 'isolated evidence contains unexpected rows');
+  assert.deepEqual(workers.map(({ run }) => run), [1, 2, 3, 4, 5], 'isolated runs must be 1..5');
+  assert.equal(concurrentRows.length, 1, 'concurrent evidence must contain exactly one row');
+  workers.forEach((row) => validateWorker(row, summary.runtime, 1));
+  validateWorker(concurrentRows[0], summary.runtime, 2);
+  const isolatedSummary = isolatedSummaryRows[0];
+  assert.equal(isolatedSummary.status, 'pass', 'isolated summary did not pass');
+  assert.equal(isolatedSummary.nodeVersion, summary.runtime.nodeVersion, 'isolated summary runtime differs');
+  assert.equal(canonical(isolatedSummary.execPath), canonical(summary.runtime.execPath), 'isolated summary execPath differs');
+  assert.equal(isolatedSummary.runs, 5, 'isolated summary run count differs');
+  assert.equal(isolatedSummary.limitBytesExclusive, LIMIT_BYTES_EXCLUSIVE, 'isolated summary threshold differs');
+  assert.equal(concurrentRows[0].status, 'pass', 'concurrent scenario did not pass');
+  const worstDeltaRss = Math.max(...workers.map(({ deltaRss }) => deltaRss));
+  const totalDeltaRss = workers.reduce((total, { deltaRss }) => total + deltaRss, 0);
+  assert.equal(isolatedSummary.worstDeltaRss, worstDeltaRss, 'isolated JSONL maximum differs');
+  assert.equal(summary.isolated?.worstDeltaRss, worstDeltaRss, 'summary isolated maximum differs');
+  assert.equal(summary.isolated?.totalDeltaRss, totalDeltaRss, 'summary isolated total differs');
+  assert.equal(summary.isolated?.runs, 5, 'summary isolated run count differs');
+  assert.equal(summary.concurrent?.concurrency, 2, 'summary concurrent concurrency differs');
+  assert.equal(summary.concurrent?.deltaRss, concurrentRows[0].deltaRss, 'summary concurrent delta differs');
+  assert.equal(summary.concurrent?.perSearchDeltaRss, concurrentRows[0].perSearchDeltaRss, 'summary concurrent per-search delta differs');
+  assert.equal(summary.outputHashes?.isolatedJsonl, sha256(isolatedBytes), 'isolated output hash differs');
+  assert.equal(summary.outputHashes?.concurrentJsonl, sha256(concurrentBytes), 'concurrent output hash differs');
+  const manifestHash = await validateManifest(manifestBytes);
+  assert.equal(summary.inputManifestHash, manifestHash, 'summary input manifest hash differs');
+  assert(workers.every(({ inputManifestHash }) => inputManifestHash === manifestHash), 'isolated input manifest hash differs');
+  assert.equal(concurrentRows[0].inputManifestHash, manifestHash, 'concurrent input manifest hash differs');
+  const head = execFileSync('git', ['-c', `safe.directory=${REPO_ROOT.replaceAll('\\', '/')}`, '-C', REPO_ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  assert.equal(summary.sourceCommit, head, 'summary sourceCommit differs from HEAD');
+  assert.equal(summary.runtime.nodeMajor, Number.parseInt(summary.runtime.nodeVersion.split('.')[0], 10), 'runtime major differs');
+  assert(summary.runtime.nodeMajor >= 24, 'runtime major is below 24');
+  if (summary.runtime.nodeMajor !== 24) {
+    assert.match(summary.runtime.node24Deviation ?? '', /not represented as Node 24/, 'runtime deviation is not explicit');
+  }
+  console.log(`memory-evidence-valid source=${head} runtime=${summary.runtime.nodeVersion} isolatedMax=${worstDeltaRss} concurrentPerSearch=${concurrentRows[0].perSearchDeltaRss}`);
+}
+
+try {
+  await main();
+} catch (error) {
+  console.error(`memory_evidence_invalid: ${error instanceof Error ? error.message : 'unknown error'}`);
+  process.exitCode = 1;
+}
