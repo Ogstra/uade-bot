@@ -11,6 +11,11 @@ type Server struct {
 }
 
 func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/healthz" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		return
+	}
 	u, p, ok := r.BasicAuth()
 	if !ok || u != s.User || p != s.Password {
 		w.Header().Set("WWW-Authenticate", `Basic realm="uade"`)
