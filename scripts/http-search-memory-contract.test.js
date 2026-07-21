@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import {
   EXPECTED_FIXTURE_PATHS,
   LIMIT_BYTES_EXCLUSIVE,
+  REQUIRED_CHECKPOINT_STAGES,
   buildEvidenceSummary,
   validateManifest,
   validateRuntime,
@@ -68,15 +69,17 @@ function worker(concurrency = 1) {
   const outcomes = Array.from({ length: concurrency }, () => ({ outcome: 'found', vacancies: [{ cupos: 1 }] }));
   const baselineRss = 100000;
   const deltaRss = concurrency * 1024;
+  const peakRss = baselineRss + deltaRss;
   return {
     kind: 'worker-result',
     nodeVersion: VERSION,
     execPath: EXEC_PATH,
     concurrency,
     baselineRss,
-    peakRss: baselineRss + deltaRss,
+    peakRss,
     deltaRss,
     perSearchDeltaRss: 1024,
+    checkpointRss: Object.fromEntries(REQUIRED_CHECKPOINT_STAGES.map((stage) => [stage, peakRss])),
     limitBytesExclusive: LIMIT_BYTES_EXCLUSIVE,
     outcomes,
     outcomeHash: createHash('sha256').update(JSON.stringify(outcomes)).digest('hex'),
@@ -219,10 +222,32 @@ test('both worker validators recompute and enforce the fixed exclusive per-searc
   changed.peakRss = LIMIT_BYTES_EXCLUSIVE;
   changed.deltaRss = LIMIT_BYTES_EXCLUSIVE;
   changed.perSearchDeltaRss = LIMIT_BYTES_EXCLUSIVE;
+  changed.checkpointRss = Object.fromEntries(REQUIRED_CHECKPOINT_STAGES.map((stage) => [stage, LIMIT_BYTES_EXCLUSIVE]));
   const runtime = { expectedExecPath: EXEC_PATH, expectedNodeVersion: VERSION };
   assert.throws(() => validateWorkerResult(changed, runtime), /exclusive 10 MiB limit/);
   assert.throws(() => validateIndependentWorker(changed, { execPath: EXEC_PATH, nodeVersion: VERSION }, 1), /exclusive 10 MiB threshold/);
 });
+
+for (const [label, mutate] of [
+  ['missing checkpoint object', (value) => { delete value.checkpointRss; }],
+  ['empty checkpoint object', (value) => { value.checkpointRss = {}; }],
+  ['missing required stage', (value) => { delete value.checkpointRss.search_chain_complete; }],
+  ['negative checkpoint', (value) => { value.checkpointRss.interval = -1; }],
+  ['non-integer checkpoint', (value) => { value.checkpointRss.interval = 1.5; }],
+  ['unknown checkpoint stage', (value) => { value.checkpointRss.unapproved = value.peakRss; }],
+  ['checkpoint above peak', (value) => { value.checkpointRss.interval = 999999999; }],
+  ['peak not equal to retained maximum', (value) => {
+    for (const stage of Object.keys(value.checkpointRss)) value.checkpointRss[stage] -= 1;
+  }],
+]) {
+  test(`both worker validators reject ${label}`, () => {
+    const changed = worker(2);
+    mutate(changed);
+    const runtime = { expectedExecPath: EXEC_PATH, expectedNodeVersion: VERSION };
+    assert.throws(() => validateWorkerResult(changed, runtime), /checkpoint|peakRss|maximum retained/i);
+    assert.throws(() => validateIndependentWorker(changed, { execPath: EXEC_PATH, nodeVersion: VERSION }, 2), /checkpoint|peakRss|maximum retained/i);
+  });
+}
 
 test('summary accepts exactly five isolated workers, their summary and concurrency two', () => {
   const isolatedRows = Array.from({ length: 5 }, (_, index) => ({ scenario: 'isolated', run: index + 1, ...worker() }));

@@ -21,6 +21,26 @@ const EXPECTED_FIXTURES = [
   'src/automation/__fixtures__/webforms/delta-redirect.txt',
   'src/automation/__fixtures__/results-sample.html',
 ];
+const REQUIRED_CHECKPOINT_STAGES = [
+  'initial_response_accumulated',
+  'initial_turno_parse_complete',
+  'search_form_parse_complete',
+  'post_response_accumulated',
+  'post_body_parse_complete',
+  'reflected_state_parse_complete',
+  'vacancy_dom_parse_complete',
+  'vacancy_row_validation_complete',
+  'vacancy_filter_complete',
+  'classification_complete',
+  'search_chain_complete',
+];
+const ALLOWED_CHECKPOINT_STAGES = new Set([
+  ...REQUIRED_CHECKPOINT_STAGES,
+  'interval',
+  'materia_catalog_response_accumulated',
+  'materia_catalog_payload_parse_complete',
+  'materia_catalog_body_parse_complete',
+]);
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -55,6 +75,18 @@ export function validateWorker(row, runtime, concurrency) {
     assert(Number.isSafeInteger(row[field]) && row[field] >= 0, `worker ${field} must be a non-negative safe integer`);
   }
   assert(row.peakRss >= row.baselineRss, 'worker peakRss is below baselineRss');
+  assert(row.checkpointRss && typeof row.checkpointRss === 'object' && !Array.isArray(row.checkpointRss), 'worker checkpointRss must be an object');
+  const checkpointEntries = Object.entries(row.checkpointRss);
+  assert(checkpointEntries.length > 0, 'worker checkpointRss must not be empty');
+  for (const stage of REQUIRED_CHECKPOINT_STAGES) {
+    assert(Object.hasOwn(row.checkpointRss, stage), `worker checkpointRss is missing ${stage}`);
+  }
+  for (const [stage, rss] of checkpointEntries) {
+    assert(ALLOWED_CHECKPOINT_STAGES.has(stage), `worker checkpointRss contains unknown stage ${stage}`);
+    assert(Number.isSafeInteger(rss) && rss >= 0, `worker checkpointRss.${stage} must be a non-negative safe integer`);
+    assert(rss <= row.peakRss, `worker checkpointRss.${stage} exceeds peakRss`);
+  }
+  assert.equal(row.peakRss, Math.max(row.baselineRss, ...checkpointEntries.map(([, rss]) => rss)), 'worker peakRss differs from maximum retained RSS measurement');
   const measuredDeltaRss = row.peakRss - row.baselineRss;
   assert.equal(row.deltaRss, measuredDeltaRss, 'worker deltaRss differs from peakRss - baselineRss');
   const measuredPerSearchDeltaRss = measuredDeltaRss / concurrency;

@@ -18,6 +18,26 @@ export const EXPECTED_FIXTURE_PATHS = Object.freeze([
 ]);
 
 const HEX_64 = /^[a-f0-9]{64}$/;
+export const REQUIRED_CHECKPOINT_STAGES = Object.freeze([
+  'initial_response_accumulated',
+  'initial_turno_parse_complete',
+  'search_form_parse_complete',
+  'post_response_accumulated',
+  'post_body_parse_complete',
+  'reflected_state_parse_complete',
+  'vacancy_dom_parse_complete',
+  'vacancy_row_validation_complete',
+  'vacancy_filter_complete',
+  'classification_complete',
+  'search_chain_complete',
+]);
+const ALLOWED_CHECKPOINT_STAGES = new Set([
+  ...REQUIRED_CHECKPOINT_STAGES,
+  'interval',
+  'materia_catalog_response_accumulated',
+  'materia_catalog_payload_parse_complete',
+  'materia_catalog_body_parse_complete',
+]);
 const EXPECTED_RESPONSES = Object.freeze({ initialGet: 87340, fullPostback: 87340, asyncPostback: 87340 });
 const EXPECTED_DERIVED_LIMITS = Object.freeze({
   measuredMaxBodyBytes: 87340,
@@ -83,6 +103,21 @@ function outcomeHash(outcomes) {
   return createHash('sha256').update(JSON.stringify(outcomes)).digest('hex');
 }
 
+function validateCheckpointRss(checkpointRss, baselineRss, peakRss) {
+  assert(checkpointRss && typeof checkpointRss === 'object' && !Array.isArray(checkpointRss), 'worker checkpointRss must be an object');
+  const entries = Object.entries(checkpointRss);
+  assert(entries.length > 0, 'worker checkpointRss must not be empty');
+  for (const stage of REQUIRED_CHECKPOINT_STAGES) {
+    assert(Object.hasOwn(checkpointRss, stage), `worker checkpointRss is missing ${stage}`);
+  }
+  for (const [stage, rss] of entries) {
+    assert(ALLOWED_CHECKPOINT_STAGES.has(stage), `worker checkpointRss contains unknown stage ${stage}`);
+    assert(Number.isSafeInteger(rss) && rss >= 0, `worker checkpointRss.${stage} must be a non-negative safe integer`);
+    assert(rss <= peakRss, `worker checkpointRss.${stage} exceeds peakRss`);
+  }
+  assert.equal(peakRss, Math.max(baselineRss, ...entries.map(([, rss]) => rss)), 'worker peakRss must equal the maximum retained RSS measurement');
+}
+
 export function validateWorkerResult(result, { expectedExecPath, expectedNodeVersion }) {
   assert.equal(result?.kind, 'worker-result', 'worker kind must be worker-result');
   assert.equal(result.nodeVersion, expectedNodeVersion, 'worker nodeVersion differs from parent');
@@ -93,6 +128,7 @@ export function validateWorkerResult(result, { expectedExecPath, expectedNodeVer
     assert(Number.isSafeInteger(result[field]) && result[field] >= 0, `worker ${field} must be a non-negative safe integer`);
   }
   assert(result.peakRss >= result.baselineRss, 'worker peakRss must not be below baselineRss');
+  validateCheckpointRss(result.checkpointRss, result.baselineRss, result.peakRss);
   const measuredDeltaRss = result.peakRss - result.baselineRss;
   assert.equal(result.deltaRss, measuredDeltaRss, 'worker deltaRss must equal peakRss - baselineRss');
   const measuredPerSearchDeltaRss = measuredDeltaRss / result.concurrency;
