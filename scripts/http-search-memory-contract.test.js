@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   EXPECTED_FIXTURE_PATHS,
@@ -20,6 +25,10 @@ import { collectWorkerResult, positiveInteger } from './benchmark-http-search-me
 
 const EXEC_PATH = process.execPath;
 const VERSION = '25.8.1';
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PWSH_PATH = process.platform === 'win32'
+  ? path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe')
+  : 'pwsh';
 
 function fixtureRecords() {
   return EXPECTED_FIXTURE_PATHS.map((path, index) => {
@@ -135,6 +144,26 @@ test('worker collection waits for close before parsing the complete stdout strea
   child.stderr.end();
   child.emit('close', 0, null);
   assert.deepEqual(await collected, expected);
+});
+
+test('benchmark wrapper invalidates an old pass before a preflight failure', {
+  skip: !existsSync(PWSH_PATH),
+}, () => {
+  const outputDir = mkdtempSync(path.join(tmpdir(), 'memory-wrapper-failure-'));
+  const summaryPath = path.join(outputDir, 'summary.json');
+  writeFileSync(summaryPath, '{"pass":true}\n');
+  try {
+    const result = spawnSync(PWSH_PATH, [
+      '-NoProfile',
+      '-File', path.join(REPO_ROOT, 'scripts', 'run-http-search-memory-benchmark.ps1'),
+      '-NodeBin', path.join(outputDir, 'missing-node.exe'),
+      '-OutputDir', outputDir,
+    ], { encoding: 'utf8' });
+    assert.notEqual(result.status, 0, 'preflight unexpectedly succeeded');
+    assert.equal(existsSync(summaryPath), false, 'stale pass summary remained visible');
+  } finally {
+    rmSync(outputDir, { recursive: true, force: true });
+  }
 });
 
 const manifestMutations = [
