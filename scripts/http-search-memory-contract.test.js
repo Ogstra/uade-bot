@@ -97,6 +97,9 @@ test('manifest rejects an altered fixture byte or hash', () => {
   const records = fixtureRecords();
   records[0] = { ...records[0], bytes: records[0].bytes + 1 };
   assert.throws(() => validateManifest(manifest(), records), /fixture .* bytes/);
+  const hashChanged = fixtureRecords();
+  hashChanged[0] = { ...hashChanged[0], sha256: '0'.repeat(64) };
+  assert.throws(() => validateManifest(manifest(), hashChanged), /fixture .* sha256/);
 });
 
 test('worker result accepts the expected executable and rejects another one', () => {
