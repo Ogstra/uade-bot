@@ -75,13 +75,10 @@ function userToCurrentPauseState(user) {
  * `classifySearchResult`) with the job's own decrypted `uadeStartUrl`, and
  * persists the resulting outcome onto the job's row.
  *
- * AUTOLINK-03: `loadRelinkFn` resolves only when this poll's outcome is
- * `stale_start_url` — every other outcome branch never loads it. A
- * successful relink overrides only the LOCAL backoff signal fed into
- * `nextBackoffState` (so this account comes out of this call unpaused with
- * no DM); it never mutates `outcome` itself, which is persisted via
- * `persistPollResult` BEFORE the relink attempt runs, exactly as it was
- * before this phase.
+ * Browserless runtime discipline: stale `uadeStartUrl` values are not
+ * renewed by opening Microsoft/UADE in Playwright. A stale link is persisted
+ * as a normal outcome and mapped to the account-level `needs_new_start_url`
+ * pause, so the user can rotate the generated link manually.
  *
  * CRED-04/CRED-05 discipline: `decryptCredentials`'s output is destructured
  * into a single local `const` used only inside this function body, passed
@@ -95,7 +92,6 @@ function userToCurrentPauseState(user) {
  *   masterKey: string,
  *   withHttpSessionFn?: typeof withHttpSession,
  *   runHttpSearchFn?: typeof runHttpSearch,
- *   loadRelinkFn?: () => Promise<{ attemptAutoRelink: Function }>,
  * }} deps
  * @returns {Promise<import('zod').infer<typeof import('../schemas.js').SearchOutcomeSchema> | { outcome: string }>}
  */
@@ -106,7 +102,6 @@ export async function pollOnce(
     masterKey,
     withHttpSessionFn = withHttpSession,
     runHttpSearchFn = runHttpSearch,
-    loadRelinkFn = () => import('./relink.js'),
   } = {},
 ) {
   if (typeof masterKey !== 'string' || masterKey.length === 0) {
@@ -164,36 +159,11 @@ export async function pollOnce(
     upsertMateriaNombre(db, job.filtros.materiaCodigo, outcome.materiaNombre);
   }
 
-  // AUTOLINK-01/02/03: only a stale_start_url outcome ever reaches the
-  // automated SSO relink attempt — reusing the same uadeUsername/uadePassword
-  // this call already decrypted above, never re-reading/re-decrypting them.
-  let relinkSucceeded = false;
-  if (outcome.outcome === 'stale_start_url') {
-    try {
-      const { attemptAutoRelink } = await loadRelinkFn();
-      const relinkResult = await attemptAutoRelink(db, job, {
-        username: uadeUsername,
-        password: uadePassword,
-        masterKey,
-      });
-      relinkSucceeded = relinkResult.status === 'success';
-    } catch {
-      logger.warn(
-        { event: 'auto_relink_boundary_failed', jobId: job.id, reason: 'relink_exception' },
-        'Automatic SSO relink boundary failed; preserving manual fallback state',
-      );
-    }
-  }
-
   // D-04: this single write pauses/resumes EVERY job tied to this account,
   // since queue.js's tick filter reads this same account-level state for
   // every job at this discordUserId on the next tick — not a per-job write.
   const currentPauseState = userToCurrentPauseState(getUser(db, job.discordUserId));
-  // A successful automatic relink treats this poll's backoff signal as a
-  // success (clearing any pause, no DM) WITHOUT changing outcome.outcome
-  // itself — that already-persisted lastOutcome stays 'stale_start_url' for
-  // this run, as before this phase.
-  const signal = relinkSucceeded ? 'success' : backoffSignalFromStatus(outcome.outcome);
+  const signal = backoffSignalFromStatus(outcome.outcome);
   const nextPauseState = nextBackoffState({ currentState: currentPauseState, signal });
   updateAccountPauseState(db, job.discordUserId, pauseStateToUserFields(nextPauseState));
 

@@ -9,30 +9,11 @@ import { decryptCredentials } from '../../crypto/credentials-crypto.js';
 import { credencialesCommand } from './credenciales.js';
 import { commandsByName } from './index.js';
 
-// Prevents these tests from launching a real Playwright browser (the
-// credential-save success path fires a fire-and-forget getBrowserFn() to
-// pre-warm the shared browser -- see credentials-flow.js's warmBrowser).
-async function noopGetBrowser() {
-  return {};
-}
-
-// Fase 3.1: collectCredentialValues/runCredentialRotation now try to obtain
-// the inscripción link automatically before ever asking for it by DM --
-// stub withPlainContextFn/obtainStartUrlFn so these tests never launch a
-// real browser or hit the real UADE/Microsoft site.
-async function noopWithPlainContext(run) {
-  return run({});
-}
-
-function fakeObtainStartUrlSuccess(startUrl) {
-  return async () => ({ status: 'success', startUrl });
-}
-
-function fakeObtainStartUrlMfaRequired() {
-  return async () => ({ status: 'mfa_required' });
-}
-
-function createInteraction({ userId = 'user-1', modo = 'todo', values = ['usuario', 'password'] } = {}) {
+function createInteraction({
+  userId = 'user-1',
+  modo = 'todo',
+  values = ['usuario', 'password', 'https://inscripcionespia.uade.edu.ar/x?param=abc'],
+} = {}) {
   const calls = [];
   const sent = [];
   const queue = [...values];
@@ -75,7 +56,7 @@ function createInteraction({ userId = 'user-1', modo = 'todo', values = ['usuari
   };
 }
 
-test('/credenciales is registered and obtains the link automatically without asking for it', async () => {
+test('/credenciales is registered and stores the manually provided generated link', async () => {
   const db = createDatabase(':memory:');
   try {
     const masterKey = randomBytes(32).toString('hex');
@@ -85,9 +66,6 @@ test('/credenciales is registered and obtains the link automatically without ask
     await credencialesCommand.execute(interaction, {
       db,
       env: { CREDENTIALS_MASTER_KEY: masterKey },
-      getBrowserFn: noopGetBrowser,
-      withPlainContextFn: noopWithPlainContext,
-      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=abc'),
     });
 
     assert.deepEqual(interaction.calls[0], ['deferReply', { flags: MessageFlags.Ephemeral }]);
@@ -99,15 +77,14 @@ test('/credenciales is registered and obtains the link automatically without ask
       uadePassword: 'password',
       uadeStartUrl: 'https://inscripcionespia.uade.edu.ar/x?param=abc',
     });
-    // Only 2 DM prompts (username, password) -- the link was never asked for.
-    assert.equal(interaction.sent.length, 2);
+    assert.equal(interaction.sent.length, 3);
     assert.equal(JSON.stringify(interaction.calls).includes('password'), false);
   } finally {
     db.close();
   }
 });
 
-test('/credenciales falls back to asking for the link by DM when auto-obtain hits MFA', async () => {
+test('/credenciales always asks for the generated link by DM', async () => {
   const db = createDatabase(':memory:');
   try {
     const masterKey = randomBytes(32).toString('hex');
@@ -118,33 +95,29 @@ test('/credenciales falls back to asking for the link by DM when auto-obtain hit
     await credencialesCommand.execute(interaction, {
       db,
       env: { CREDENTIALS_MASTER_KEY: masterKey },
-      getBrowserFn: noopGetBrowser,
-      withPlainContextFn: noopWithPlainContext,
-      obtainStartUrlFn: fakeObtainStartUrlMfaRequired(),
     });
 
     const decrypted = decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1'));
     assert.equal(decrypted.uadeStartUrl, 'https://inscripcionespia.uade.edu.ar/x?param=manual');
-    // 3 DM prompts this time: username, password, and the fallback link ask.
     assert.equal(interaction.sent.length, 3);
   } finally {
     db.close();
   }
 });
 
-test('/credenciales modo:usuario_password also (re-)obtains the link, fixing the bug where it was left missing', async () => {
+test('/credenciales modo:usuario_password also asks for the generated link, fixing the bug where it was left missing', async () => {
   const db = createDatabase(':memory:');
   try {
     const masterKey = randomBytes(32).toString('hex');
     upsertUser(db, 'user-1');
-    const interaction = createInteraction({ modo: 'usuario_password', values: ['nuevo-usuario', 'nuevo-password'] });
+    const interaction = createInteraction({
+      modo: 'usuario_password',
+      values: ['nuevo-usuario', 'nuevo-password', 'https://inscripcionespia.uade.edu.ar/x?param=refreshed'],
+    });
 
     await credencialesCommand.execute(interaction, {
       db,
       env: { CREDENTIALS_MASTER_KEY: masterKey },
-      getBrowserFn: noopGetBrowser,
-      withPlainContextFn: noopWithPlainContext,
-      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=refreshed'),
     });
 
     const decrypted = decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1'));
@@ -166,9 +139,6 @@ test('/credenciales can update only the session link without echoing it (modo:li
     await credencialesCommand.execute(createInteraction(), {
       db,
       env: { CREDENTIALS_MASTER_KEY: masterKey },
-      getBrowserFn: noopGetBrowser,
-      withPlainContextFn: noopWithPlainContext,
-      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://inscripcionespia.uade.edu.ar/x?param=abc'),
     });
 
     const interaction = createInteraction({
@@ -178,9 +148,6 @@ test('/credenciales can update only the session link without echoing it (modo:li
     await credencialesCommand.execute(interaction, {
       db,
       env: { CREDENTIALS_MASTER_KEY: masterKey },
-      getBrowserFn: noopGetBrowser,
-      withPlainContextFn: noopWithPlainContext,
-      obtainStartUrlFn: fakeObtainStartUrlSuccess('https://should-not-be-used.example/'),
     });
 
     assert.deepEqual(decryptCredentials(masterKey, 'user-1', getCredentials(db, 'user-1')), {

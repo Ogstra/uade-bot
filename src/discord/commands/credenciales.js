@@ -19,7 +19,7 @@ export const credencialesCommand = {
         ),
     ),
 
-  async execute(interaction, { db = getDb(), env, getBrowserFn, withPlainContextFn, obtainStartUrlFn, onCredentialsUpdated } = {}) {
+  async execute(interaction, { db = getDb(), env, onCredentialsUpdated } = {}) {
     // Must ack within Discord's 3s interaction window -- runCredentialRotation
     // waits on real human DM replies (up to DEFAULT_TIMEOUT_MS = 120s each),
     // so a bare `interaction.reply()` after that wait is way too late: Discord
@@ -31,9 +31,6 @@ export const credencialesCommand = {
     const result = await runCredentialRotation(interaction, {
       db,
       env,
-      getBrowserFn,
-      withPlainContextFn,
-      obtainStartUrlFn,
       onCredentialsUpdated,
     });
     await interaction.editReply(result.message);

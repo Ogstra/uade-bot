@@ -130,9 +130,9 @@ export function createDatabase(path) {
 }
 
 /**
- * Lazy module-level singleton mirroring `src/automation/browser.js`'s
- * `getBrowser()` shape — opens the database at `loadEnv().DATABASE_PATH` on
- * first call and reuses that same connection on every subsequent call.
+ * Lazy module-level singleton — opens the database at
+ * `loadEnv().DATABASE_PATH` on first call and reuses that same connection on
+ * every subsequent call.
  *
  * @returns {import('better-sqlite3').Database}
  */

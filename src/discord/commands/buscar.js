@@ -90,7 +90,6 @@ export const buscarCommand = {
       credentialOnboarding = runFullCredentialOnboarding,
       onJobCreated,
       ephemeralReplies = false,
-      getBrowserFn,
     } = {},
   ) {
     await interaction.deferReply(ephemeralFlags(ephemeralReplies));
@@ -121,7 +120,7 @@ export const buscarCommand = {
     const user = getUser(db, interaction.user.id);
     let credentialResult;
     if (!hadCredentials) {
-      credentialResult = await credentialOnboarding(interaction, { db, env, getBrowserFn });
+      credentialResult = await credentialOnboarding(interaction, { db, env });
     }
 
     await interaction.editReply(
