@@ -6,18 +6,12 @@ import { commands as defaultCommands } from './commands/index.js';
 
 export async function registerCommands({ rest, env, commands = defaultCommands } = {}) {
   const body = commands.map((command) => command.data.toJSON());
-  const guildIds = env.DISCORD_GUILD_IDS ?? [env.DISCORD_GUILD_ID];
-
-  // Discord has no bulk multi-guild registration endpoint -- one PUT per
-  // authorized guild id, each guild-scoped (never global commands).
-  for (const guildId of guildIds) {
-    const route = Routes.applicationGuildCommands(env.DISCORD_CLIENT_ID, guildId);
-    await rest.put(route, { body });
-    logger.info(
-      { event: 'discord_commands_registered', guildId, count: body.length },
-      'Discord commands registered',
-    );
-  }
+  const route = Routes.applicationCommands(env.DISCORD_CLIENT_ID);
+  await rest.put(route, { body });
+  logger.info(
+    { event: 'discord_global_commands_registered', count: body.length },
+    'Discord global commands registered',
+  );
 }
 
 async function main() {

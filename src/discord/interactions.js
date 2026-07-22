@@ -1,5 +1,5 @@
 import { MessageFlags } from 'discord.js';
-import { isAdminInteraction, isFromAuthorizedGuild, isGuildInteraction } from './access-control.js';
+import { isAdminInteraction } from './access-control.js';
 import { handleDetenerButton, isDetenerButton } from './components.js';
 import { getDb } from '../db/database.js';
 import { logCommandUsage } from '../db/command-log.repository.js';
@@ -49,13 +49,6 @@ export function createInteractionHandler({
 } = {}) {
   return async function handleInteraction(interaction) {
     if (!isDispatchableInteraction(interaction)) {
-      return;
-    }
-
-    if (
-      isGuildInteraction(interaction) &&
-      !isFromAuthorizedGuild(interaction, env.DISCORD_GUILD_IDS)
-    ) {
       return;
     }
 

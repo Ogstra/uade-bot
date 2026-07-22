@@ -27,13 +27,6 @@ const EnvSchema = z.object({
   // registration entrypoints; errors name only these variable names.
   DISCORD_BOT_TOKEN: z.string().min(1, 'DISCORD_BOT_TOKEN'),
   DISCORD_CLIENT_ID: z.string().min(1, 'DISCORD_CLIENT_ID'),
-  // Comma-separated list of authorized guild ids (a single id is still
-  // valid — no comma needed for the one-server case). Slash commands are
-  // registered to every id in the list, and interactions from any other
-  // guild are silently ignored (access-control.js). Still a small,
-  // explicitly-authorized set of servers per PROJECT.md's scope, not open
-  // registration to any server that invites the bot.
-  DISCORD_GUILD_ID: z.string().min(1, 'DISCORD_GUILD_ID'),
   // How often the scheduler ticks (D-01: ~20-30s), a single global value
   // shared by every job (D-02: not configurable per-search).
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(25000),
@@ -81,7 +74,7 @@ const EnvSchema = z.object({
  * variable name(s) — never the attempted value, to avoid leaking a partial
  * credential into a stack trace or console output.
  *
- * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string | undefined, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string, DISCORD_BOT_TOKEN: string, DISCORD_CLIENT_ID: string, DISCORD_GUILD_ID: string, DISCORD_GUILD_IDS: string[], POLL_INTERVAL_MS: number, SCHEDULER_CONCURRENCY: number, DISCORD_EPHEMERAL_REPLIES: boolean, DASHBOARD_ENABLED: boolean, DASHBOARD_PORT: number, DASHBOARD_USERNAME: string, DASHBOARD_PASSWORD: string, DASHBOARD_SESSION_SECRET: string | undefined }}
+ * @returns {{ UADE_USERNAME: string, UADE_PASSWORD: string, UADE_START_URL: string | undefined, DATABASE_PATH: string, CREDENTIALS_MASTER_KEY: string, DISCORD_BOT_TOKEN: string, DISCORD_CLIENT_ID: string, POLL_INTERVAL_MS: number, SCHEDULER_CONCURRENCY: number, DISCORD_EPHEMERAL_REPLIES: boolean, DASHBOARD_ENABLED: boolean, DASHBOARD_PORT: number, DASHBOARD_USERNAME: string, DASHBOARD_PASSWORD: string, DASHBOARD_SESSION_SECRET: string | undefined }}
  */
 export function loadEnv({ loadDotenvFile = true } = {}) {
   if (loadDotenvFile) {
@@ -95,9 +88,5 @@ export function loadEnv({ loadDotenvFile = true } = {}) {
     throw new Error(`Missing or invalid environment variable(s): ${missing.join(', ')}`);
   }
 
-  const discordGuildIds = result.data.DISCORD_GUILD_ID.split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-
-  return { ...result.data, DISCORD_GUILD_IDS: discordGuildIds };
+  return result.data;
 }

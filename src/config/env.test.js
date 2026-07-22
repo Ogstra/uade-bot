@@ -20,7 +20,6 @@ beforeEach(() => {
   resetEnv();
   delete process.env.DISCORD_BOT_TOKEN;
   delete process.env.DISCORD_CLIENT_ID;
-  delete process.env.DISCORD_GUILD_ID;
   delete process.env.DISCORD_EPHEMERAL_REPLIES;
   delete process.env.DASHBOARD_ENABLED;
   delete process.env.DASHBOARD_PORT;
@@ -41,7 +40,6 @@ test('loadEnv() fails naming missing Discord variables without leaking values', 
     () => loadEnv({ loadDotenvFile: false }),
     (err) => {
       assert.match(err.message, /DISCORD_CLIENT_ID/);
-      assert.match(err.message, /DISCORD_GUILD_ID/);
       assert.doesNotMatch(err.message, /secret-discord-token/);
       return true;
     },
@@ -52,7 +50,6 @@ test('loadEnv() returns Discord variables alongside prior Phase 1 and 2 variable
   setBaseEnv();
   process.env.DISCORD_BOT_TOKEN = 'discord-token';
   process.env.DISCORD_CLIENT_ID = 'discord-client-id';
-  process.env.DISCORD_GUILD_ID = 'discord-guild-id';
   process.env.POLL_INTERVAL_MS = '30000';
   process.env.SCHEDULER_CONCURRENCY = '2';
 
@@ -63,28 +60,14 @@ test('loadEnv() returns Discord variables alongside prior Phase 1 and 2 variable
   assert.equal(env.CREDENTIALS_MASTER_KEY, MASTER_KEY);
   assert.equal(env.DISCORD_BOT_TOKEN, 'discord-token');
   assert.equal(env.DISCORD_CLIENT_ID, 'discord-client-id');
-  assert.equal(env.DISCORD_GUILD_ID, 'discord-guild-id');
-  assert.deepEqual(env.DISCORD_GUILD_IDS, ['discord-guild-id']);
   assert.equal(env.POLL_INTERVAL_MS, 30000);
   assert.equal(env.SCHEDULER_CONCURRENCY, 2);
-});
-
-test('loadEnv() parses a comma-separated DISCORD_GUILD_ID into DISCORD_GUILD_IDS, trimming whitespace', () => {
-  setBaseEnv();
-  process.env.DISCORD_BOT_TOKEN = 'discord-token';
-  process.env.DISCORD_CLIENT_ID = 'discord-client-id';
-  process.env.DISCORD_GUILD_ID = 'guild-1, guild-2,guild-3';
-
-  const env = loadEnv({ loadDotenvFile: false });
-
-  assert.deepEqual(env.DISCORD_GUILD_IDS, ['guild-1', 'guild-2', 'guild-3']);
 });
 
 test('loadEnv() defaults DISCORD_EPHEMERAL_REPLIES to false (public replies) when unset', () => {
   setBaseEnv();
   process.env.DISCORD_BOT_TOKEN = 'discord-token';
   process.env.DISCORD_CLIENT_ID = 'discord-client-id';
-  process.env.DISCORD_GUILD_ID = 'discord-guild-id';
 
   const env = loadEnv({ loadDotenvFile: false });
 
@@ -95,7 +78,6 @@ test('loadEnv() coerces DISCORD_EPHEMERAL_REPLIES="true" to boolean true', () =>
   setBaseEnv();
   process.env.DISCORD_BOT_TOKEN = 'discord-token';
   process.env.DISCORD_CLIENT_ID = 'discord-client-id';
-  process.env.DISCORD_GUILD_ID = 'discord-guild-id';
   process.env.DISCORD_EPHEMERAL_REPLIES = 'true';
 
   const env = loadEnv({ loadDotenvFile: false });
@@ -107,7 +89,6 @@ test('loadEnv() rejects a non-"true"/"false" DISCORD_EPHEMERAL_REPLIES value', (
   setBaseEnv();
   process.env.DISCORD_BOT_TOKEN = 'discord-token';
   process.env.DISCORD_CLIENT_ID = 'discord-client-id';
-  process.env.DISCORD_GUILD_ID = 'discord-guild-id';
   process.env.DISCORD_EPHEMERAL_REPLIES = 'yes';
 
   assert.throws(
@@ -122,7 +103,6 @@ test('loadEnv() rejects a non-"true"/"false" DISCORD_EPHEMERAL_REPLIES value', (
 function setDiscordEnv() {
   process.env.DISCORD_BOT_TOKEN = 'discord-token';
   process.env.DISCORD_CLIENT_ID = 'discord-client-id';
-  process.env.DISCORD_GUILD_ID = 'discord-guild-id';
 }
 
 test('loadEnv() keeps the dashboard disabled with safe typed defaults when DASHBOARD_* is unset', () => {

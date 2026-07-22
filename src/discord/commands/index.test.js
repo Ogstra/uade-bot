@@ -38,7 +38,7 @@ test('commands index exposes /buscar by name', () => {
   assert.equal(commandsByName.get('buscar'), buscarCommand);
 });
 
-test('registerCommands() registers guild-scoped commands, never global commands', async () => {
+test('registerCommands() registers global commands', async () => {
   const calls = [];
   const rest = {
     put(route, body) {
@@ -48,35 +48,11 @@ test('registerCommands() registers guild-scoped commands, never global commands'
   };
   const env = {
     DISCORD_CLIENT_ID: 'client-1',
-    DISCORD_GUILD_ID: 'guild-1',
   };
 
   await registerCommands({ rest, env, commands: [buscarCommand] });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].route, Routes.applicationGuildCommands('client-1', 'guild-1'));
+  assert.equal(calls[0].route, Routes.applicationCommands('client-1'));
   assert.equal(calls[0].body.body[0].name, 'buscar');
-});
-
-test('registerCommands() registers guild-scoped commands to every guild in a multi-guild DISCORD_GUILD_IDS list', async () => {
-  const calls = [];
-  const rest = {
-    put(route, body) {
-      calls.push({ route, body });
-      return Promise.resolve([]);
-    },
-  };
-  const env = {
-    DISCORD_CLIENT_ID: 'client-1',
-    DISCORD_GUILD_ID: 'guild-1',
-    DISCORD_GUILD_IDS: ['guild-1', 'guild-2'],
-  };
-
-  await registerCommands({ rest, env, commands: [buscarCommand] });
-
-  assert.equal(calls.length, 2);
-  assert.deepEqual(
-    calls.map((call) => call.route),
-    [Routes.applicationGuildCommands('client-1', 'guild-1'), Routes.applicationGuildCommands('client-1', 'guild-2')],
-  );
 });

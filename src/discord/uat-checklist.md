@@ -4,17 +4,17 @@ Do not paste credentials, bot tokens, start URLs, or raw DM contents into this f
 
 ## Setup
 
-- [x] `.env` has `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `DATABASE_PATH`, `CREDENTIALS_MASTER_KEY`, and scheduler settings.
+- [x] `.env` has `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DATABASE_PATH`, `CREDENTIALS_MASTER_KEY`, and scheduler settings.
 - [x] Bot is invited to the authorized guild with `applications.commands` and `bot` scopes.
 - [x] Bot can send messages in the test channel.
 - [x] Test user allows DMs from the server.
-- Notes: `DISCORD_GUILD_ID` now accepts a comma-separated list; bot confirmed live in two separate authorized servers.
+- Notes: the current migration registers application-global commands and does not require a server allow-list.
 
 ## Command Registration
 
 - [x] Run `npm run discord:register`.
 - [x] Result: commands are visible in the authorized guild only.
-- Notes: 12 commands registered via `Routes.applicationGuildCommands` (one PUT per authorized guild id), guild-scoped only (no global registration code path exists): buscar, estado, detener, pausar, reanudar, credenciales, admin-estado, admin-detener, admin-pausar, admin-reanudar, admin-stats, admin-user-stats.
+- Notes: 12 commands are registered via the application-global endpoint: buscar, estado, detener, pausar, reanudar, credenciales, admin-estado, admin-detener, admin-pausar, admin-reanudar, admin-stats, admin-user-stats.
 
 ## Startup
 
@@ -42,7 +42,7 @@ Do not paste credentials, bot tokens, start URLs, or raw DM contents into this f
 - [x] Commands in the authorized guild work.
 - [ ] Commands from an unauthorized guild are ignored silently. (code + `interactions.test.js` cover this; no live 3rd/unauthorized guild was actually tried)
 - [ ] DM command behavior matches the intended command scope.
-- Notes: Multi-guild support (`DISCORD_GUILD_IDS`) confirmed live across two authorized servers 2026-07-12.
+- Notes: legacy multi-guild live evidence predates the global-command migration and is not evidence for the current Go deployment.
 
 ## Notifications
 
