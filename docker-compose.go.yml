@@ -11,6 +11,6 @@ services:
     volumes: ["./data:/app/data"]
     healthcheck:
       test: ["CMD", "/app/healthcheck"]
-      interval: 30s
+      interval: 10s
       timeout: 5s
       retries: 3
