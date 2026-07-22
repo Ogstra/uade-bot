@@ -203,3 +203,29 @@ func responseContent(response InteractionResponse) string {
 	value, _ := data["content"].(string)
 	return value
 }
+
+// TestDispatchInteractionMatchesDispatchForEquivalentPayload proves the
+// Dispatch/DispatchInteraction split preserves behavior: constructing an
+// Interaction directly (as internal/discordgateway will do) produces the
+// same InteractionResponse as marshaling the equivalent payload through
+// Dispatch's JSON wrapper. This is the seam Task 2 depends on.
+func TestDispatchInteractionMatchesDispatchForEquivalentPayload(t *testing.T) {
+	d := testDispatcher(t)
+	dispatchJSON(t, d, credentialsSubmit("owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v"))
+
+	viaJSON := dispatchJSON(t, d, command("owner", "estado", "0", nil))
+
+	viaStruct, err := d.DispatchInteraction(context.Background(), Interaction{
+		Type:      2,
+		GuildID:   "any-guild",
+		ChannelID: "any-channel",
+		Member:    Member{Permissions: "0", User: User{ID: "owner"}},
+		Data:      InteractionData{Name: "estado"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if viaStruct.Type != viaJSON.Type || responseContent(viaStruct) != responseContent(viaJSON) {
+		t.Fatalf("DispatchInteraction produced %+v, want %+v", viaStruct, viaJSON)
+	}
+}

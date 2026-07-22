@@ -19,30 +19,54 @@ const ephemeral = 1 << 6
 
 var materiaPattern = regexp.MustCompile(`^\d+(?:\.\d+){2}$`)
 
-type interaction struct {
-	Type      int    `json:"type"`
-	GuildID   string `json:"guild_id"`
-	ChannelID string `json:"channel_id"`
-	Data      struct {
-		Name     string          `json:"name"`
-		CustomID string          `json:"custom_id"`
-		Options  []option        `json:"options"`
-		Values   json.RawMessage `json:"components"`
-	} `json:"data"`
-	Member struct {
-		Permissions string `json:"permissions"`
-		User        user   `json:"user"`
-	} `json:"member"`
-	User user `json:"user"`
+// Interaction is the exported, transport-agnostic contract for a Discord
+// interaction. Both the HTTP-webhook JSON wrapper (Dispatch) and
+// internal/discordgateway's Gateway adapter construct/populate this same
+// shape before calling DispatchInteraction.
+type Interaction struct {
+	Type      int             `json:"type"`
+	GuildID   string          `json:"guild_id"`
+	ChannelID string          `json:"channel_id"`
+	Data      InteractionData `json:"data"`
+	Member    Member          `json:"member"`
+	User      User            `json:"user"`
 }
-type user struct {
+
+// InteractionData mirrors Discord's interaction "data" object across slash
+// commands, modal submits and autocomplete requests.
+type InteractionData struct {
+	Name     string          `json:"name"`
+	CustomID string          `json:"custom_id"`
+	Options  []Option        `json:"options"`
+	Values   json.RawMessage `json:"components"`
+}
+
+// Member mirrors Discord's resolved guild-member object attached to an
+// interaction; Permissions is the decimal-string bitmask Discord sends
+// (see hasAdministrator).
+type Member struct {
+	Permissions string `json:"permissions"`
+	User        User   `json:"user"`
+}
+
+// User mirrors Discord's minimal user object.
+type User struct {
 	ID string `json:"id"`
 }
-type option struct {
+
+// Option mirrors a single slash-command/autocomplete option value.
+type Option struct {
 	Name    string `json:"name"`
 	Type    int    `json:"type"`
 	Value   any    `json:"value"`
 	Focused bool   `json:"focused"`
+}
+
+// InteractionResponse is the Discord interaction callback payload. Data is
+// intentionally opaque so command handlers never need to serialize secrets.
+type InteractionResponse struct {
+	Type int `json:"type"`
+	Data any `json:"data,omitempty"`
 }
 
 // CommandDispatcher implements all global slash commands and modal submits.
@@ -56,11 +80,21 @@ type CommandDispatcher struct {
 	OnJobsChanged  func()
 }
 
+// Dispatch is a thin JSON-unmarshal wrapper around DispatchInteraction, kept
+// for the HTTP-webhook transport's wire format. Gateway ingress
+// (internal/discordgateway) constructs an Interaction directly and calls
+// DispatchInteraction to avoid a marshal/unmarshal round-trip.
 func (d CommandDispatcher) Dispatch(ctx context.Context, body []byte) (InteractionResponse, error) {
-	var in interaction
+	var in Interaction
 	if err := json.Unmarshal(body, &in); err != nil {
 		return InteractionResponse{}, err
 	}
+	return d.DispatchInteraction(ctx, in)
+}
+
+// DispatchInteraction contains all command/modal/autocomplete business
+// logic, independent of transport (HTTP webhook or Gateway).
+func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interaction) (InteractionResponse, error) {
 	userID := in.Member.User.ID
 	if userID == "" {
 		userID = in.User.ID
@@ -216,7 +250,7 @@ func validStartURL(value string) bool {
 	return err == nil && u.Scheme == "https" && strings.EqualFold(u.Hostname(), "inscripcionespia.uade.edu.ar") && u.Query().Has("param")
 }
 
-func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildID string, options []option) (InteractionResponse, error) {
+func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildID string, options []Option) (InteractionResponse, error) {
 	code := strings.TrimSpace(stringOption(options, "cod_materia"))
 	if !materiaPattern.MatchString(code) {
 		return message("El código de materia no es válido (ejemplo: 3.1.050)."), nil
@@ -368,7 +402,7 @@ func (d CommandDispatcher) adminUserStats(ctx context.Context, userID string) (I
 	return message(fmt.Sprintf("Usuario: %s\nBúsquedas: %d\nComandos: %d\nPausa: %s", userID, jobs, commands, pause)), nil
 }
 
-func (d CommandDispatcher) autocomplete(ctx context.Context, userID string, in interaction) (InteractionResponse, error) {
+func (d CommandDispatcher) autocomplete(ctx context.Context, userID string, in Interaction) (InteractionResponse, error) {
 	admin := strings.HasPrefix(in.Data.Name, "admin-")
 	if admin && !hasAdministrator(in.Member.Permissions) {
 		return InteractionResponse{Type: 8, Data: map[string]any{"choices": []any{}}}, nil
@@ -428,7 +462,7 @@ func nullable(value string) any {
 	}
 	return value
 }
-func stringOption(options []option, name string) string {
+func stringOption(options []Option, name string) string {
 	for _, o := range options {
 		if o.Name == name {
 			return fmt.Sprint(o.Value)
