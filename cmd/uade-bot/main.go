@@ -46,7 +46,12 @@ func main() {
 		log.Fatal("DASHBOARD_SESSION_SECRET must contain at least 32 bytes")
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/", &dashboard.Server{User: user, Password: os.Getenv("DASHBOARD_PASSWORD"), SessionSecret: sessionSecret})
+	production := os.Getenv("APP_ENV") == "production" || os.Getenv("GO_ENV") == "production"
+	snapshotSource := dashboard.SnapshotSource{DB: db}
+	mux.Handle("/", &dashboard.Server{
+		User: user, Password: os.Getenv("DASHBOARD_PASSWORD"), SessionSecret: sessionSecret,
+		Production: production, Snapshot: snapshotSource.Build,
+	})
 	publicKeyHex := os.Getenv("DISCORD_PUBLIC_KEY")
 	if publicKeyHex != "" {
 		publicKey, decodeErr := hex.DecodeString(publicKeyHex)

@@ -1,0 +1,26 @@
+{
+  "login": [
+    "Dashboard de UADE Bot",
+    "action=\"/login\"",
+    "name=\"username\"",
+    "name=\"password\"",
+    "name=\"_csrf\""
+  ],
+  "dashboard": [
+    "Estado del sistema",
+    "Resumen de salud",
+    "Servidores del bot",
+    "Cuentas y búsquedas",
+    "action=\"/logout\"",
+    "name=\"_csrf\"",
+    "/api/dashboard",
+    "setInterval"
+  ],
+  "forbidden": [
+    "unsafe-inline",
+    "ciphertext",
+    "auth_tag",
+    "last_notified_state",
+    "uadePassword"
+  ]
+}
