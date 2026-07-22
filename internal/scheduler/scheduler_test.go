@@ -256,6 +256,28 @@ func TestReconstructIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestReconcileAddsAndRemovesDurableJobs(t *testing.T) {
+	store := newMemoryStore()
+	store.active = []PersistedJob{{Account: "a", ID: "1"}, {Account: "a", ID: "2"}}
+	factory := func(record PersistedJob) (Job, error) {
+		return Job{Account: record.Account, ID: record.ID, Run: outcomeRun("no_vacancies")}, nil
+	}
+	s := New(1, WithStore(store))
+	if added, err := s.Reconcile(context.Background(), factory); err != nil || added != 2 {
+		t.Fatalf("first reconcile added=%d err=%v", added, err)
+	}
+	store.active = []PersistedJob{{Account: "a", ID: "2"}, {Account: "b", ID: "3"}}
+	if added, err := s.Reconcile(context.Background(), factory); err != nil || added != 1 {
+		t.Fatalf("second reconcile added=%d err=%v", added, err)
+	}
+	removed := s.PollNow(context.Background(), "1")
+	newJob := s.PollNow(context.Background(), "3")
+	if s.Jobs() != 2 || removed || !newJob {
+		t.Fatalf("jobs=%d removed=%v new=%v", s.Jobs(), removed, newJob)
+	}
+	s.Wait()
+}
+
 func TestNotificationDedupPersistsAcrossRestartAndRetriesFailures(t *testing.T) {
 	store := newMemoryStore()
 	notifier := &recordingNotifier{}

@@ -57,34 +57,38 @@ function createInteraction(overrides = {}) {
   };
 }
 
-test('dispatcher silently ignores guild chat commands from another server', async () => {
+test('dispatcher accepts global chat commands from any server', async () => {
+	const executed = [];
+	const command = { ...buscarCommand, execute: async () => executed.push('ok') };
   const interaction = createInteraction({ guildId: 'other-guild' });
   const handler = createInteractionHandler({
-    commandsByName: new Map([['buscar', buscarCommand]]),
+    commandsByName: new Map([['buscar', command]]),
     env: { DISCORD_GUILD_IDS: ['guild-1'] },
     logger: createLogger(),
   });
 
   await handler(interaction);
 
-  assert.deepEqual(interaction.calls, []);
+  assert.deepEqual(executed, ['ok']);
 });
 
-test('dispatcher silently ignores guild autocomplete from another server', async () => {
+test('dispatcher accepts global autocomplete from any server', async () => {
+	const executed = [];
+	const command = { ...buscarCommand, autocomplete: async () => executed.push('ok') };
   const interaction = createInteraction({
     guildId: 'other-guild',
     isChatInputCommand: () => false,
     isAutocomplete: () => true,
   });
   const handler = createInteractionHandler({
-    commandsByName: new Map([['buscar', buscarCommand]]),
+    commandsByName: new Map([['buscar', command]]),
     env: { DISCORD_GUILD_IDS: ['guild-1'] },
     logger: createLogger(),
   });
 
   await handler(interaction);
 
-  assert.deepEqual(interaction.calls, []);
+  assert.deepEqual(executed, ['ok']);
 });
 
 test('dispatcher allows chat commands from any guild in a multi-guild DISCORD_GUILD_IDS list', async () => {
@@ -102,17 +106,19 @@ test('dispatcher allows chat commands from any guild in a multi-guild DISCORD_GU
   assert.deepEqual(executed, ['ok']);
 });
 
-test('dispatcher still ignores a guild not present in a multi-guild DISCORD_GUILD_IDS list', async () => {
+test('dispatcher ignores obsolete guild allowlists for global commands', async () => {
+	const executed = [];
+	const command = { ...buscarCommand, execute: async () => executed.push('ok') };
   const interaction = createInteraction({ guildId: 'guild-3' });
   const handler = createInteractionHandler({
-    commandsByName: new Map([['buscar', buscarCommand]]),
+    commandsByName: new Map([['buscar', command]]),
     env: { DISCORD_GUILD_IDS: ['guild-1', 'guild-2'] },
     logger: createLogger(),
   });
 
   await handler(interaction);
 
-  assert.deepEqual(interaction.calls, []);
+  assert.deepEqual(executed, ['ok']);
 });
 
 test('dispatcher allows DM chat commands without an extra membership check', async () => {
@@ -269,7 +275,7 @@ test('dispatcher routes a "Detener busqueda" button click to handleDetenerButton
   }
 });
 
-test('dispatcher silently ignores button clicks from another server', async () => {
+test('dispatcher accepts global button interactions from any server', async () => {
   const db = createDatabase(':memory:');
   try {
     upsertUser(db, 'user-1');
@@ -292,8 +298,8 @@ test('dispatcher silently ignores button clicks from another server', async () =
 
     await handler(interaction);
 
-    assert.deepEqual(interaction.calls, []);
-    assert.notEqual(getJob(db, job.id), null);
+    assert.equal(interaction.calls[0][0], 'reply');
+    assert.equal(getJob(db, job.id), null);
   } finally {
     db.close();
   }

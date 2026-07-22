@@ -12,7 +12,7 @@ import (
 const schema = `
 CREATE TABLE IF NOT EXISTS users (discord_user_id TEXT PRIMARY KEY, pause_reason TEXT, pause_until INTEGER, backoff_attempt INTEGER NOT NULL DEFAULT 0, last_pause_notified_reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS credentials (discord_user_id TEXT PRIMARY KEY REFERENCES users(discord_user_id), ciphertext TEXT NOT NULL, iv TEXT NOT NULL, auth_tag TEXT NOT NULL, updated_at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT NOT NULL REFERENCES users(discord_user_id), filtros_json TEXT NOT NULL, channel_id TEXT, label TEXT, status TEXT NOT NULL DEFAULT 'active', last_polled_at INTEGER, last_outcome TEXT, last_notified_state TEXT, last_notified_cupos INTEGER, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT NOT NULL REFERENCES users(discord_user_id), filtros_json TEXT NOT NULL, channel_id TEXT, guild_id TEXT, label TEXT, status TEXT NOT NULL DEFAULT 'active', last_polled_at INTEGER, last_outcome TEXT, last_notified_state TEXT, last_notified_cupos INTEGER, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS poll_outcome_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, recorded_at INTEGER NOT NULL, outcome_code TEXT NOT NULL, vacancy_count INTEGER, total_cupos INTEGER);
 CREATE INDEX IF NOT EXISTS idx_poll_outcome_history_job_recorded ON poll_outcome_history (job_id, recorded_at DESC, id DESC);
 CREATE TABLE IF NOT EXISTS materias (codigo TEXT PRIMARY KEY, nombre TEXT NOT NULL, updated_at INTEGER NOT NULL);
@@ -33,5 +33,36 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialize schema: %w", err)
 	}
+	if err = ensureColumn(db, "jobs", "guild_id", "TEXT"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
 	return db, nil
+}
+
+func ensureColumn(db *sql.DB, table, column, definition string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, kind string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		found = found || name == column
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition)
+	return err
 }

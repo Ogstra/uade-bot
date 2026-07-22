@@ -33,7 +33,7 @@ func dispatchJSON(t *testing.T, d CommandDispatcher, payload any) InteractionRes
 	return out
 }
 func command(user, name, perms string, options []map[string]any) map[string]any {
-	return map[string]any{"type": 2, "guild_id": "any-guild", "member": map[string]any{"permissions": perms, "user": map[string]any{"id": user}}, "data": map[string]any{"name": name, "options": options}}
+	return map[string]any{"type": 2, "guild_id": "any-guild", "channel_id": "any-channel", "member": map[string]any{"permissions": perms, "user": map[string]any{"id": user}}, "data": map[string]any{"name": name, "options": options}}
 }
 func credentialsSubmit(user, username, password, link string) map[string]any {
 	field := func(id, value string) any {
@@ -128,8 +128,43 @@ func TestOwnershipAdminPermissionAndCommandDispatch(t *testing.T) {
 	if out := dispatchJSON(t, d, command("intruder", "admin-detener", "0", []map[string]any{{"name": "busqueda", "value": "1"}})); !strings.Contains(responseContent(out), "Administrador") {
 		t.Fatalf("%s", responseContent(out))
 	}
-	if out := dispatchJSON(t, d, command("admin", "admin-detener", "8", []map[string]any{{"name": "busqueda", "value": "1"}})); !strings.Contains(responseContent(out), "stopped") {
+	if out := dispatchJSON(t, d, command("admin", "admin-detener", "8", []map[string]any{{"name": "busqueda", "value": "1"}})); !strings.Contains(responseContent(out), "detenida") {
 		t.Fatalf("%s", responseContent(out))
+	}
+}
+
+func TestBuscarPersistsNodeCompatibleContractAndLifecycle(t *testing.T) {
+	d := testDispatcher(t)
+	dispatchJSON(t, d, credentialsSubmit("owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v"))
+	created := ""
+	changed := 0
+	d.OnJobCreated = func(id string) { created = id }
+	d.OnJobsChanged = func() { changed++ }
+	options := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "lu, MI"}, {"name": "sedes_excluidas", "value": "Lima, Monserrat"}}
+	dispatchJSON(t, d, command("owner", "buscar", "0", options))
+	var raw, channel, guild, label, status string
+	if err := d.DB.QueryRow(`SELECT filtros_json,channel_id,guild_id,label,status FROM jobs WHERE id=1`).Scan(&raw, &channel, &guild, &label, &status); err != nil {
+		t.Fatal(err)
+	}
+	if created != "1" || channel != "any-channel" || guild != "any-guild" || label != "3.1.050" || status != "active" {
+		t.Fatalf("created=%s channel=%s guild=%s label=%s status=%s", created, channel, guild, label, status)
+	}
+	var stored map[string]any
+	if json.Unmarshal([]byte(raw), &stored) != nil || stored["materiaCodigo"] != "3.1.050" {
+		t.Fatalf("filters=%s", raw)
+	}
+	if dias, ok := stored["dias"].([]any); !ok || len(dias) != 2 || dias[0] != "LU" || dias[1] != "MI" {
+		t.Fatalf("dias=%v", stored["dias"])
+	}
+	dispatchJSON(t, d, command("owner", "pausar", "0", []map[string]any{{"name": "busqueda", "value": "1"}}))
+	if err := d.DB.QueryRow(`SELECT status FROM jobs WHERE id=1`).Scan(&status); err != nil || status != "paused_by_user" {
+		t.Fatalf("status=%s err=%v", status, err)
+	}
+	dispatchJSON(t, d, command("owner", "detener", "0", []map[string]any{{"name": "busqueda", "value": "1"}}))
+	var count int
+	_ = d.DB.QueryRow(`SELECT COUNT(*) FROM jobs WHERE id=1`).Scan(&count)
+	if count != 0 || changed != 2 {
+		t.Fatalf("count=%d changed=%d", count, changed)
 	}
 }
 

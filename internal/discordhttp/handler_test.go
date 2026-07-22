@@ -86,3 +86,22 @@ func TestHandlerDispatchDeadlineAndNoSecretEcho(t *testing.T) {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestHandlerAlwaysAcknowledgesBeforeDiscordDeadline(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	now := time.Unix(1_700_000_000, 0)
+	h := &Handler{PublicKey: pub, Now: func() time.Time { return now }, Dispatch: DispatchFunc(func(ctx context.Context, _ []byte) (InteractionResponse, error) {
+		<-ctx.Done()
+		return InteractionResponse{}, ctx.Err()
+	})}
+	started := time.Now()
+	w := httptest.NewRecorder()
+	body := []byte(`{"type":2,"member":{"user":{"id":"1"}},"data":{"name":"estado"}}`)
+	h.ServeHTTP(w, signedRequest(priv, body, "1700000000"))
+	if elapsed := time.Since(started); elapsed >= 3*time.Second {
+		t.Fatalf("ack took %s", elapsed)
+	}
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"type":4`) {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+}

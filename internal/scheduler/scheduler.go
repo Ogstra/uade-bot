@@ -178,6 +178,60 @@ func (s *Scheduler) Reconstruct(ctx context.Context, factory func(PersistedJob) 
 	return added, nil
 }
 
+// Reconcile makes the in-memory schedule match durable active jobs. It is safe
+// to call before every tick: unchanged jobs are retained, new jobs are added,
+// and stopped/paused jobs are removed so they cannot keep polling after a
+// command changed their durable status.
+func (s *Scheduler) Reconcile(ctx context.Context, factory func(PersistedJob) (Job, error)) (int, error) {
+	if s.store == nil {
+		return 0, errors.New("scheduler: store is required for reconciliation")
+	}
+	records, err := s.store.ActiveJobs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	desired := make(map[string]Job, len(records))
+	for _, record := range records {
+		job, buildErr := factory(record)
+		if buildErr != nil {
+			return 0, fmt.Errorf("reconcile job %s: %w", record.ID, buildErr)
+		}
+		if job.ID == "" || job.Account == "" || job.Run == nil {
+			return 0, fmt.Errorf("reconcile job %s: invalid job", record.ID)
+		}
+		desired[job.ID] = job
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	added := 0
+	for id, job := range desired {
+		if _, exists := s.byID[id]; !exists {
+			added++
+		}
+		s.byID[id] = job
+	}
+	for id := range s.byID {
+		if _, keep := desired[id]; !keep {
+			delete(s.byID, id)
+			delete(s.queued, id)
+		}
+	}
+	s.jobs = make(map[string][]Job)
+	for _, record := range records {
+		job := desired[record.ID]
+		s.jobs[job.Account] = append(s.jobs[job.Account], job)
+	}
+	for account, pointer := range s.pointer {
+		if count := len(s.jobs[account]); count == 0 {
+			delete(s.pointer, account)
+		} else if pointer >= count {
+			s.pointer[account] = pointer % count
+		}
+	}
+	return added, nil
+}
+
 func (s *Scheduler) accountState(ctx context.Context, account string) (AccountState, error) {
 	if s.store != nil {
 		return s.store.AccountState(ctx, account)

@@ -3,16 +3,21 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"encoding/hex"
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
+	"github.com/ogs/uade-bot/internal/app"
 	"github.com/ogs/uade-bot/internal/cutover"
 	"github.com/ogs/uade-bot/internal/dashboard"
 	"github.com/ogs/uade-bot/internal/discordhttp"
+	"github.com/ogs/uade-bot/internal/shadow"
 	"github.com/ogs/uade-bot/internal/store"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -28,7 +33,22 @@ func main() {
 	if path == "" {
 		path = "data/uade.db"
 	}
-	db, err := store.Open(path)
+	mode := strings.ToLower(os.Getenv("UADE_RUNTIME_MODE"))
+	if mode == "" {
+		mode = "shadow"
+	}
+	if mode != "shadow" && mode != "active" && mode != "development" {
+		log.Fatal("UADE_RUNTIME_MODE must be shadow, active or development")
+	}
+	if mode == "active" && !cutoverConfig.Enabled {
+		log.Fatal("active runtime requires UADE_CUTOVER_ENABLED=true")
+	}
+	var db *sql.DB
+	if mode == "shadow" {
+		db, err = shadow.OpenReadOnly(path)
+	} else {
+		db, err = store.Open(path)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -52,13 +72,26 @@ func main() {
 		User: user, Password: os.Getenv("DASHBOARD_PASSWORD"), SessionSecret: sessionSecret,
 		Production: production, Snapshot: snapshotSource.Build,
 	})
+	token := os.Getenv("DISCORD_BOT_TOKEN")
+	interval := 30 * time.Second
+	if seconds, parseErr := strconv.Atoi(os.Getenv("UADE_POLL_INTERVAL_SECONDS")); parseErr == nil && seconds > 0 {
+		interval = time.Duration(seconds) * time.Second
+	}
+	runtime, runtimeErr := app.NewRuntime(context.Background(), db, os.Getenv("CREDENTIALS_MASTER_KEY"), token, interval, 2, mode == "shadow")
+	if runtimeErr != nil {
+		log.Fatal(runtimeErr)
+	}
+	defer runtime.Close()
+	runtime.Start()
+
 	publicKeyHex := os.Getenv("DISCORD_PUBLIC_KEY")
-	if publicKeyHex != "" {
+	if publicKeyHex != "" && mode != "shadow" {
 		publicKey, decodeErr := hex.DecodeString(publicKeyHex)
 		if decodeErr != nil || len(publicKey) != ed25519.PublicKeySize {
 			log.Fatal("DISCORD_PUBLIC_KEY must be a 32-byte hex key")
 		}
-		mux.Handle("/discord/interactions", &discordhttp.Handler{PublicKey: ed25519.PublicKey(publicKey), Dispatch: discordhttp.CommandDispatcher{DB: db, MasterKey: os.Getenv("CREDENTIALS_MASTER_KEY")}})
+		dispatcher := discordhttp.CommandDispatcher{DB: db, MasterKey: os.Getenv("CREDENTIALS_MASTER_KEY"), OnJobCreated: runtime.JobCreated, OnAccountReady: runtime.AccountReady, OnJobsChanged: runtime.JobsChanged}
+		mux.Handle("/discord/interactions", &discordhttp.Handler{PublicKey: ed25519.PublicKey(publicKey), Dispatch: dispatcher})
 		log.Printf("discord HTTP interactions enabled")
 	}
 	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
@@ -68,8 +101,7 @@ func main() {
 		serverErr <- server.ListenAndServe()
 	}()
 
-	token := os.Getenv("DISCORD_BOT_TOKEN")
-	if token != "" {
+	if token != "" && mode != "shadow" {
 		client, clientErr := disgo.New(token, bot.WithDefaultGateway())
 		if clientErr != nil {
 			log.Fatal(clientErr)

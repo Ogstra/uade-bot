@@ -20,9 +20,10 @@ const ephemeral = 1 << 6
 var materiaPattern = regexp.MustCompile(`^\d+(?:\.\d+){2}$`)
 
 type interaction struct {
-	Type    int    `json:"type"`
-	GuildID string `json:"guild_id"`
-	Data    struct {
+	Type      int    `json:"type"`
+	GuildID   string `json:"guild_id"`
+	ChannelID string `json:"channel_id"`
+	Data      struct {
 		Name     string          `json:"name"`
 		CustomID string          `json:"custom_id"`
 		Options  []option        `json:"options"`
@@ -48,8 +49,11 @@ type option struct {
 // It does not accept a guild allow-list: ownership is account based and admin
 // authorization comes from Discord's Administrator permission bit.
 type CommandDispatcher struct {
-	DB        *sql.DB
-	MasterKey string
+	DB             *sql.DB
+	MasterKey      string
+	OnJobCreated   func(string)
+	OnAccountReady func(string)
+	OnJobsChanged  func()
 }
 
 func (d CommandDispatcher) Dispatch(ctx context.Context, body []byte) (InteractionResponse, error) {
@@ -87,7 +91,7 @@ func (d CommandDispatcher) Dispatch(ctx context.Context, body []byte) (Interacti
 	case "credenciales":
 		return credentialsModal(stringOption(in.Data.Options, "modo")), nil
 	case "buscar":
-		return d.buscar(ctx, userID, in.Data.Options)
+		return d.buscar(ctx, userID, in.ChannelID, in.GuildID, in.Data.Options)
 	case "estado":
 		return d.estado(ctx, userID, false, "")
 	case "detener", "pausar", "reanudar":
@@ -175,6 +179,9 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 	if err = tx.Commit(); err != nil {
 		return InteractionResponse{}, err
 	}
+	if d.OnAccountReady != nil {
+		d.OnAccountReady(userID)
+	}
 	return message("Credenciales guardadas de forma cifrada. Tus búsquedas quedan listas para continuar."), nil
 }
 
@@ -209,7 +216,7 @@ func validStartURL(value string) bool {
 	return err == nil && u.Scheme == "https" && strings.EqualFold(u.Hostname(), "inscripcionespia.uade.edu.ar") && u.Query().Has("param")
 }
 
-func (d CommandDispatcher) buscar(ctx context.Context, userID string, options []option) (InteractionResponse, error) {
+func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildID string, options []option) (InteractionResponse, error) {
 	code := strings.TrimSpace(stringOption(options, "cod_materia"))
 	if !materiaPattern.MatchString(code) {
 		return message("El código de materia no es válido (ejemplo: 3.1.050)."), nil
@@ -222,16 +229,26 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID string, options []
 		return message("Primero cargá tus credenciales con /credenciales; se abrirá un formulario privado."), nil
 	}
 	var active int
-	if err := d.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE discord_user_id=? AND status IN ('active','paused')`, userID).Scan(&active); err != nil {
+	if err := d.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE discord_user_id=? AND status IN ('active','paused_by_user')`, userID).Scan(&active); err != nil {
 		return InteractionResponse{}, err
 	}
 	if active >= 10 {
 		return message("Ya tenés 10 búsquedas activas o pausadas."), nil
 	}
-	filters, _ := json.Marshal(map[string]any{"codMateria": code, "turno": stringOption(options, "turno"), "ofrecimiento": stringOption(options, "ofrecimiento"), "dias": stringOption(options, "dias"), "sedesExcluidas": stringOption(options, "sedes_excluidas")})
+	filters, _ := json.Marshal(map[string]any{"materiaCodigo": code, "turno": stringOption(options, "turno"), "ofrecimiento": stringOption(options, "ofrecimiento"), "dias": csvValues(stringOption(options, "dias"), true), "sedesExcluidas": csvValues(stringOption(options, "sedes_excluidas"), false)})
 	now := time.Now().UnixMilli()
-	if _, err := d.DB.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,label,status,created_at) VALUES(?,?,?,'active',?)`, userID, string(filters), nullable(stringOption(options, "etiqueta")), now); err != nil {
+	label := stringOption(options, "etiqueta")
+	if label == "" {
+		label = code
+	}
+	result, err := d.DB.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,channel_id,guild_id,label,status,created_at) VALUES(?,?,?,?,?,'active',?)`, userID, string(filters), nullable(channelID), nullable(guildID), label, now)
+	if err != nil {
 		return InteractionResponse{}, err
+	}
+	if d.OnJobCreated != nil {
+		if id, idErr := result.LastInsertId(); idErr == nil {
+			d.OnJobCreated(strconv.FormatInt(id, 10))
+		}
 	}
 	return message("Búsqueda creada. El scheduler hará el primer intento sin bloquear esta interacción."), nil
 }
@@ -279,15 +296,19 @@ func (d CommandDispatcher) mutateJob(ctx context.Context, userID, action, idText
 	if err != nil {
 		return message("Seleccioná una búsqueda válida."), nil
 	}
-	status := "stopped"
+	status := ""
 	if action == "pausar" {
-		status = "paused"
+		status = "paused_by_user"
 	}
 	if action == "reanudar" {
 		status = "active"
 	}
 	query := `UPDATE jobs SET status=? WHERE id=?`
 	args := []any{status, id}
+	if action == "detener" {
+		query = `DELETE FROM jobs WHERE id=?`
+		args = []any{id}
+	}
 	if !admin {
 		query += ` AND discord_user_id=?`
 		args = append(args, userID)
@@ -299,6 +320,15 @@ func (d CommandDispatcher) mutateJob(ctx context.Context, userID, action, idText
 	n, _ := result.RowsAffected()
 	if n == 0 {
 		return message("No encontré esa búsqueda o no te pertenece."), nil
+	}
+	if d.OnJobsChanged != nil {
+		d.OnJobsChanged()
+	}
+	if action == "reanudar" && d.OnJobCreated != nil {
+		d.OnJobCreated(strconv.FormatInt(id, 10))
+	}
+	if action == "detener" {
+		status = "detenida"
 	}
 	return message(fmt.Sprintf("Búsqueda #%d: %s.", id, status)), nil
 }
@@ -405,6 +435,20 @@ func stringOption(options []option, name string) string {
 		}
 	}
 	return ""
+}
+func csvValues(value string, upper bool) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if upper {
+			part = strings.ToUpper(part)
+		}
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 func hasAdministrator(value string) bool {
 	permissions, err := strconv.ParseUint(value, 10, 64)

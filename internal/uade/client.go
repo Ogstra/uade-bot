@@ -65,6 +65,9 @@ func (c *Client) Fetch(ctx context.Context, path, username, password string) (st
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return "", fmt.Errorf("%w: status %d", ErrAuth, resp.StatusCode)
 	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", fmt.Errorf("%w: status %d", ErrRateLimit, resp.StatusCode)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("%w: status %d", ErrTransient, resp.StatusCode)
 	}
@@ -108,4 +111,5 @@ func readBounded(reader io.Reader, limit int64) ([]byte, error) {
 var (
 	ErrAuth      = errors.New("uade authentication failed")
 	ErrTransient = errors.New("uade transient failure")
+	ErrRateLimit = fmt.Errorf("%w: rate limited", ErrTransient)
 )

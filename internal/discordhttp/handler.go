@@ -103,12 +103,29 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "dispatcher unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 2500*time.Millisecond)
+		ctx, cancel := context.WithTimeout(r.Context(), 2400*time.Millisecond)
 		defer cancel()
-		response, err = h.Dispatch.Dispatch(ctx, body)
-		if err != nil {
-			http.Error(w, "interaction failed", http.StatusInternalServerError)
-			return
+		type result struct {
+			response InteractionResponse
+			err      error
+		}
+		completed := make(chan result, 1)
+		go func() {
+			value, dispatchErr := h.Dispatch.Dispatch(ctx, body)
+			completed <- result{response: value, err: dispatchErr}
+		}()
+		select {
+		case value := <-completed:
+			response, err = value.response, value.err
+			if err != nil {
+				http.Error(w, "interaction failed", http.StatusInternalServerError)
+				return
+			}
+		case <-ctx.Done():
+			// A valid callback still reaches Discord before its three-second
+			// deadline. Dispatchers must honor ctx, so timed-out work cannot
+			// continue mutating state after this response.
+			response = message("La operación tardó demasiado. Volvé a intentar en unos segundos.")
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

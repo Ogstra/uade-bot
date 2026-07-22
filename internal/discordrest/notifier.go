@@ -6,11 +6,27 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
-type Notifier struct{ Rest rest.Channels }
+type Notifier struct {
+	Rest  rest.Channels
+	Users rest.Users
+}
 
 func New(token string) Notifier {
 	client := rest.NewClient(token)
-	return Notifier{Rest: rest.NewChannels(client)}
+	return Notifier{Rest: rest.NewChannels(client), Users: rest.NewUsers(client)}
+}
+
+func (n Notifier) SendDM(user, content string) error {
+	id, err := snowflake.Parse(user)
+	if err != nil {
+		return err
+	}
+	channel, err := n.Users.CreateDMChannel(id)
+	if err != nil {
+		return err
+	}
+	_, err = n.Rest.CreateMessage(channel.ID(), discord.MessageCreate{Content: content})
+	return err
 }
 func (n Notifier) Send(channel string, content string) error {
 	id, e := snowflake.Parse(channel)

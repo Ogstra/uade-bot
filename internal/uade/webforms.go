@@ -25,6 +25,53 @@ type SearchForm struct {
 	MateriaNombre string
 }
 
+// BuildMateriaCatalogForm mirrors the WebForms __doPostBack used when the
+// initial enrollment page has not rendered the materia checkboxes yet.
+func BuildMateriaCatalogForm(html string) (SearchForm, error) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return SearchForm{}, err
+	}
+	trigger := doc.Find("[id$=btnSeleccionarMaterias], [name$='$btnSeleccionarMaterias']").First()
+	if trigger.Length() != 1 {
+		return SearchForm{}, errors.New("webforms materia trigger missing")
+	}
+	form := trigger.Closest("form")
+	if form.Length() != 1 {
+		return SearchForm{}, errors.New("webforms form missing")
+	}
+	target, _ := trigger.Attr("name")
+	if target == "" {
+		if href, ok := trigger.Attr("href"); ok {
+			const marker = "__doPostBack('"
+			if start := strings.Index(href, marker); start >= 0 {
+				rest := href[start+len(marker):]
+				if end := strings.Index(rest, "'"); end >= 0 {
+					target = rest[:end]
+				}
+			}
+		}
+	}
+	if target == "" {
+		if id, ok := trigger.Attr("id"); ok {
+			target = strings.ReplaceAll(id, "_", "$")
+		}
+	}
+	if target == "" {
+		return SearchForm{}, errors.New("webforms materia trigger missing")
+	}
+	fields := serializeSuccessfulControls(form, nil)
+	fields.Set("__EVENTTARGET", target)
+	fields.Set("__EVENTARGUMENT", "")
+	form.Find("input[type=hidden][name$='$ScriptManager1']").First().Each(func(_ int, input *goquery.Selection) {
+		if name, ok := input.Attr("name"); ok {
+			fields.Set(name, "ctl00$UpdatePanelContenido|"+target)
+		}
+	})
+	action, _ := form.Attr("action")
+	return SearchForm{Action: action, Fields: fields}, nil
+}
+
 var offeringValues = map[string]string{"curricular": "145", "optativa": "146"}
 var daySuffixes = map[string]string{"LU": "chkLunes", "MA": "chkMartes", "MI": "chkMiercoles", "JU": "chkJueves", "VI": "chkViernes", "SA": "chkSabado"}
 
