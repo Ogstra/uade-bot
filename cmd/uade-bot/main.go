@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
+	"github.com/ogs/uade-bot/internal/cutover"
 	"github.com/ogs/uade-bot/internal/dashboard"
 	"github.com/ogs/uade-bot/internal/discordhttp"
 	"github.com/ogs/uade-bot/internal/store"
@@ -16,6 +17,13 @@ import (
 )
 
 func main() {
+	cutoverConfig, err := cutover.FromEnv(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err = cutover.CheckIfEnabled(cutoverConfig); err != nil {
+		log.Fatal(err)
+	}
 	path := os.Getenv("UADE_DB_PATH")
 	if path == "" {
 		path = "data/uade.db"
