@@ -7,8 +7,8 @@ type OutcomeCode string
 const (
 	OutcomeFound        OutcomeCode = "found"
 	OutcomeNoVacancies  OutcomeCode = "no_vacancies"
-	OutcomeAuthError    OutcomeCode = "auth_error"
-	OutcomeTransientErr OutcomeCode = "transient_error"
+	OutcomeAuthError    OutcomeCode = "invalid_credentials"
+	OutcomeTransientErr OutcomeCode = "search_failed"
 )
 
 type Vacancy struct {
