@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"github.com/disgoorg/disgo"
 	"github.com/ogs/uade-bot/internal/dashboard"
 	"github.com/ogs/uade-bot/internal/store"
 	"log"
@@ -18,6 +20,17 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	if token := os.Getenv("DISCORD_BOT_TOKEN"); token != "" {
+		client, err := disgo.New(token)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := client.OpenGateway(context.Background()); err != nil {
+			log.Fatal(err)
+		}
+		defer client.Close(context.Background())
+		log.Printf("discord gateway connected")
+	}
 	addr := os.Getenv("DASHBOARD_ADDR")
 	if addr == "" {
 		addr = ":8080"
