@@ -1,10 +1,12 @@
 services:
   uade-go:
+    image: ${UADE_GO_IMAGE:-uade-bot-go:local}
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
       DASHBOARD_ADDR: ":3000"
+      HEALTHCHECK_ADDR: "http://127.0.0.1:3000/healthz"
     ports: ["3000:3000"]
     volumes: ["./data:/app/data"]
     healthcheck:

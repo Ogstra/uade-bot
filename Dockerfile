@@ -8,5 +8,5 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/uade-bot /app/uade-bot
 COPY --from=build /out/healthcheck /app/healthcheck
-EXPOSE 8080
+EXPOSE 3000
 ENTRYPOINT ["/app/uade-bot"]

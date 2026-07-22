@@ -21,7 +21,7 @@ docker compose -f "$COMPOSE_FILE" up -d --build
 attempt=0
 while [ "$attempt" -lt 30 ]; do
   if docker compose -f "$COMPOSE_FILE" ps --status running | grep -q uade-go; then
-    if command -v curl >/dev/null 2>&1 && curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
+    if command -v curl >/dev/null 2>&1 && ./smoke-test.sh; then
       echo "uade-go is healthy"
       exit 0
     fi
