@@ -25,7 +25,7 @@ Los valores `admin` / `admin` son defaults solo para desarrollo. El proceso emit
 
 El dashboard y su endpoint JSON usan sesiones autenticadas, respuestas `no-store` y no muestran credenciales de UADE ni secretos.
 
-La implementación Go recibe interacciones en `POST /discord/interactions`, valida la firma Ed25519 y registra los 12 slash commands mediante el endpoint global de Discord. Requiere `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID` y `DISCORD_PUBLIC_KEY`; no usa una lista de servidores ni `DISCORD_GUILD_ID`. El Gateway mínimo se mantiene únicamente para presencia online, mientras que las interacciones se confirman por HTTP.
+La implementación Go recibe slash commands, modal submits y autocomplete a través de una sesión de Discord Gateway saliente (WebSocket) y registra los 12 slash commands mediante el endpoint global de Discord. Requiere `DISCORD_BOT_TOKEN` y `DISCORD_CLIENT_ID`; no usa una lista de servidores ni `DISCORD_GUILD_ID`. Este transporte no necesita ningún puerto público entrante: el bot abre la conexión Gateway hacia Discord, por lo que funciona igual si el VPS solo es accesible localmente o vía WireGuard (decisiones D-19/D-20/D-21 del amendment de fase 03.3).
 
 ## Límite de despliegue
 

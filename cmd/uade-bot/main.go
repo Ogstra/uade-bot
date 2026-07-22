@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"database/sql"
-	"encoding/hex"
-	"github.com/disgoorg/disgo"
-	"github.com/disgoorg/disgo/bot"
 	"github.com/ogs/uade-bot/internal/app"
 	"github.com/ogs/uade-bot/internal/cutover"
 	"github.com/ogs/uade-bot/internal/dashboard"
+	"github.com/ogs/uade-bot/internal/discordgateway"
 	"github.com/ogs/uade-bot/internal/discordhttp"
 	"github.com/ogs/uade-bot/internal/shadow"
 	"github.com/ogs/uade-bot/internal/store"
@@ -84,16 +81,6 @@ func main() {
 	defer runtime.Close()
 	runtime.Start()
 
-	publicKeyHex := os.Getenv("DISCORD_PUBLIC_KEY")
-	if publicKeyHex != "" && mode != "shadow" {
-		publicKey, decodeErr := hex.DecodeString(publicKeyHex)
-		if decodeErr != nil || len(publicKey) != ed25519.PublicKeySize {
-			log.Fatal("DISCORD_PUBLIC_KEY must be a 32-byte hex key")
-		}
-		dispatcher := discordhttp.CommandDispatcher{DB: db, MasterKey: os.Getenv("CREDENTIALS_MASTER_KEY"), OnJobCreated: runtime.JobCreated, OnAccountReady: runtime.AccountReady, OnJobsChanged: runtime.JobsChanged}
-		mux.Handle("/discord/interactions", &discordhttp.Handler{PublicKey: ed25519.PublicKey(publicKey), Dispatch: dispatcher})
-		log.Printf("discord HTTP interactions enabled")
-	}
 	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	serverErr := make(chan error, 1)
 	go func() {
@@ -102,7 +89,8 @@ func main() {
 	}()
 
 	if token != "" && mode != "shadow" {
-		client, clientErr := disgo.New(token, bot.WithDefaultGateway())
+		dispatcher := discordhttp.CommandDispatcher{DB: db, MasterKey: os.Getenv("CREDENTIALS_MASTER_KEY"), OnJobCreated: runtime.JobCreated, OnAccountReady: runtime.AccountReady, OnJobsChanged: runtime.JobsChanged}
+		client, clientErr := discordgateway.New(token, dispatcher)
 		if clientErr != nil {
 			log.Fatal(clientErr)
 		}
@@ -110,7 +98,7 @@ func main() {
 			log.Fatal(clientErr)
 		}
 		defer client.Close(context.Background())
-		log.Printf("discord gateway connected")
+		log.Printf("discord gateway connected with interaction listeners")
 		applicationID := os.Getenv("DISCORD_CLIENT_ID")
 		if applicationID == "" {
 			log.Fatal("DISCORD_CLIENT_ID is required when DISCORD_BOT_TOKEN is configured")
