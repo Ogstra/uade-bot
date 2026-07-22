@@ -22,6 +22,8 @@ Los valores `admin` / `admin` son defaults solo para desarrollo. El proceso emit
 
 El dashboard y su endpoint JSON usan sesiones autenticadas, respuestas `no-store` y no muestran credenciales de UADE, secretos del dashboard ni datos internos de autenticación. El panel es de solo lectura.
 
+La implementación Go recibe interacciones en `POST /discord/interactions`, valida la firma Ed25519 y registra los 12 slash commands mediante el endpoint global de Discord. Requiere `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID` y `DISCORD_PUBLIC_KEY`; no usa una lista de servidores ni `DISCORD_GUILD_ID`. El Gateway mínimo se mantiene únicamente para presencia online, mientras que las interacciones se confirman por HTTP.
+
 ## Límite de despliegue
 
 Esta fase sirve HTTP para desarrollo en una red confiable. No expongas el puerto directamente a Internet. TLS/HTTPS, HSTS, certificados y la configuración de un proxy inverso pertenecen a la Fase 4 de despliegue. Hasta completar esa topología, mantené `trust proxy` deshabilitado y restringí el acceso con red local o firewall.
