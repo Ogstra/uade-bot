@@ -33,8 +33,12 @@ func main() {
 	if user == "" {
 		user = os.Getenv("DASHBOARD_USER")
 	}
+	sessionSecret := []byte(os.Getenv("DASHBOARD_SESSION_SECRET"))
+	if len(sessionSecret) < 32 {
+		log.Fatal("DASHBOARD_SESSION_SECRET must contain at least 32 bytes")
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/", dashboard.Server{User: user, Password: os.Getenv("DASHBOARD_PASSWORD")})
+	mux.Handle("/", &dashboard.Server{User: user, Password: os.Getenv("DASHBOARD_PASSWORD"), SessionSecret: sessionSecret})
 	publicKeyHex := os.Getenv("DISCORD_PUBLIC_KEY")
 	if publicKeyHex != "" {
 		publicKey, decodeErr := hex.DecodeString(publicKeyHex)
