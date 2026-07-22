@@ -1,65 +1,35 @@
-#!/usr/bin/env bash
-set -Eeuo pipefail
+#!/usr/bin/env sh
+set -eu
 
-# Deploy an extracted release without touching the VM .env or SQLite data.
-# Usage: ./deploy.sh [path/to/uade-bot-code-update.tar.gz]
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$ROOT_DIR"
 
-ARCHIVE="${1:-$HOME/uade-bot-code-update.tar.gz}"
-APP_DIR="${APP_DIR:-$HOME/uade-bot}"
-PROCESS_PATTERN='node.*src/bot\.js'
-LOCK_HASH_FILE="$APP_DIR/node_modules/.uade-bot-package-lock.sha256"
+COMPOSE_FILE=${COMPOSE_FILE:-docker-compose.go.yml}
 
-if [[ ! -f "$ARCHIVE" ]]; then
-  echo "No existe el tarball: $ARCHIVE" >&2
+if ! command -v docker >/dev/null 2>&1; then
+  echo "docker is required" >&2
+  exit 1
+fi
+if [ ! -f .env ]; then
+  echo "Missing .env. Copy .env.example to .env and set production secrets." >&2
   exit 1
 fi
 
-echo "Deteniendo bots anteriores..."
-pkill -9 -f "$PROCESS_PATTERN" || true
-sleep 2
+mkdir -p data
+docker compose -f "$COMPOSE_FILE" up -d --build
 
-old_count="$(pgrep -af "$PROCESS_PATTERN" | wc -l || true)"
-if [[ "$old_count" -ne 0 ]]; then
-  echo "No se pudo detener el bot anterior; quedan $old_count procesos." >&2
-  pgrep -af "$PROCESS_PATTERN" || true
-  exit 1
-fi
+attempt=0
+while [ "$attempt" -lt 30 ]; do
+  if docker compose -f "$COMPOSE_FILE" ps --status running | grep -q uade-go; then
+    if command -v curl >/dev/null 2>&1 && curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
+      echo "uade-go is healthy"
+      exit 0
+    fi
+  fi
+  attempt=$((attempt + 1))
+  sleep 2
+done
 
-echo "Extrayendo $(basename "$ARCHIVE")..."
-tar xzf "$ARCHIVE" -C "$HOME"
-cd "$APP_DIR"
-
-current_lock_hash="$(sha256sum package-lock.json | awk '{print $1}')"
-installed_lock_hash=""
-if [[ -f "$LOCK_HASH_FILE" ]]; then
-  installed_lock_hash="$(cat "$LOCK_HASH_FILE")"
-fi
-
-if [[ ! -d node_modules || "$installed_lock_hash" != "$current_lock_hash" ]]; then
-  echo "Instalando dependencias desde package-lock.json..."
-  npm ci --omit=dev
-  mkdir -p node_modules
-  printf '%s\n' "$current_lock_hash" > "$LOCK_HASH_FILE"
-else
-  echo "Dependencias sin cambios; se omite npm ci."
-fi
-
-echo "Iniciando bot desacoplado..."
-nohup npm run bot > bot.log 2>&1 < /dev/null &
-bot_pid="$!"
-sleep 3
-
-if ! kill -0 "$bot_pid" 2>/dev/null; then
-  echo "El bot terminó al iniciar; revisá $APP_DIR/bot.log" >&2
-  exit 1
-fi
-
-bot_count="$(pgrep -af "$PROCESS_PATTERN" | wc -l || true)"
-if [[ "$bot_count" -ne 1 ]]; then
-  echo "Se esperaba exactamente 1 bot; se detectaron $bot_count." >&2
-  pgrep -af "$PROCESS_PATTERN" || true
-  exit 1
-fi
-
-echo "Bot iniciado correctamente (PID $bot_pid)."
-pgrep -af "$PROCESS_PATTERN"
+docker compose -f "$COMPOSE_FILE" ps
+docker compose -f "$COMPOSE_FILE" logs --tail=80 uade-go >&2
+exit 1
