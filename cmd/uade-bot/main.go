@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"github.com/disgoorg/disgo"
+	"github.com/disgoorg/disgo/bot"
 	"github.com/ogs/uade-bot/internal/dashboard"
 	"github.com/ogs/uade-bot/internal/store"
 	"log"
@@ -21,7 +22,7 @@ func main() {
 	}
 	defer db.Close()
 	if token := os.Getenv("DISCORD_BOT_TOKEN"); token != "" {
-		client, err := disgo.New(token)
+		client, err := disgo.New(token, bot.WithDefaultGateway())
 		if err != nil {
 			log.Fatal(err)
 		}
