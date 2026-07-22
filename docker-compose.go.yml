@@ -3,7 +3,9 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    ports: ["8080:8080"]
+    environment:
+      DASHBOARD_ADDR: ":3000"
+    ports: ["3000:3000"]
     volumes: ["./data:/app/data"]
     healthcheck:
       test: ["CMD", "/app/healthcheck"]
