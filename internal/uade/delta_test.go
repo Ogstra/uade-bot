@@ -22,3 +22,28 @@ func TestParseDeltaRejectsMalformed(t *testing.T) {
 		t.Fatalf("%q", f)
 	}
 }
+
+func TestParseDeltaMatchesAllNodeOracleFixtures(t *testing.T) {
+	tests := []struct {
+		name    string
+		failure DeltaFailure
+	}{
+		{"delta-empty.txt", ""},
+		{"delta-mismatch.txt", ""},
+		{"delta-error.txt", "delta_error"},
+		{"delta-redirect.txt", "delta_redirect"},
+		{"delta-malformed.txt", "delta_truncated"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := os.ReadFile("../../src/automation/__fixtures__/webforms/" + tc.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, failure := ParseDelta(string(b), 100, 1_000_000)
+			if failure != tc.failure {
+				t.Fatalf("failure=%q, want %q", failure, tc.failure)
+			}
+		})
+	}
+}

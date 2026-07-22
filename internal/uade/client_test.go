@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -26,6 +27,33 @@ func TestClientUsesCookiesAndBasicAuth(t *testing.T) {
 	body, err := c.Fetch(context.Background(), "/search", "uade", "secret")
 	if err != nil || body == "" {
 		t.Fatalf("body=%q err=%v", body, err)
+	}
+}
+
+func TestClientRejectsCrossOriginRedirect(t *testing.T) {
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("cross-origin destination must never be requested")
+	}))
+	defer destination.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, destination.URL, http.StatusFound)
+	}))
+	defer source.Close()
+	c, _ := NewClient(source.URL)
+	if _, err := c.Fetch(context.Background(), "/", "u", "p"); err == nil {
+		t.Fatal("expected cross-origin redirect failure")
+	}
+}
+
+func TestClientEnforcesResponseLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", 11)))
+	}))
+	defer srv.Close()
+	c, _ := NewClient(srv.URL)
+	c.MaxBodyBytes = 10
+	if _, err := c.Fetch(context.Background(), "/", "u", "p"); !errors.Is(err, ErrTransient) {
+		t.Fatalf("err=%v", err)
 	}
 }
 
