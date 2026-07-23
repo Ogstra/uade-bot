@@ -3,7 +3,7 @@ package discordgateway
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log"
 	"strconv"
 	"time"
@@ -141,24 +141,65 @@ func raceForResponse(ctx context.Context, completed <-chan dispatchResult) disco
 // (03.3-REVIEW.md WR-04).
 func dispatchAndRespond(dispatcher Dispatcher, id, token string, in discordhttp.Interaction, respond respondFunc) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), interactionDeadline)
-		defer cancel()
-
-		completed := make(chan dispatchResult, 1)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("interaction dispatch panic recovered: %v", r)
-					completed <- dispatchResult{err: fmt.Errorf("interaction dispatch panic recovered: %v", r)}
-				}
-			}()
-			response, err := dispatcher.DispatchInteraction(ctx, in)
-			completed <- dispatchResult{response: response, err: err}
-		}()
-
-		response := raceForResponse(ctx, completed)
-		_ = respond(context.Background(), id, token, response)
+		if err := runInteractionPipeline(dispatcher, id, token, in, respond); err != nil {
+			log.Print("interaction pipeline failed")
+		}
 	}()
+}
+
+// runInteractionPipeline is the outer recovery boundary for the complete
+// asynchronous interaction path: deadline construction, dispatch race, and
+// response callback. It never includes interaction data, tokens, payloads, or
+// recovered panic values in errors or logs.
+func runInteractionPipeline(dispatcher Dispatcher, id, token string, in discordhttp.Interaction, respond respondFunc) (err error) {
+	responseStarted := false
+	defer func() {
+		if recover() == nil {
+			return
+		}
+		log.Print("interaction pipeline panic recovered")
+		err = errors.New("interaction pipeline panic recovered")
+		if responseStarted {
+			return
+		}
+		responseStarted = true
+		response := discordhttp.InteractionResponse{Type: 4, Data: map[string]any{"content": internalErrorMessage, "flags": ephemeral}}
+		if respondErr := respondSafely(respond, context.Background(), id, token, response); respondErr != nil {
+			log.Print("interaction pipeline recovery response failed")
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), interactionDeadline)
+	defer cancel()
+
+	completed := make(chan dispatchResult, 1)
+	go func() {
+		defer func() {
+			if recover() != nil {
+				log.Print("interaction dispatch panic recovered")
+				completed <- dispatchResult{err: errors.New("interaction dispatch panic recovered")}
+			}
+		}()
+		response, dispatchErr := dispatcher.DispatchInteraction(ctx, in)
+		completed <- dispatchResult{response: response, err: dispatchErr}
+	}()
+
+	response := raceForResponse(ctx, completed)
+	responseStarted = true
+	return respondSafely(respond, context.Background(), id, token, response)
+}
+
+// respondSafely contains both ordinary response errors and callback panics.
+// A recovered panic becomes a fixed error and log marker; it is never retried
+// because the callback may already have acknowledged the interaction.
+func respondSafely(respond respondFunc, ctx context.Context, id, token string, response discordhttp.InteractionResponse) (err error) {
+	defer func() {
+		if recover() != nil {
+			log.Print("interaction response panic recovered")
+			err = errors.New("interaction response panic recovered")
+		}
+	}()
+	return respond(ctx, id, token, response)
 }
 
 // permissionsString formats a resolved member's permission bitmask as the
