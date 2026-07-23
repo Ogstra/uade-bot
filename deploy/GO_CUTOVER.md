@@ -25,6 +25,12 @@ No habilitar el flag hasta que ambos checkpoints live estén cerrados. En el
 estado actual de 03.3-05 deben permanecer en `false`, por lo que readiness global
 continúa bloqueado aunque las pruebas automatizadas del plan pasen.
 
+`internal/shadow/RSS_BASELINE.md` documenta la medición real y reproducible del
+RSS del binario Go completo (dashboard + scheduler + DB) contra el proceso
+`node src/bot.js` completo, idle y bajo una concurrencia definida, generada por
+`cmd/rsscompare` -- sin conexión al Discord Gateway en ninguno de los dos lados
+durante la medición (ver la sección "Caveats" de ese documento).
+
 ## Activación
 
 1. Conservar el digest de la imagen Go actualmente activa como `PREVIOUS_GO_IMAGE`.
