@@ -1,8 +1,13 @@
 package discordgateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +36,60 @@ func contentOf(t *testing.T, response discordhttp.InteractionResponse) string {
 	}
 	content, _ := data["content"].(string)
 	return content
+}
+
+type signalLogBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+	marker string
+	once   sync.Once
+	seen   chan struct{}
+}
+
+func newSignalLogBuffer(marker string) *signalLogBuffer {
+	return &signalLogBuffer{marker: marker, seen: make(chan struct{})}
+}
+
+func (b *signalLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n, err := b.buffer.Write(p)
+	if strings.Contains(b.buffer.String(), b.marker) {
+		b.once.Do(func() { close(b.seen) })
+	}
+	return n, err
+}
+
+func (b *signalLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+func captureGatewayLog(t *testing.T, marker string) *signalLogBuffer {
+	t.Helper()
+	output := newSignalLogBuffer(marker)
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	originalPrefix := log.Prefix()
+	log.SetOutput(output)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+		log.SetPrefix(originalPrefix)
+	})
+	return output
+}
+
+func assertGatewayRecoverySanitized(t *testing.T, value string) {
+	t.Helper()
+	for _, secret := range []string{"discord-secret-sentinel", "Bot.ABC123", "UadePass!123", "interaction-token-sentinel", "modal-value-sentinel"} {
+		if strings.Contains(value, secret) {
+			t.Fatalf("recovery log leaked %q: %q", secret, value)
+		}
+	}
 }
 
 func TestRaceForResponseReturnsCompletedResponseWhenDispatcherFinishesBeforeDeadline(t *testing.T) {
@@ -72,8 +131,9 @@ func TestRaceForResponseReturnsInternalErrorMessageWhenDispatcherErrors(t *testi
 }
 
 func TestDispatchAndRespondRecoversFromDispatcherPanicAndStillResponds(t *testing.T) {
+	logs := captureGatewayLog(t, "interaction dispatch panic recovered")
 	dispatcher := fakeDispatcher{fn: func(context.Context, discordhttp.Interaction) (discordhttp.InteractionResponse, error) {
-		panic("boom")
+		panic("discord-secret-sentinel token=Bot.ABC123 modal_password=UadePass!123 modal-value-sentinel")
 	}}
 
 	captured := make(chan discordhttp.InteractionResponse, 1)
@@ -82,7 +142,7 @@ func TestDispatchAndRespondRecoversFromDispatcherPanicAndStillResponds(t *testin
 		return nil
 	}
 
-	dispatchAndRespond(dispatcher, "id", "tok", discordhttp.Interaction{}, fakeRespond)
+	dispatchAndRespond(dispatcher, "id", "interaction-token-sentinel", discordhttp.Interaction{}, fakeRespond)
 
 	select {
 	case response := <-captured:
@@ -92,6 +152,50 @@ func TestDispatchAndRespondRecoversFromDispatcherPanicAndStillResponds(t *testin
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for dispatchAndRespond to recover from panic and respond")
 	}
+	select {
+	case <-logs.seen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for sanitized dispatch recovery log")
+	}
+	assertGatewayRecoverySanitized(t, logs.String())
+}
+
+func TestDispatchAndRespondRecoversFromResponderPanicAndServesNextInteraction(t *testing.T) {
+	logs := captureGatewayLog(t, "interaction response panic recovered")
+	dispatcher := fakeDispatcher{fn: func(context.Context, discordhttp.Interaction) (discordhttp.InteractionResponse, error) {
+		return discordhttp.InteractionResponse{Type: 4, Data: map[string]any{"content": "ok"}}, nil
+	}}
+
+	var attempts atomic.Int32
+	secondResponse := make(chan discordhttp.InteractionResponse, 1)
+	fakeRespond := func(_ context.Context, _, _ string, response discordhttp.InteractionResponse) error {
+		if attempts.Add(1) == 1 {
+			panic("discord-secret-sentinel token=Bot.ABC123 modal_password=UadePass!123")
+		}
+		secondResponse <- response
+		return nil
+	}
+
+	dispatchAndRespond(dispatcher, "first-id", "interaction-token-sentinel", discordhttp.Interaction{}, fakeRespond)
+	select {
+	case <-logs.seen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for response panic recovery")
+	}
+
+	dispatchAndRespond(dispatcher, "second-id", "interaction-token-sentinel", discordhttp.Interaction{}, fakeRespond)
+	select {
+	case response := <-secondResponse:
+		if contentOf(t, response) != "ok" {
+			t.Fatalf("second response content = %q, want ok", contentOf(t, response))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for interaction after responder panic")
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("respond attempts=%d, want exactly 2", attempts.Load())
+	}
+	assertGatewayRecoverySanitized(t, logs.String())
 }
 
 func TestRespondContextEnforcesRespondTimeoutBound(t *testing.T) {
