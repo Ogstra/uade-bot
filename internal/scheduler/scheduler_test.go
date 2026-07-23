@@ -1,8 +1,10 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -98,6 +100,92 @@ func (n *recordingNotifier) Notify(_ context.Context, event Event) error {
 	return nil
 }
 func (n *recordingNotifier) count() int { n.mu.Lock(); defer n.mu.Unlock(); return len(n.events) }
+
+const schedulerPanicSentinel = "scheduler-secret-sentinel password=UadePass!123 param=eyJhbHVtSWQiOiIxIn0="
+
+type panicOnceStore struct {
+	*memoryStore
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *panicOnceStore) SaveOutcome(ctx context.Context, id string, outcome Outcome, at time.Time) error {
+	panicked := false
+	s.once.Do(func() {
+		panicked = true
+		close(s.entered)
+		<-s.release
+	})
+	if panicked {
+		panic(schedulerPanicSentinel)
+	}
+	return s.memoryStore.SaveOutcome(ctx, id, outcome, at)
+}
+
+type panicOnceNotifier struct {
+	mu       sync.Mutex
+	attempts int
+}
+
+func (n *panicOnceNotifier) Notify(context.Context, Event) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.attempts++
+	if n.attempts == 1 {
+		panic(schedulerPanicSentinel)
+	}
+	return nil
+}
+
+func (n *panicOnceNotifier) count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.attempts
+}
+
+func captureStandardLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var output bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	originalPrefix := log.Prefix()
+	log.SetOutput(&output)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+		log.SetPrefix(originalPrefix)
+	})
+	return &output
+}
+
+func assertSchedulerRecoverySanitized(t *testing.T, value, marker string) {
+	t.Helper()
+	if !strings.Contains(value, marker) {
+		t.Fatalf("recovery output %q does not contain %q", value, marker)
+	}
+	for _, secret := range []string{"scheduler-secret-sentinel", "UadePass!123", "eyJhbHVtSWQiOiIxIn0="} {
+		if strings.Contains(value, secret) {
+			t.Fatalf("recovery output leaked %q: %q", secret, value)
+		}
+	}
+}
+
+func assertAccountReleased(t *testing.T, s *Scheduler, account string) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.sem) != 0 || s.inFlight[account] || len(s.immediate[account]) != 0 {
+		t.Fatalf("scheduler cleanup sem=%d inFlight=%v immediate=%v", len(s.sem), s.inFlight[account], s.immediate[account])
+	}
+	for _, job := range s.jobs[account] {
+		if s.queued[job.ID] {
+			t.Fatalf("job %s remains queued after account cleanup", job.ID)
+		}
+	}
+}
 
 func outcomeRun(code string) func(context.Context) (Outcome, error) {
 	return func(context.Context) (Outcome, error) { return Outcome{Code: code}, nil }
@@ -196,26 +284,115 @@ func TestImmediateQueueSerializesAccountAndDeduplicates(t *testing.T) {
 }
 
 func TestRunAccountRecoversFromJobPanicAndAccountStaysPollable(t *testing.T) {
+	logs := captureStandardLog(t)
 	s := New(1)
 	var calls atomic.Int32
 	s.Add(Job{Account: "a", ID: "1", Run: func(context.Context) (Outcome, error) {
 		calls.Add(1)
-		panic("boom: goquery choked on malformed UADE HTML")
+		panic(schedulerPanicSentinel)
 	}})
 
 	err := s.RunOnce(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "panic recovered") {
-		t.Fatalf("first RunOnce err=%v, want error containing %q", err, "panic recovered")
+	if err == nil {
+		t.Fatal("first RunOnce returned nil after job panic")
 	}
+	assertSchedulerRecoverySanitized(t, err.Error(), "job 1 run panic recovered")
 
 	err = s.RunOnce(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "panic recovered") {
-		t.Fatalf("second RunOnce err=%v, want error containing %q", err, "panic recovered")
+	if err == nil {
+		t.Fatal("second RunOnce returned nil after job panic")
 	}
+	assertSchedulerRecoverySanitized(t, err.Error(), "job 1 run panic recovered")
+	assertSchedulerRecoverySanitized(t, logs.String(), "scheduler job run panic recovered")
 
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("calls=%d, want 2 (account must remain pollable after a recovered panic)", got)
 	}
+	assertAccountReleased(t, s, "a")
+}
+
+func TestRunAccountRecoversFromStorePanicAndDrainsImmediateQueue(t *testing.T) {
+	logs := captureStandardLog(t)
+	store := &panicOnceStore{memoryStore: newMemoryStore(), entered: make(chan struct{}), release: make(chan struct{})}
+	s := New(1, WithStore(store))
+	var firstCalls, immediateCalls atomic.Int32
+	s.Add(Job{Account: "a", ID: "1", Run: func(context.Context) (Outcome, error) {
+		firstCalls.Add(1)
+		return Outcome{Code: "no_vacancies"}, nil
+	}})
+	s.Add(Job{Account: "a", ID: "2", Run: func(context.Context) (Outcome, error) {
+		immediateCalls.Add(1)
+		return Outcome{Code: "no_vacancies"}, nil
+	}})
+
+	done := make(chan error, 1)
+	go func() { done <- s.RunOnce(context.Background()) }()
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SaveOutcome")
+	}
+	if !s.PollNow(context.Background(), "2") {
+		t.Fatal("immediate poll must be accepted while the account is in flight")
+	}
+	close(store.release)
+
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recovered store panic")
+	}
+	if err == nil {
+		t.Fatal("RunOnce returned nil after store panic")
+	}
+	assertSchedulerRecoverySanitized(t, err.Error(), "job 1 pipeline panic recovered")
+	assertSchedulerRecoverySanitized(t, logs.String(), "scheduler job pipeline panic recovered")
+	if firstCalls.Load() != 1 || immediateCalls.Load() != 1 {
+		t.Fatalf("calls first=%d immediate=%d, want 1 each", firstCalls.Load(), immediateCalls.Load())
+	}
+	assertAccountReleased(t, s, "a")
+
+	if err = s.RunOnce(context.Background()); err != nil {
+		t.Fatalf("subsequent RunOnce failed: %v", err)
+	}
+	if immediateCalls.Load() != 2 {
+		t.Fatalf("subsequent work calls=%d, want 2", immediateCalls.Load())
+	}
+	assertAccountReleased(t, s, "a")
+}
+
+func TestRunAccountRecoversFromNotifierPanicAndRemainsPollable(t *testing.T) {
+	logs := captureStandardLog(t)
+	store := newMemoryStore()
+	notifier := &panicOnceNotifier{}
+	s := New(1, WithStore(store), WithNotifier(notifier))
+	vacancy := Vacancy{Turno: "Noche", Sede: "Lima", Horario: "18:30", Dias: []string{"Lunes"}, Cupos: 1}
+	s.Add(Job{Account: "a", ID: "1", Run: func(context.Context) (Outcome, error) {
+		return Outcome{Code: "found", Vacancies: []Vacancy{vacancy}}, nil
+	}})
+
+	err := s.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce returned nil after notifier panic")
+	}
+	assertSchedulerRecoverySanitized(t, err.Error(), "job 1 pipeline panic recovered")
+	assertSchedulerRecoverySanitized(t, logs.String(), "scheduler job pipeline panic recovered")
+	if state := store.notifications["1"]; state.VacancyKey != "" {
+		t.Fatalf("notification dedup persisted after panic: %+v", state)
+	}
+	assertAccountReleased(t, s, "a")
+
+	if err = s.RunOnce(context.Background()); err != nil {
+		t.Fatalf("retry RunOnce failed: %v", err)
+	}
+	if notifier.count() != 2 {
+		t.Fatalf("notify attempts=%d, want 2", notifier.count())
+	}
+	if state := store.notifications["1"]; state.VacancyKey == "" {
+		t.Fatal("notification dedup was not persisted after successful retry")
+	}
+	assertAccountReleased(t, s, "a")
 }
 
 func TestBackoffAndPauseUseInjectedClock(t *testing.T) {
