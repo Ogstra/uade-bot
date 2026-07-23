@@ -83,6 +83,31 @@ func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken stri
 	return runtime, nil
 }
 
+// recoverGoroutine converts a panic in the current goroutine into a log line
+// instead of letting it crash the process. Callers defer it as the first
+// statement of a goroutine body (or, for Start's ticker loop, of safeTick --
+// scoped to one tick, never the whole outer goroutine, so a recovered panic
+// does not silently stop all future ticks). See CR-01 in 03.3-REVIEW.md.
+func recoverGoroutine(name string) {
+	if r := recover(); r != nil {
+		log.Printf("%s panic recovered: %v", name, r)
+	}
+}
+
+// safeTick runs one scheduler tick (reconcile + RunOnce). It is extracted out
+// of Start's ticker case so a panic here is recovered without ever stopping
+// the ticker's outer for/select loop -- the next tick still fires.
+func (r *Runtime) safeTick() {
+	defer recoverGoroutine("runtime.tick")
+	if _, err := r.Scheduler.Reconcile(r.ctx, r.job); err != nil {
+		log.Printf("scheduler reconcile failed: %v", err)
+		return
+	}
+	if err := r.Scheduler.RunOnce(r.ctx); err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("scheduler tick failed: %v", err)
+	}
+}
+
 func (r *Runtime) Start() {
 	go func() {
 		ticker := time.NewTicker(r.interval)
@@ -92,13 +117,7 @@ func (r *Runtime) Start() {
 			case <-r.ctx.Done():
 				return
 			case <-ticker.C:
-				if _, err := r.Scheduler.Reconcile(r.ctx, r.job); err != nil {
-					log.Printf("scheduler reconcile failed: %v", err)
-					continue
-				}
-				if err := r.Scheduler.RunOnce(r.ctx); err != nil && !errors.Is(err, context.Canceled) {
-					log.Printf("scheduler tick failed: %v", err)
-				}
+				r.safeTick()
 			}
 		}
 	}()
@@ -111,6 +130,7 @@ func (r *Runtime) Close() {
 
 func (r *Runtime) JobCreated(id string) {
 	go func() {
+		defer recoverGoroutine("runtime.JobCreated")
 		if _, err := r.Scheduler.Reconcile(r.ctx, r.job); err != nil {
 			log.Printf("scheduler reconcile after job creation failed: %v", err)
 			return
@@ -121,6 +141,7 @@ func (r *Runtime) JobCreated(id string) {
 
 func (r *Runtime) AccountReady(account string) {
 	go func() {
+		defer recoverGoroutine("runtime.AccountReady")
 		if _, err := r.Scheduler.Reconcile(r.ctx, r.job); err != nil {
 			log.Printf("scheduler reconcile after credential update failed: %v", err)
 			return
@@ -141,6 +162,7 @@ func (r *Runtime) AccountReady(account string) {
 
 func (r *Runtime) JobsChanged() {
 	go func() {
+		defer recoverGoroutine("runtime.JobsChanged")
 		if _, err := r.Scheduler.Reconcile(r.ctx, r.job); err != nil {
 			log.Printf("scheduler reconcile after command failed: %v", err)
 		}
