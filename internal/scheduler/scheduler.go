@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -327,63 +328,108 @@ func (s *Scheduler) PollNow(ctx context.Context, jobID string) bool {
 
 func (s *Scheduler) Wait() { s.wg.Wait() }
 
-func (s *Scheduler) runAccount(ctx context.Context, first Job) error {
+func (s *Scheduler) runAccount(ctx context.Context, first Job) (err error) {
 	job := first
 	var errs []error
-	for {
-		select {
-		case s.sem <- struct{}{}:
-		case <-ctx.Done():
-			errs = append(errs, ctx.Err())
-			s.releaseAccount(job.Account)
-			return errors.Join(errs...)
+	panicked := false
+	defer func() {
+		if recover() != nil {
+			panicked = true
+			log.Print("scheduler account pipeline panic recovered")
+			errs = append(errs, fmt.Errorf("job %s account pipeline panic recovered", job.ID))
 		}
-		outcome, err := s.runJobSafely(ctx, job)
-		<-s.sem
-		if err != nil {
-			errs = append(errs, fmt.Errorf("job %s: %w", job.ID, err))
-		} else if err = s.handleOutcome(ctx, job, outcome); err != nil {
-			errs = append(errs, fmt.Errorf("job %s outcome: %w", job.ID, err))
+		s.finishAccount(first.Account, panicked)
+		err = errors.Join(errs...)
+	}()
+
+	for {
+		if pipelineErr := s.runJobPipelineSafely(ctx, job); pipelineErr != nil {
+			errs = append(errs, pipelineErr)
 		}
 
-		s.mu.Lock()
-		queue := s.immediate[job.Account]
-		if len(queue) == 0 {
-			s.inFlight[job.Account] = false
-			s.mu.Unlock()
-			return errors.Join(errs...)
+		next, ok := s.nextImmediate(job.Account)
+		if !ok {
+			return
 		}
-		nextID := queue[0]
-		s.immediate[job.Account] = queue[1:]
-		delete(s.queued, nextID)
-		job = s.byID[nextID]
-		s.mu.Unlock()
+		job = next
 	}
 }
 
-// runJobSafely calls job.Run with a deferred recover so a panic inside it
-// (e.g. goquery parsing malformed, externally-controlled UADE HTML -- see
-// CR-01 in 03.3-REVIEW.md) is converted into a normal error return instead of
-// crashing the process for every user. The recover is scoped to exactly this
-// call, not to all of runAccount: everything after job.Run in runAccount
-// (the semaphore release at the caller and the immediate-queue/inFlight
-// cleanup at the bottom of the loop) must keep running unconditionally, the
-// same way it already does for a normal job.Run error. Wrapping the whole of
-// runAccount instead would recover the panic but silently strand the
-// account's inFlight flag and leak a semaphore token forever.
+// runJobPipelineSafely owns one semaphore token for one complete job pipeline.
+// Its fixed recovery contract deliberately excludes panic values, outcomes,
+// credentials, and URLs while still allowing runAccount to drain queued work.
+func (s *Scheduler) runJobPipelineSafely(ctx context.Context, job Job) (err error) {
+	acquired := false
+	defer func() {
+		if acquired {
+			<-s.sem
+		}
+		if recover() != nil {
+			log.Print("scheduler job pipeline panic recovered")
+			err = fmt.Errorf("job %s pipeline panic recovered", job.ID)
+		}
+	}()
+
+	select {
+	case s.sem <- struct{}{}:
+		acquired = true
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	outcome, err := s.runJobSafely(ctx, job)
+	if err != nil {
+		return err
+	}
+	if err = s.handleOutcome(ctx, job, outcome); err != nil {
+		return fmt.Errorf("job %s outcome: %w", job.ID, err)
+	}
+	return nil
+}
+
+// runJobSafely protects only job.Run. Its returned error may include the
+// non-sensitive job ID, but the recovered panic value is never formatted,
+// returned, logged, or passed to another helper.
 func (s *Scheduler) runJobSafely(ctx context.Context, job Job) (outcome Outcome, err error) {
 	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("job %s panic recovered: %v", job.ID, r)
+		if recover() != nil {
+			log.Print("scheduler job run panic recovered")
+			err = fmt.Errorf("job %s run panic recovered", job.ID)
 		}
 	}()
 	return job.Run(ctx)
 }
 
-func (s *Scheduler) releaseAccount(account string) {
+// nextImmediate consumes accepted immediate polls in FIFO order. It removes
+// every consumed ID from queued while holding the same lock used by PollNow.
+func (s *Scheduler) nextImmediate(account string) (Job, bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	for len(s.immediate[account]) > 0 {
+		nextID := s.immediate[account][0]
+		s.immediate[account] = s.immediate[account][1:]
+		delete(s.queued, nextID)
+		if job, ok := s.byID[nextID]; ok {
+			return job, true
+		}
+	}
+	delete(s.immediate, account)
+	return Job{}, false
+}
+
+// finishAccount centralizes terminal bookkeeping. Unexpected panics outside
+// the per-job boundary discard residual queue markers so later PollNow calls
+// can accept those jobs again; normal completion has already drained FIFO.
+func (s *Scheduler) finishAccount(account string, discardQueued bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if discardQueued {
+		for _, id := range s.immediate[account] {
+			delete(s.queued, id)
+		}
+		delete(s.immediate, account)
+	}
 	s.inFlight[account] = false
-	s.mu.Unlock()
 }
 
 func (s *Scheduler) handleOutcome(ctx context.Context, job Job, outcome Outcome) error {
