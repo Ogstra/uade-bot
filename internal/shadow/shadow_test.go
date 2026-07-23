@@ -89,6 +89,28 @@ func TestReadinessFailsClosedOnEveryCutoverGate(t *testing.T) {
 	}
 }
 
+func TestShadowRSSFallbackNeverAttributesGoProcessMemoryToNodeSide(t *testing.T) {
+	comparator := &Comparator{
+		RSS: func() uint64 { return 42_000_000 },
+		Node: RunnerFunc(func(context.Context, Input) (Result, error) {
+			return Result{Outcome: uade.Outcome{Code: uade.OutcomeNoVacancies}, RSSBytes: 0}, nil
+		}),
+		Go: RunnerFunc(func(context.Context, Input) (Result, error) {
+			return Result{Outcome: uade.Outcome{Code: uade.OutcomeNoVacancies}, RSSBytes: 0}, nil
+		}),
+	}
+	observation, err := comparator.Compare(context.Background(), Input{FixtureID: "fixture-2", Payload: []byte("payload")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.Metrics.NodeRSSBytes != 0 || observation.Metrics.NodeRSSMeasured {
+		t.Fatalf("expected unmeasured Node RSS, got NodeRSSBytes=%d NodeRSSMeasured=%v", observation.Metrics.NodeRSSBytes, observation.Metrics.NodeRSSMeasured)
+	}
+	if observation.Metrics.GoRSSBytes == 0 || !observation.Metrics.GoRSSMeasured {
+		t.Fatalf("expected measured Go RSS via same-process fallback, got GoRSSBytes=%d GoRSSMeasured=%v", observation.Metrics.GoRSSBytes, observation.Metrics.GoRSSMeasured)
+	}
+}
+
 func BenchmarkComparator(b *testing.B) {
 	outcome := uade.Outcome{Code: uade.OutcomeFound, Vacancies: []uade.Vacancy{{Codigo: "31.001", Turno: "Noche", Sede: "Monserrat", Cupos: 2}}}
 	runner := RunnerFunc(func(context.Context, Input) (Result, error) { return Result{Outcome: outcome}, nil })

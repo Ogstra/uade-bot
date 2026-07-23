@@ -47,6 +47,8 @@ type Metrics struct {
 	GoLatencyMicros   int64  `json:"goLatencyMicros"`
 	NodeRSSBytes      uint64 `json:"nodeRssBytes"`
 	GoRSSBytes        uint64 `json:"goRssBytes"`
+	NodeRSSMeasured   bool   `json:"nodeRssMeasured"`
+	GoRSSMeasured     bool   `json:"goRssMeasured"`
 }
 
 type Divergence struct {
@@ -92,15 +94,22 @@ func (c *Comparator) Compare(ctx context.Context, input Input) (Observation, err
 	started := now()
 	nodeResult, nodeErr := c.Node.Run(ctx, Input{FixtureID: inputCopy.FixtureID, Payload: append([]byte(nil), inputCopy.Payload...)})
 	nodeLatency := now().Sub(started)
+	// The Node side never falls back to the shared same-process RSS reader:
+	// that reader observes THIS (Go) process's own resident set, which has no
+	// legitimate relationship to a separate Node process's memory. An
+	// unreported Node RSSBytes must surface as unmeasured (0, Measured=false)
+	// rather than a fabricated number equal to the Go side (WR-07).
 	nodeRSS := nodeResult.RSSBytes
-	if nodeRSS == 0 {
-		nodeRSS = rss()
-	}
+	nodeRSSMeasured := nodeRSS != 0
 	started = now()
 	goResult, goErr := c.Go.Run(ctx, Input{FixtureID: inputCopy.FixtureID, Payload: append([]byte(nil), inputCopy.Payload...)})
 	goLatency := now().Sub(started)
 	goRSS := goResult.RSSBytes
+	goRSSMeasured := true
 	if goRSS == 0 {
+		// Legitimate fallback: the comparator itself runs inside the Go
+		// process, so reading its own resident set is a faithful Go-side
+		// measurement when the Go Runner doesn't report one.
 		goRSS = rss()
 	}
 	if nodeErr != nil || goErr != nil {
@@ -112,6 +121,7 @@ func (c *Comparator) Compare(ctx context.Context, input Input) (Observation, err
 	observation := Observation{InputHash: inputHash, Metrics: Metrics{
 		NodeLatencyMicros: nodeLatency.Microseconds(), GoLatencyMicros: goLatency.Microseconds(),
 		NodeRSSBytes: nodeRSS, GoRSSBytes: goRSS,
+		NodeRSSMeasured: nodeRSSMeasured, GoRSSMeasured: goRSSMeasured,
 	}}
 	if nodeResult.Outcome.Code != goResult.Outcome.Code || nodeHash != goHash {
 		observation.Divergence = &Divergence{InputHash: inputHash, Node: nodeResult.Outcome.Code, Go: goResult.Outcome.Code, NodeHash: nodeHash, GoHash: goHash, Critical: nodeResult.Outcome.Code != goResult.Outcome.Code}
