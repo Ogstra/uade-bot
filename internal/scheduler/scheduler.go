@@ -338,7 +338,7 @@ func (s *Scheduler) runAccount(ctx context.Context, first Job) error {
 			s.releaseAccount(job.Account)
 			return errors.Join(errs...)
 		}
-		outcome, err := job.Run(ctx)
+		outcome, err := s.runJobSafely(ctx, job)
 		<-s.sem
 		if err != nil {
 			errs = append(errs, fmt.Errorf("job %s: %w", job.ID, err))
@@ -359,6 +359,25 @@ func (s *Scheduler) runAccount(ctx context.Context, first Job) error {
 		job = s.byID[nextID]
 		s.mu.Unlock()
 	}
+}
+
+// runJobSafely calls job.Run with a deferred recover so a panic inside it
+// (e.g. goquery parsing malformed, externally-controlled UADE HTML -- see
+// CR-01 in 03.3-REVIEW.md) is converted into a normal error return instead of
+// crashing the process for every user. The recover is scoped to exactly this
+// call, not to all of runAccount: everything after job.Run in runAccount
+// (the semaphore release at the caller and the immediate-queue/inFlight
+// cleanup at the bottom of the loop) must keep running unconditionally, the
+// same way it already does for a normal job.Run error. Wrapping the whole of
+// runAccount instead would recover the panic but silently strand the
+// account's inFlight flag and leak a semaphore token forever.
+func (s *Scheduler) runJobSafely(ctx context.Context, job Job) (outcome Outcome, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("job %s panic recovered: %v", job.ID, r)
+		}
+	}()
+	return job.Run(ctx)
 }
 
 func (s *Scheduler) releaseAccount(account string) {

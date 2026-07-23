@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -191,6 +192,29 @@ func TestImmediateQueueSerializesAccountAndDeduplicates(t *testing.T) {
 	defer mu.Unlock()
 	if got := len(order); got != 3 || order[0] != "1" || order[1] != "2" || order[2] != "3" {
 		t.Fatalf("order=%v", order)
+	}
+}
+
+func TestRunAccountRecoversFromJobPanicAndAccountStaysPollable(t *testing.T) {
+	s := New(1)
+	var calls atomic.Int32
+	s.Add(Job{Account: "a", ID: "1", Run: func(context.Context) (Outcome, error) {
+		calls.Add(1)
+		panic("boom: goquery choked on malformed UADE HTML")
+	}})
+
+	err := s.RunOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "panic recovered") {
+		t.Fatalf("first RunOnce err=%v, want error containing %q", err, "panic recovered")
+	}
+
+	err = s.RunOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "panic recovered") {
+		t.Fatalf("second RunOnce err=%v, want error containing %q", err, "panic recovered")
+	}
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("calls=%d, want 2 (account must remain pollable after a recovered panic)", got)
 	}
 }
 
