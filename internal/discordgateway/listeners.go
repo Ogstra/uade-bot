@@ -3,6 +3,8 @@ package discordgateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -18,9 +20,43 @@ const interactionDeadline = 2400 * time.Millisecond
 const timeoutMessage = "La operación tardó demasiado. Volvé a intentar en unos segundos."
 const internalErrorMessage = "Ocurrio un error interno."
 
+// respondTimeout bounds the outbound interaction-callback POST
+// (defaultRespond/respondContext) with its own fresh deadline, independent
+// of the interaction's own (possibly already-expired) ctx, so a stalled
+// Discord endpoint cannot leak the goroutine/connection indefinitely
+// (03.3-REVIEW.md WR-04).
+var respondTimeout = 5 * time.Second
+
+// Dispatcher is the subset of discordhttp.CommandDispatcher that
+// dispatchAndRespond needs. discordhttp.CommandDispatcher already satisfies
+// this interface implicitly, so no call site constructing/passing a
+// CommandDispatcher value requires any change.
+type Dispatcher interface {
+	DispatchInteraction(context.Context, discordhttp.Interaction) (discordhttp.InteractionResponse, error)
+}
+
+// respondFunc sends a fully-built interaction response back to Discord.
+// dispatchAndRespond accepts one as a parameter so tests can substitute a
+// fake instead of performing a real network call.
+type respondFunc func(ctx context.Context, id, token string, response discordhttp.InteractionResponse) error
+
+// respondContext returns a context bounded by respondTimeout, always a
+// fresh deadline independent of the interaction's own ctx.
+func respondContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), respondTimeout)
+}
+
+// defaultRespond is the production respondFunc: it posts the interaction
+// callback to Discord's real REST API, bounded by respondContext.
+func defaultRespond(_ context.Context, id, token string, response discordhttp.InteractionResponse) error {
+	ctx, cancel := respondContext()
+	defer cancel()
+	return Respond(ctx, nil, "", id, token, response)
+}
+
 // OnSlashCommand adapts a Gateway ApplicationCommandInteractionCreate event
 // into a discordhttp.Interaction and dispatches it through dispatcher.
-func OnSlashCommand(dispatcher discordhttp.CommandDispatcher) func(*events.ApplicationCommandInteractionCreate) {
+func OnSlashCommand(dispatcher Dispatcher) func(*events.ApplicationCommandInteractionCreate) {
 	return func(e *events.ApplicationCommandInteractionCreate) {
 		in := base(e.GuildID(), e.ChannelID(), e.Member(), e.User())
 		in.Type = 2
@@ -28,13 +64,13 @@ func OnSlashCommand(dispatcher discordhttp.CommandDispatcher) func(*events.Appli
 			Name:    e.SlashCommandInteractionData().CommandName(),
 			Options: mapSlashOptions(e.SlashCommandInteractionData().All()),
 		}
-		dispatchAndRespond(dispatcher, e.ID().String(), e.Token(), in)
+		dispatchAndRespond(dispatcher, e.ID().String(), e.Token(), in, defaultRespond)
 	}
 }
 
 // OnModalSubmit adapts a Gateway ModalSubmitInteractionCreate event into a
 // discordhttp.Interaction and dispatches it through dispatcher.
-func OnModalSubmit(dispatcher discordhttp.CommandDispatcher) func(*events.ModalSubmitInteractionCreate) {
+func OnModalSubmit(dispatcher Dispatcher) func(*events.ModalSubmitInteractionCreate) {
 	return func(e *events.ModalSubmitInteractionCreate) {
 		in := base(e.GuildID(), e.ChannelID(), e.Member(), e.User())
 		in.Type = 5
@@ -42,13 +78,13 @@ func OnModalSubmit(dispatcher discordhttp.CommandDispatcher) func(*events.ModalS
 			CustomID: e.Data.CustomID,
 			Values:   modalValuesJSON(e.Data.Components),
 		}
-		dispatchAndRespond(dispatcher, e.ID().String(), e.Token(), in)
+		dispatchAndRespond(dispatcher, e.ID().String(), e.Token(), in, defaultRespond)
 	}
 }
 
 // OnAutocomplete adapts a Gateway AutocompleteInteractionCreate event into a
 // discordhttp.Interaction and dispatches it through dispatcher.
-func OnAutocomplete(dispatcher discordhttp.CommandDispatcher) func(*events.AutocompleteInteractionCreate) {
+func OnAutocomplete(dispatcher Dispatcher) func(*events.AutocompleteInteractionCreate) {
 	return func(e *events.AutocompleteInteractionCreate) {
 		in := base(e.GuildID(), e.ChannelID(), e.Member(), e.User())
 		in.Type = 4
@@ -56,7 +92,7 @@ func OnAutocomplete(dispatcher discordhttp.CommandDispatcher) func(*events.Autoc
 			Name:    e.Data.CommandName,
 			Options: mapAutocompleteOptions(e.Data.All()),
 		}
-		dispatchAndRespond(dispatcher, e.ID().String(), e.Token(), in)
+		dispatchAndRespond(dispatcher, e.ID().String(), e.Token(), in, defaultRespond)
 	}
 }
 
@@ -71,39 +107,57 @@ func base(guildID *snowflake.ID, channelID snowflake.ID, member *discord.Resolve
 	}
 }
 
+// dispatchResult carries DispatchInteraction's outcome (or a recovered
+// panic, wrapped as err) across the completed channel to raceForResponse.
+type dispatchResult struct {
+	response discordhttp.InteractionResponse
+	err      error
+}
+
+// raceForResponse implements the 2400ms deadline race: it returns
+// whichever of completed or ctx.Done() resolves first, mapping a non-nil
+// dispatchResult.err (including a recovered panic) to internalErrorMessage
+// and a ctx deadline to timeoutMessage.
+func raceForResponse(ctx context.Context, completed <-chan dispatchResult) discordhttp.InteractionResponse {
+	select {
+	case value := <-completed:
+		if value.err != nil {
+			return discordhttp.InteractionResponse{Type: 4, Data: map[string]any{"content": internalErrorMessage, "flags": ephemeral}}
+		}
+		return value.response
+	case <-ctx.Done():
+		return discordhttp.InteractionResponse{Type: 4, Data: map[string]any{"content": timeoutMessage, "flags": ephemeral}}
+	}
+}
+
 // dispatchAndRespond spawns the goroutine required so a slow DB/UADE call
 // never blocks disgo's synchronous event dispatch (which would stall the
 // shared Gateway heartbeat), reproducing internal/discordhttp/handler.go's
 // goroutine + context.WithTimeout(2400ms) + select deadline pattern
-// verbatim. The interaction's own bounded ctx may already be near its
-// deadline once the callback POST fires, so Respond uses a fresh unbounded
-// context for the egress call itself.
-func dispatchAndRespond(dispatcher discordhttp.CommandDispatcher, id, token string, in discordhttp.Interaction) {
+// verbatim. A panic inside dispatcher.DispatchInteraction is recovered so
+// it never crashes the whole process (03.3-REVIEW.md CR-01); the outbound
+// callback POST (via respond) is bounded by its own fresh respondTimeout,
+// independent of this interaction's own (possibly already-expired) ctx
+// (03.3-REVIEW.md WR-04).
+func dispatchAndRespond(dispatcher Dispatcher, id, token string, in discordhttp.Interaction, respond respondFunc) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), interactionDeadline)
 		defer cancel()
 
-		type result struct {
-			response discordhttp.InteractionResponse
-			err      error
-		}
-		completed := make(chan result, 1)
+		completed := make(chan dispatchResult, 1)
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("interaction dispatch panic recovered: %v", r)
+					completed <- dispatchResult{err: fmt.Errorf("interaction dispatch panic recovered: %v", r)}
+				}
+			}()
 			response, err := dispatcher.DispatchInteraction(ctx, in)
-			completed <- result{response: response, err: err}
+			completed <- dispatchResult{response: response, err: err}
 		}()
 
-		var response discordhttp.InteractionResponse
-		select {
-		case value := <-completed:
-			response = value.response
-			if value.err != nil {
-				response = discordhttp.InteractionResponse{Type: 4, Data: map[string]any{"content": internalErrorMessage, "flags": ephemeral}}
-			}
-		case <-ctx.Done():
-			response = discordhttp.InteractionResponse{Type: 4, Data: map[string]any{"content": timeoutMessage, "flags": ephemeral}}
-		}
-		_ = Respond(context.Background(), nil, "", id, token, response)
+		response := raceForResponse(ctx, completed)
+		_ = respond(context.Background(), id, token, response)
 	}()
 }
 
