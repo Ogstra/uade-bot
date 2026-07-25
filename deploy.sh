@@ -16,6 +16,14 @@ if [ ! -f .env ]; then
 fi
 
 mkdir -p data
+# El contenedor corre como UID/GID 65532 (gcr.io/distroless/static-debian12:nonroot)
+# y docker-compose.go.yml bind-montea ./data:/app/data. En modo active/development
+# store.Open crea data/uade.db: si el directorio lo creo el usuario del host, el
+# proceso no puede escribir y modernc.org/sqlite reporta ese fallo de permisos como
+# un error de memoria ("unable to open database file: out of memory (14)").
+# -R repara retroactivamente un ./data dejado por un deploy fallido anterior.
+# No fatal: en Docker rootless o sin sudo degrada al comportamiento previo (solo mkdir).
+chown -R 65532:65532 data 2>/dev/null || true
 docker compose -f "$COMPOSE_FILE" up -d --build
 
 attempt=0
