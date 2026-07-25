@@ -40,6 +40,12 @@ type flags struct {
 	out               string
 }
 
+// Secrets are deliberately NOT flags: CLI arguments are visible to any other
+// local process via `ps`/`/proc/<pid>/cmdline` and get persisted in shell
+// history, which is exactly the exposure this project's CLAUDE.md master-key
+// handling guidance calls out. rsscompare instead reads the same env var
+// names cmd/uade-bot and src/bot.js already use, and passes them through
+// unchanged to both spawned processes (see run()).
 func parseFlags() flags {
 	f := flags{}
 	flag.StringVar(&f.goBin, "go-bin", "", "path to a pre-built uade-bot binary (required)")
@@ -48,14 +54,14 @@ func parseFlags() flags {
 	flag.StringVar(&f.nodeDB, "node-db", filepath.Join(os.TempDir(), "uade-rsscompare-node.db"), "SQLite DB path for the Node process")
 	flag.StringVar(&f.goAddr, "go-addr", "127.0.0.1:18081", "listen address for the Go dashboard")
 	flag.StringVar(&f.nodePort, "node-port", "18082", "listen port for the Node dashboard")
-	flag.StringVar(&f.masterKey, "master-key", "", "64 hex char CREDENTIALS_MASTER_KEY shared by both processes (required)")
-	flag.StringVar(&f.sessionSecret, "session-secret", "", "shared dashboard session secret, >=32 chars (required)")
-	flag.StringVar(&f.dashboardPassword, "dashboard-password", "", "shared dashboard password, must not equal \"admin\" (required)")
 	flag.DurationVar(&f.warmup, "warmup", 15*time.Second, "idle warmup duration before sampling idle RSS")
 	flag.IntVar(&f.concurrency, "concurrency", 8, "number of concurrent goroutines issuing GET /login during the load phase")
 	flag.DurationVar(&f.load, "load", 10*time.Second, "duration of the concurrency load phase")
 	flag.StringVar(&f.out, "out", "internal/shadow/RSS_BASELINE.md", "path to write the markdown report to")
 	flag.Parse()
+	f.masterKey = os.Getenv("CREDENTIALS_MASTER_KEY")
+	f.sessionSecret = os.Getenv("DASHBOARD_SESSION_SECRET")
+	f.dashboardPassword = os.Getenv("DASHBOARD_PASSWORD")
 	return f
 }
 
@@ -64,13 +70,13 @@ func (f flags) validate() error {
 		return fmt.Errorf("-go-bin is required")
 	}
 	if len(f.masterKey) != 64 {
-		return fmt.Errorf("-master-key is required and must be 64 hex chars")
+		return fmt.Errorf("CREDENTIALS_MASTER_KEY env var is required and must be 64 hex chars")
 	}
 	if len(f.sessionSecret) < 32 {
-		return fmt.Errorf("-session-secret is required and must be >=32 chars")
+		return fmt.Errorf("DASHBOARD_SESSION_SECRET env var is required and must be >=32 chars")
 	}
 	if f.dashboardPassword == "" || f.dashboardPassword == "admin" {
-		return fmt.Errorf("-dashboard-password is required and must not equal \"admin\"")
+		return fmt.Errorf("DASHBOARD_PASSWORD env var is required and must not equal \"admin\"")
 	}
 	return nil
 }
