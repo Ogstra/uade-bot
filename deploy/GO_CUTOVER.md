@@ -31,6 +31,41 @@ RSS del binario Go completo (dashboard + scheduler + DB) contra el proceso
 `cmd/rsscompare` -- sin conexión al Discord Gateway en ninguno de los dos lados
 durante la medición (ver la sección "Caveats" de ese documento).
 
+## Dos escenarios distintos
+
+### Cutover de migración (hay Node corriendo, hay baseline)
+
+Sin cambios respecto de lo anterior: ventana de observación, mínimo de comparaciones,
+cero divergencias críticas y los dos checkpoints live confirmados. `UADE_STANDALONE`
+**no** va en este escenario: existe una baseline real contra la cual comparar, y saltear
+la verificación perdería justamente la evidencia que justifica el corte.
+
+### Deploy standalone (Go-only, sin Node, sin baseline)
+
+`UADE_STANDALONE=true` saltea la evaluación del reporte completa: no se lee el archivo,
+no se deserializa y no se evalúa readiness. La ventana, el conteo de comparaciones y las
+divergencias no son gates relajados en este modo, son métricas sin significado cuando no
+hay con qué comparar.
+
+Hecho verificable que motiva el escape: `data/shadow-report.json` no lo produce ningún
+camino de ejecución del bot hoy. `shadow.Comparator` solo se instancia en tests, y
+`cmd/uade-bot/main.go` usa de `internal/shadow` únicamente `OpenReadOnly` — nunca crea un
+Comparator ni llama `Report()`. En un deploy standalone el gate sería, por lo tanto,
+inalcanzable operando el bot normalmente. Cerrar ese gap queda fuera de alcance a
+propósito: el operador abandona Node, no migra desde Node.
+
+La contrapartida del escape es auditabilidad. El arranque imprime una línea que nombra
+`UADE_STANDALONE` y declara que la verificación del reporte shadow contra la baseline
+Node no se ejecutó. Revisar los logs de arranque es cómo se confirma si un deploy dado
+pasó o no por esa verificación:
+
+```sh
+docker compose -f docker-compose.go.yml logs uade-go | grep UADE_STANDALONE
+```
+
+Ausencia de esa línea con `UADE_CUTOVER_ENABLED=true` significa que el arranque sí pasó
+por la evaluación del reporte.
+
 ## Activación
 
 1. Conservar el digest de la imagen Go actualmente activa como `PREVIOUS_GO_IMAGE`.
