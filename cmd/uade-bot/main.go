@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"github.com/ogs/uade-bot/internal/app"
 	"github.com/ogs/uade-bot/internal/cutover"
 	"github.com/ogs/uade-bot/internal/dashboard"
@@ -12,11 +13,34 @@ import (
 	"github.com/ogs/uade-bot/internal/store"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// allowedSSOPortalHost is the only host UADE_SSO_PORTAL_URL is permitted to
+// resolve to. This is fail-closed by construction: an operator misconfig
+// must never cause real UADE credentials to be sent to an arbitrary host
+// (T-03.3-15-01).
+const allowedSSOPortalHost = "inscripciones.uade.edu.ar"
+
+// resolveSSOPortalURL returns the effective SSO portal URL for the process:
+// raw if it parses and its host case-insensitively matches
+// allowedSSOPortalHost, the documented default when raw is empty, or an
+// error in every other case. Kept as a pure function (no log.Fatal, no env
+// reads) so it is directly unit-testable from main_test.go.
+func resolveSSOPortalURL(raw string) (string, error) {
+	if raw == "" {
+		raw = "https://" + allowedSSOPortalHost + "/"
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), allowedSSOPortalHost) {
+		return "", errors.New("UADE_SSO_PORTAL_URL debe apuntar a " + allowedSSOPortalHost)
+	}
+	return raw, nil
+}
 
 func main() {
 	cutoverConfig, err := cutover.FromEnv(os.Getenv)
@@ -44,6 +68,10 @@ func main() {
 	}
 	if mode == "active" && !cutoverConfig.Enabled {
 		log.Fatal("active runtime requires UADE_CUTOVER_ENABLED=true")
+	}
+	ssoPortalURL, ssoErr := resolveSSOPortalURL(os.Getenv("UADE_SSO_PORTAL_URL"))
+	if ssoErr != nil {
+		log.Fatal(ssoErr)
 	}
 	var db *sql.DB
 	if mode == "shadow" {
@@ -79,7 +107,7 @@ func main() {
 	if seconds, parseErr := strconv.Atoi(os.Getenv("UADE_POLL_INTERVAL_SECONDS")); parseErr == nil && seconds > 0 {
 		interval = time.Duration(seconds) * time.Second
 	}
-	runtime, runtimeErr := app.NewRuntime(context.Background(), db, os.Getenv("CREDENTIALS_MASTER_KEY"), token, interval, 2, mode == "shadow")
+	runtime, runtimeErr := app.NewRuntime(context.Background(), db, os.Getenv("CREDENTIALS_MASTER_KEY"), token, ssoPortalURL, interval, 2, mode == "shadow")
 	if runtimeErr != nil {
 		log.Fatal(runtimeErr)
 	}
