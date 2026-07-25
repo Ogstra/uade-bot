@@ -12,6 +12,7 @@ import (
 	"time"
 
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
+	"github.com/ogs/uade-bot/internal/sso"
 )
 
 const ephemeral = 1 << 6
@@ -102,6 +103,9 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 		return message("No pude identificar tu cuenta."), nil
 	}
 	if in.Type == 5 {
+		if in.Data.CustomID == "sso_manual_link" {
+			return d.submitManualStartURL(ctx, userID, in.Data.Values)
+		}
 		return d.submitCredentials(ctx, userID, in.Data.CustomID, in.Data.Values)
 	}
 	if in.Type == 4 {
@@ -122,7 +126,7 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 	}
 	switch in.Data.Name {
 	case "credenciales":
-		return credentialsModal(), nil
+		return d.credencialesModal(ctx, userID)
 	case "buscar":
 		return d.buscar(ctx, userID, in.ChannelID, in.GuildID, in.Data.Options)
 	case "estado":
@@ -159,6 +163,34 @@ func credentialsModal() InteractionResponse {
 	return InteractionResponse{Type: 9, Data: map[string]any{
 		"custom_id": "credentials", "title": "Credenciales UADE", "components": fields,
 	}}
+}
+
+// manualLinkModal is the ephemeral (type 9, D-06) fallback modal used only
+// for an account marked needs_new_start_url after the automatic SSO relink
+// hit an MFA challenge (03.3-15). It never uses a DM.
+func manualLinkModal() InteractionResponse {
+	fields := []any{map[string]any{"type": 1, "components": []any{map[string]any{
+		"type": 4, "custom_id": "start_url", "label": "Pegá tu link de inscripción", "style": 1, "required": true,
+	}}}}
+	return InteractionResponse{Type: 9, Data: map[string]any{
+		"custom_id": "sso_manual_link", "title": "Link de inscripción UADE", "components": fields,
+	}}
+}
+
+// credencialesModal picks which ephemeral modal /credenciales opens: the
+// normal username/password modal by default, or the manual-link fallback
+// only when the account is currently paused because the automatic SSO
+// relink hit MFA (pause_reason='needs_new_start_url', set by 03.3-15).
+func (d CommandDispatcher) credencialesModal(ctx context.Context, userID string) (InteractionResponse, error) {
+	var reason sql.NullString
+	err := d.DB.QueryRowContext(ctx, `SELECT pause_reason FROM users WHERE discord_user_id=?`, userID).Scan(&reason)
+	if err != nil && err != sql.ErrNoRows {
+		return InteractionResponse{}, err
+	}
+	if reason.String == "needs_new_start_url" {
+		return manualLinkModal(), nil
+	}
+	return credentialsModal(), nil
 }
 
 func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, customID string, raw json.RawMessage) (InteractionResponse, error) {
@@ -264,6 +296,50 @@ func (d CommandDispatcher) readCredentials(ctx context.Context, userID string) (
 		return credentialcrypto.Credentials{}, err
 	}
 	return credentialcrypto.Decrypt(d.MasterKey, userID, c)
+}
+
+// submitManualStartURL validates and persists a manually-pasted enrollment
+// link submitted through manualLinkModal, then clears the account's
+// needs_new_start_url pause so the next scheduled poll uses the fresh link.
+// Deliberately does NOT call OnAccountReady: that would trigger another
+// background SSO relink attempt (03.3-15's attemptRelinkOnAccountReady),
+// which could immediately re-mark needs_new_start_url and undo the manual
+// reactivation the user just performed. OnJobsChanged reconciles the
+// scheduler instead.
+func (d CommandDispatcher) submitManualStartURL(ctx context.Context, userID string, raw json.RawMessage) (InteractionResponse, error) {
+	values := modalValues(raw)
+	link := strings.TrimSpace(values["start_url"])
+	if !sso.ValidStartURL(link) {
+		return message("Ese link no parece válido. Tiene que ser el link completo de inscripcionespia.uade.edu.ar con param=."), nil
+	}
+	creds, err := d.readCredentials(ctx, userID)
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	creds.UADEStartURL = link
+	encrypted, err := credentialcrypto.Encrypt(d.MasterKey, userID, creds)
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	now := time.Now().UnixMilli()
+	tx, err := d.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE credentials SET ciphertext=?,iv=?,auth_tag=?,updated_at=? WHERE discord_user_id=?`, encrypted.Ciphertext, encrypted.IV, encrypted.AuthTag, now, userID); err != nil {
+		return InteractionResponse{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE users SET pause_reason=NULL, pause_until=NULL, backoff_attempt=0, updated_at=? WHERE discord_user_id=?`, now, userID); err != nil {
+		return InteractionResponse{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return InteractionResponse{}, err
+	}
+	if d.OnJobsChanged != nil {
+		d.OnJobsChanged()
+	}
+	return message("Link guardado. Reactivé tus búsquedas."), nil
 }
 
 func modalValues(raw json.RawMessage) map[string]string {

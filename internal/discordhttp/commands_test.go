@@ -2,6 +2,7 @@ package discordhttp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -299,6 +300,86 @@ func TestAllTwelveCommandDispatchersAcknowledge(t *testing.T) {
 				t.Fatalf("type %d", out.Type)
 			}
 		})
+	}
+}
+
+// /credenciales para una cuenta con pause_reason='needs_new_start_url'
+// devuelve el modal de link manual, no el modal normal de usuario/password.
+func TestCredencialesShowsManualLinkModalWhenAccountNeedsNewStartURL(t *testing.T) {
+	d := testDispatcher(t)
+	seedCredentials(t, d, "u1", "user", "pass", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	if _, err := d.DB.Exec(`UPDATE users SET pause_reason='needs_new_start_url' WHERE discord_user_id=?`, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	out := dispatchJSON(t, d, command("u1", "credenciales", "0", nil))
+	if out.Type != 9 {
+		t.Fatalf("type %d", out.Type)
+	}
+	data := out.Data.(map[string]any)
+	if data["custom_id"] != "sso_manual_link" {
+		t.Fatalf("custom_id = %v, want sso_manual_link", data["custom_id"])
+	}
+	components := data["components"].([]any)
+	if len(components) != 1 {
+		t.Fatalf("modal tiene %d campos, want 1", len(components))
+	}
+}
+
+func manualLinkSubmit(user, link string) map[string]any {
+	field := func(id, value string) any {
+		return map[string]any{"components": []any{map[string]any{"custom_id": id, "value": value}}}
+	}
+	return map[string]any{"type": 5, "member": map[string]any{"user": map[string]any{"id": user}}, "data": map[string]any{"custom_id": "sso_manual_link", "components": []any{field("start_url", link)}}}
+}
+
+// Un link manual inválido no persiste nada ni limpia pause_reason; uno
+// válido actualiza el start URL cifrado, limpia pause_reason y reactiva.
+func TestSubmitManualStartURLValidatesAndReactivatesAccount(t *testing.T) {
+	d := testDispatcher(t)
+	seedCredentials(t, d, "u1", "user", "pass", "https://inscripcionespia.uade.edu.ar/x?param=old")
+	if _, err := d.DB.Exec(`UPDATE users SET pause_reason='needs_new_start_url' WHERE discord_user_id=?`, "u1"); err != nil {
+		t.Fatal(err)
+	}
+
+	badOut := dispatchJSON(t, d, manualLinkSubmit("u1", "http://otrohost.com/x?param=v"))
+	if !strings.Contains(responseContent(badOut), "no parece válido") {
+		t.Fatalf("respuesta inesperada: %s", responseContent(badOut))
+	}
+	var reason sql.NullString
+	if err := d.DB.QueryRow(`SELECT pause_reason FROM users WHERE discord_user_id=?`, "u1").Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason.String != "needs_new_start_url" {
+		t.Fatalf("pause_reason cambió tras link inválido: %v", reason)
+	}
+	stillOld, err := d.readCredentials(context.Background(), "u1")
+	if err != nil || stillOld.UADEStartURL != "https://inscripcionespia.uade.edu.ar/x?param=old" {
+		t.Fatalf("start url cambió tras link inválido: %q err=%v", stillOld.UADEStartURL, err)
+	}
+
+	const newLink = "https://inscripcionespia.uade.edu.ar/x?param=new-secret-link"
+	changed := 0
+	d.OnJobsChanged = func() { changed++ }
+	goodOut := dispatchJSON(t, d, manualLinkSubmit("u1", newLink))
+	if !strings.Contains(responseContent(goodOut), "Reactivé") {
+		t.Fatalf("respuesta inesperada: %s", responseContent(goodOut))
+	}
+	encoded, _ := json.Marshal(goodOut)
+	if strings.Contains(string(encoded), "new-secret-link") {
+		t.Fatal("link completo ecoado en la respuesta")
+	}
+	if changed != 1 {
+		t.Fatalf("OnJobsChanged calls=%d, want 1", changed)
+	}
+	if err := d.DB.QueryRow(`SELECT pause_reason FROM users WHERE discord_user_id=?`, "u1").Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason.Valid {
+		t.Fatalf("pause_reason no quedó NULL: %v", reason)
+	}
+	updated, err := d.readCredentials(context.Background(), "u1")
+	if err != nil || updated.UADEStartURL != newLink {
+		t.Fatalf("start url no se actualizó: %q err=%v", updated.UADEStartURL, err)
 	}
 }
 
