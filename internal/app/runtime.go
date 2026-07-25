@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -14,16 +15,21 @@ import (
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
 	"github.com/ogs/uade-bot/internal/discordrest"
 	"github.com/ogs/uade-bot/internal/scheduler"
+	"github.com/ogs/uade-bot/internal/sso"
 	"github.com/ogs/uade-bot/internal/uade"
 )
 
 type Runtime struct {
-	DB        *sql.DB
-	MasterKey string
-	Scheduler *scheduler.Scheduler
-	ctx       context.Context
-	cancel    context.CancelFunc
-	interval  time.Duration
+	DB           *sql.DB
+	MasterKey    string
+	SSOPortalURL string
+	Scheduler    *scheduler.Scheduler
+	ctx          context.Context
+	cancel       context.CancelFunc
+	interval     time.Duration
+	// relink is injectable so tests can substitute a fake without hitting a
+	// real UADE/Microsoft host; production wiring defaults it to sso.Relink.
+	relink func(ctx context.Context, client *http.Client, portalURL, user, password string) (sso.Result, error)
 }
 
 type filters struct {
@@ -50,7 +56,7 @@ func notificationText(event scheduler.Event) string {
 		case "needs_credentials":
 			return "Pausé tus búsquedas: UADE rechazó las credenciales. Actualizalas con /credenciales."
 		case "needs_new_start_url":
-			return "Pausé tus búsquedas: el link de inscripción venció. Actualizalo con /credenciales modo:Link de inscripción."
+			return "Pausé tus búsquedas: no pude renovar automáticamente tu link de inscripción (puede requerir verificación adicional de tu cuenta). Volvé a correr /credenciales para reintentarlo."
 		default:
 			return "Pausé temporalmente tus búsquedas de UADE."
 		}
@@ -62,7 +68,7 @@ func notificationText(event scheduler.Event) string {
 	return "¡Hay vacantes para tu búsqueda!\n" + strings.Join(lines, "\n")
 }
 
-func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken string, interval time.Duration, concurrency int, shadow bool) (*Runtime, error) {
+func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken, ssoPortalURL string, interval time.Duration, concurrency int, shadow bool) (*Runtime, error) {
 	if db == nil || masterKey == "" {
 		return nil, errors.New("runtime requires database and credentials master key")
 	}
@@ -75,7 +81,7 @@ func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken stri
 	if discordToken != "" && !shadow {
 		options = append(options, scheduler.WithNotifier(&scheduler.ThrottledNotifier{Next: outboundNotifier{discord: discordrest.New(discordToken)}, Delay: 250 * time.Millisecond}))
 	}
-	runtime := &Runtime{DB: db, MasterKey: masterKey, Scheduler: scheduler.New(concurrency, options...), ctx: ctx, cancel: cancel, interval: interval}
+	runtime := &Runtime{DB: db, MasterKey: masterKey, SSOPortalURL: ssoPortalURL, Scheduler: scheduler.New(concurrency, options...), ctx: ctx, cancel: cancel, interval: interval, relink: sso.Relink}
 	if _, err := runtime.Scheduler.Reconcile(ctx, runtime.job); err != nil {
 		cancel()
 		return nil, err
@@ -149,22 +155,55 @@ func (r *Runtime) JobCreated(id string) {
 func (r *Runtime) AccountReady(account string) {
 	go func() {
 		defer recoverGoroutine("runtime.AccountReady")
+		r.attemptRelinkOnAccountReady(r.ctx, account)
 		if _, err := r.Scheduler.Reconcile(r.ctx, r.job); err != nil {
 			log.Printf("scheduler reconcile after credential update failed: %v", err)
 			return
 		}
-		rows, err := r.DB.QueryContext(r.ctx, `SELECT id FROM jobs WHERE discord_user_id=? AND status='active' ORDER BY id`, account)
-		if err != nil {
-			return
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if rows.Scan(&id) == nil {
-				r.Scheduler.PollNow(r.ctx, id)
-			}
-		}
+		r.pollAllActiveJobs(r.ctx, account)
 	}()
+}
+
+// pollAllActiveJobs triggers an immediate poll for every active job of
+// account. Factored out of AccountReady so it can be reused unchanged after
+// attemptRelinkOnAccountReady runs first.
+func (r *Runtime) pollAllActiveJobs(ctx context.Context, account string) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT id FROM jobs WHERE discord_user_id=? AND status='active' ORDER BY id`, account)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			r.Scheduler.PollNow(ctx, id)
+		}
+	}
+}
+
+// attemptRelinkOnAccountReady is a best-effort relink triggered right after
+// credentials are saved/rotated via the normal credentials modal. It always
+// runs inside the goroutine AccountReady already launches with
+// go func(){...}(), fully decoupled from the 2400ms interactionDeadline
+// enforced in internal/discordgateway/listeners.go for the Discord
+// interaction that triggered submitCredentials (see the response-deadline
+// race documented across 03.3-08/03.3-10). This is exactly why sso.Relink is
+// never called synchronously inside submitCredentials: an HTTP relink
+// against UADE/Microsoft can take several seconds, well past the
+// interaction's response deadline. If no credentials row exists yet, or
+// decryption fails, this is a silent no-op -- the first real poll's own
+// healStartURL call will retry.
+func (r *Runtime) attemptRelinkOnAccountReady(ctx context.Context, account string) {
+	var encrypted credentialcrypto.Ciphertext
+	err := r.DB.QueryRowContext(ctx, `SELECT ciphertext,iv,auth_tag FROM credentials WHERE discord_user_id=?`, account).Scan(&encrypted.Ciphertext, &encrypted.IV, &encrypted.AuthTag)
+	if err != nil {
+		return
+	}
+	credentials, err := credentialcrypto.Decrypt(r.MasterKey, account, encrypted)
+	if err != nil {
+		return
+	}
+	_, _ = r.healStartURL(ctx, account, credentials)
 }
 
 func (r *Runtime) JobsChanged() {
@@ -197,9 +236,22 @@ func (r *Runtime) poll(ctx context.Context, jobID, account string) (scheduler.Ou
 	if err != nil {
 		return scheduler.Outcome{Code: "invalid_credentials"}, nil
 	}
-	start, err := url.Parse(credentials.UADEStartURL)
-	if err != nil || start.Scheme != "https" || !strings.EqualFold(start.Hostname(), "inscripcionespia.uade.edu.ar") {
-		return scheduler.Outcome{Code: "stale_start_url"}, nil
+	start, err := parseStartURL(credentials.UADEStartURL)
+	if err != nil {
+		healed, healErr := r.healStartURL(ctx, account, credentials)
+		if healErr != nil {
+			// Covers every healStartURL failure mode, including
+			// sso.ErrMFARequired -- markNeedsManualStartURL (called inside
+			// healStartURL) already recorded the manual-action state; the
+			// scheduler's existing stale_start_url handling still owns
+			// pausing + notifying the account.
+			return scheduler.Outcome{Code: "stale_start_url"}, nil
+		}
+		credentials.UADEStartURL = healed
+		start, err = parseStartURL(credentials.UADEStartURL)
+		if err != nil {
+			return scheduler.Outcome{Code: "stale_start_url"}, nil
+		}
 	}
 	client, err := uade.NewClient(start.Scheme + "://" + start.Host)
 	if err != nil {
@@ -211,4 +263,70 @@ func (r *Runtime) poll(ctx context.Context, jobID, account string) (scheduler.Ou
 		converted.Vacancies = append(converted.Vacancies, scheduler.Vacancy{Turno: vacancy.Turno, Sede: vacancy.Sede, Horario: vacancy.Horario, Dias: strings.Split(vacancy.Dias, ","), Cupos: vacancy.Cupos})
 	}
 	return converted, nil
+}
+
+// parseStartURL validates raw against the same rules sso.Relink's own output
+// must satisfy (sso.ValidStartURL: https, exact enrollment host, has a
+// param= query key) and only then parses it. A single source of truth for
+// "is this start URL usable" avoids poll() and healStartURL disagreeing
+// about what counts as stale.
+func parseStartURL(raw string) (*url.URL, error) {
+	if !sso.ValidStartURL(raw) {
+		return nil, errors.New("invalid or stale uade start url")
+	}
+	return url.Parse(raw)
+}
+
+// healStartURL attempts an SSO relink for account and, on success, persists
+// the fresh start URL (encrypted) before returning it. On an
+// sso.ErrMFARequired failure it best-effort marks the account
+// needs_new_start_url so the pause DM and /credenciales both reflect the
+// real blocker instead of a generic staleness code; the markNeedsManualStartURL
+// error itself is intentionally swallowed so it never shadows the original
+// relink error returned to the caller.
+func (r *Runtime) healStartURL(ctx context.Context, account string, credentials credentialcrypto.Credentials) (string, error) {
+	client, err := sso.NewClient(r.SSOPortalURL)
+	if err != nil {
+		return "", err
+	}
+	result, err := r.relink(ctx, client, r.SSOPortalURL, credentials.UADEUsername, credentials.UADEPassword)
+	if err != nil {
+		if errors.Is(err, sso.ErrMFARequired) {
+			_ = r.markNeedsManualStartURL(ctx, account)
+		}
+		return "", err
+	}
+	credentials.UADEStartURL = result.StartURL
+	if err = r.persistStartURL(ctx, account, credentials); err != nil {
+		return "", err
+	}
+	return result.StartURL, nil
+}
+
+// persistStartURL re-encrypts credentials (with its freshly-healed start
+// URL) and updates the stored row. Neither the Encrypt result nor
+// credentials itself is ever logged.
+func (r *Runtime) persistStartURL(ctx context.Context, account string, credentials credentialcrypto.Credentials) error {
+	encrypted, err := credentialcrypto.Encrypt(r.MasterKey, account, credentials)
+	if err != nil {
+		return err
+	}
+	_, err = r.DB.ExecContext(ctx, `UPDATE credentials SET ciphertext=?,iv=?,auth_tag=?,updated_at=? WHERE discord_user_id=?`, encrypted.Ciphertext, encrypted.IV, encrypted.AuthTag, time.Now().UnixMilli(), account)
+	return err
+}
+
+// markNeedsManualStartURL records that account's relink hit
+// sso.ErrMFARequired, reusing the exact same pause_reason mechanism the
+// scheduler already uses when poll() detects staleness -- same consumer in
+// the pause DM (notificationText) and in /credenciales (03.3-16) -- while
+// preserving any existing BackoffAttempt/LastPauseNotifiedReason instead of
+// clobbering them.
+func (r *Runtime) markNeedsManualStartURL(ctx context.Context, account string) error {
+	repo := scheduler.SQLStore{DB: r.DB}
+	current, err := repo.AccountState(ctx, account)
+	if err != nil {
+		return err
+	}
+	current.Reason = "needs_new_start_url"
+	return repo.SaveAccountState(ctx, account, current)
 }
