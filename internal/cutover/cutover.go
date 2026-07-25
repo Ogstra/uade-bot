@@ -12,7 +12,12 @@ import (
 )
 
 type Config struct {
-	Enabled            bool
+	Enabled bool
+	// Standalone marks a Go-only deployment: there is no Node baseline to compare
+	// against, so observation window, comparison count and divergences are not
+	// relaxed gates -- they are metrics without meaning. Opting in skips the
+	// shadow report verification entirely and is audited via StandaloneNotice.
+	Standalone         bool
 	ReportPath         string
 	MinimumWindow      time.Duration
 	MinimumComparisons int
@@ -22,7 +27,10 @@ type Config struct {
 
 func FromEnv(getenv func(string) string) (Config, error) {
 	config := Config{
-		Enabled:        getenv("UADE_CUTOVER_ENABLED") == "true",
+		Enabled: getenv("UADE_CUTOVER_ENABLED") == "true",
+		// Strict comparison, same as the other boolean flags: TRUE, 1 or yes do not
+		// activate the escape. The bypass must be an unambiguous opt-in.
+		Standalone:     getenv("UADE_STANDALONE") == "true",
 		ReportPath:     getenv("SHADOW_REPORT_PATH"),
 		GO09Checkpoint: getenv("GO09_CHECKPOINT_COMPLETE") == "true",
 		DiscordLive:    getenv("DISCORD_LIVE_CHECKPOINT_COMPLETE") == "true",
@@ -56,6 +64,14 @@ func CheckIfEnabled(config Config) error {
 	if !config.Enabled {
 		return nil
 	}
+	// Order matters: !Enabled first, Standalone second. When Enabled is false the
+	// interlock was never armed, so Standalone is irrelevant there and cannot be
+	// read as a bypass of anything else. Returning here skips reading the report,
+	// unmarshalling it and building/evaluating shadow.Readiness altogether -- not
+	// just the outcome of Evaluate.
+	if config.Standalone {
+		return nil
+	}
 	data, err := os.ReadFile(config.ReportPath)
 	if err != nil {
 		return fmt.Errorf("cutover blocked: read shadow report: %w", err)
@@ -72,4 +88,16 @@ func CheckIfEnabled(config Config) error {
 		return fmt.Errorf("cutover blocked: %w", err)
 	}
 	return nil
+}
+
+// StandaloneNotice returns the audit line for a boot whose cutover interlock was
+// skipped, and an empty string otherwise. It is a pure value so the decision stays
+// testable and internal/cutover keeps no logging side effects; cmd/uade-bot emits it.
+// The text is a fixed literal: it interpolates no paths, environment values or
+// report contents.
+func StandaloneNotice(config Config) string {
+	if !config.Enabled || !config.Standalone {
+		return ""
+	}
+	return "cutover audit: UADE_STANDALONE=true, shadow report verification against the Node baseline was skipped -- a standalone Go-only deployment has no Node baseline to compare against, so this boot did not pass that verification"
 }

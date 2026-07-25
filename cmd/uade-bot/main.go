@@ -23,6 +23,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Logged before the interlock so the audit line survives a later log.Fatal
+	// (runtime mode validation, short dashboard secret, DB open failure).
+	if notice := cutover.StandaloneNotice(cutoverConfig); notice != "" {
+		log.Print(notice)
+	}
 	if err = cutover.CheckIfEnabled(cutoverConfig); err != nil {
 		log.Fatal(err)
 	}
