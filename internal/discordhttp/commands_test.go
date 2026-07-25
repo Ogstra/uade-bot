@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
 	"github.com/ogs/uade-bot/internal/store"
 )
 
@@ -35,11 +36,28 @@ func dispatchJSON(t *testing.T, d CommandDispatcher, payload any) InteractionRes
 func command(user, name, perms string, options []map[string]any) map[string]any {
 	return map[string]any{"type": 2, "guild_id": "any-guild", "channel_id": "any-channel", "member": map[string]any{"permissions": perms, "user": map[string]any{"id": user}}, "data": map[string]any{"name": name, "options": options}}
 }
-func credentialsSubmit(user, username, password, link string) map[string]any {
+func credentialsSubmit(user, username, password string) map[string]any {
 	field := func(id, value string) any {
 		return map[string]any{"components": []any{map[string]any{"custom_id": id, "value": value}}}
 	}
-	return map[string]any{"type": 5, "member": map[string]any{"user": map[string]any{"id": user}}, "data": map[string]any{"custom_id": "credentials:todo", "components": []any{field("uade_username", username), field("uade_password", password), field("uade_start_url", link)}}}
+	return map[string]any{"type": 5, "member": map[string]any{"user": map[string]any{"id": user}}, "data": map[string]any{"custom_id": "credentials", "components": []any{field("uade_username", username), field("uade_password", password)}}}
+}
+func seedCredentials(t *testing.T, d CommandDispatcher, user, username, password, link string) {
+	t.Helper()
+	encrypted, err := credentialcrypto.Encrypt(testMaster, user, credentialcrypto.Credentials{UADEUsername: username, UADEPassword: password, UADEStartURL: link})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Dos Exec separados a proposito: modernc.org/sqlite no reparte de forma
+	// confiable los placeholders entre varios statements en un mismo Exec, y
+	// hacerlo dejaba la fila de credenciales con valores corridos (Decrypt
+	// fallaba con "illegal base64 data").
+	if _, err = d.DB.Exec(`INSERT INTO users(discord_user_id,created_at,updated_at) VALUES(?,1,1)`, user); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.DB.Exec(`INSERT INTO credentials(discord_user_id,ciphertext,iv,auth_tag,updated_at) VALUES(?,?,?,?,1)`, user, encrypted.Ciphertext, encrypted.IV, encrypted.AuthTag); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestGlobalCommandsContainsExactlyTwelveRequiredCommands(t *testing.T) {
@@ -90,11 +108,17 @@ func TestRegisterGlobalUsesOnlyApplicationGlobalEndpointAndRetries429(t *testing
 
 func TestCredentialModalEncryptsWithoutEchoingSecrets(t *testing.T) {
 	d := testDispatcher(t)
+	const startURL = "https://inscripcionespia.uade.edu.ar/a?param=secret-link"
+	seedCredentials(t, d, "u1", "old-user", "old-pass", startURL)
 	modal := dispatchJSON(t, d, command("u1", "credenciales", "0", nil))
 	if modal.Type != 9 {
 		t.Fatalf("type %d", modal.Type)
 	}
-	payload := credentialsSubmit("u1", "secret-user", "secret-pass", "https://inscripcionespia.uade.edu.ar/a?param=secret-link")
+	modalData := modal.Data.(map[string]any)
+	if components := modalData["components"].([]any); len(components) != 2 {
+		t.Fatalf("modal has %d fields, want 2", len(components))
+	}
+	payload := credentialsSubmit("u1", "secret-user", "secret-pass")
 	out := dispatchJSON(t, d, payload)
 	if !strings.Contains(responseContent(out), "guardadas") {
 		t.Fatalf("modal response: %s", responseContent(out))
@@ -112,12 +136,16 @@ func TestCredentialModalEncryptsWithoutEchoingSecrets(t *testing.T) {
 	if strings.Contains(ciphertext, "secret") {
 		t.Fatal("plaintext persisted")
 	}
+	stored, err := d.readCredentials(context.Background(), "u1")
+	if err != nil || stored.UADEStartURL != startURL {
+		t.Fatalf("stored link changed: %q err=%v", stored.UADEStartURL, err)
+	}
 }
 
 func TestOwnershipAdminPermissionAndCommandDispatch(t *testing.T) {
 	d := testDispatcher(t)
 	// Seed users/credentials through modal, then create a job.
-	dispatchJSON(t, d, credentialsSubmit("owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v"))
+	seedCredentials(t, d, "owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
 	options := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
 	if out := dispatchJSON(t, d, command("owner", "buscar", "0", options)); out.Type != 4 {
 		t.Fatal(out.Type)
@@ -135,7 +163,7 @@ func TestOwnershipAdminPermissionAndCommandDispatch(t *testing.T) {
 
 func TestBuscarPersistsNodeCompatibleContractAndLifecycle(t *testing.T) {
 	d := testDispatcher(t)
-	dispatchJSON(t, d, credentialsSubmit("owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v"))
+	seedCredentials(t, d, "owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
 	created := ""
 	changed := 0
 	d.OnJobCreated = func(id string) { created = id }
@@ -168,9 +196,31 @@ func TestBuscarPersistsNodeCompatibleContractAndLifecycle(t *testing.T) {
 	}
 }
 
+// Un usuario sin credenciales que corre /buscar recibe el modal directamente en
+// vez de un texto pidiendole que descubra y tipee /credenciales.
+func TestBuscarWithoutCredentialsOpensModalDirectly(t *testing.T) {
+	d := testDispatcher(t)
+	searchOptions := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
+	out := dispatchJSON(t, d, command("sin-credenciales", "buscar", "0", searchOptions))
+	if out.Type != 9 {
+		t.Fatalf("buscar sin credenciales debe abrir el modal (type 9), got type %d", out.Type)
+	}
+	data, ok := out.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("modal data no es un mapa: %T", out.Data)
+	}
+	if data["custom_id"] != "credentials" {
+		t.Fatalf("custom_id = %v, want credentials", data["custom_id"])
+	}
+	components, ok := data["components"].([]any)
+	if !ok || len(components) != 2 {
+		t.Fatalf("modal tiene %d campos, want 2 (usuario y password)", len(components))
+	}
+}
+
 func TestAllTwelveCommandDispatchersAcknowledge(t *testing.T) {
 	d := testDispatcher(t)
-	dispatchJSON(t, d, credentialsSubmit("owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v"))
+	seedCredentials(t, d, "owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
 	searchOptions := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
 	cases := []struct {
 		name, user, permissions string
@@ -211,7 +261,7 @@ func responseContent(response InteractionResponse) string {
 // Dispatch's JSON wrapper. This is the seam Task 2 depends on.
 func TestDispatchInteractionMatchesDispatchForEquivalentPayload(t *testing.T) {
 	d := testDispatcher(t)
-	dispatchJSON(t, d, credentialsSubmit("owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v"))
+	seedCredentials(t, d, "owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
 
 	viaJSON := dispatchJSON(t, d, command("owner", "estado", "0", nil))
 

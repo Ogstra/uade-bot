@@ -45,12 +45,10 @@ func GlobalCommands() []globalCommand {
 	user := func(required bool) []commandOption {
 		return []commandOption{opt("usuario", "Cuenta a consultar", required, true)}
 	}
-	mode := opt("modo", "Que queres actualizar", false, false)
-	mode["choices"] = []map[string]string{{"name": "Usuario y password", "value": "usuario_password"}, {"name": "Link de inscripcion", "value": "link"}, {"name": "Todo", "value": "todo"}}
 	return []globalCommand{
 		{"buscar", "Crear una busqueda de vacantes en UADE", 1, buscar}, {"estado", "Ver tus busquedas activas o pausadas", 1, nil},
 		{"detener", "Detener una de tus busquedas", 1, job("Busqueda a detener")}, {"pausar", "Pausar una de tus busquedas", 1, job("Busqueda a pausar")},
-		{"reanudar", "Reanudar una de tus busquedas pausadas", 1, job("Busqueda a reanudar")}, {"credenciales", "Cargar o actualizar credenciales de UADE", 1, []commandOption{mode}},
+		{"reanudar", "Reanudar una de tus busquedas pausadas", 1, job("Busqueda a reanudar")}, {"credenciales", "Cargar o actualizar usuario y password de UADE", 1, nil},
 		{"admin-estado", "[Admin] Ver todas las busquedas", 1, user(false)}, {"admin-detener", "[Admin] Detener cualquier busqueda", 1, job("Busqueda a detener")},
 		{"admin-pausar", "[Admin] Pausar cualquier busqueda", 1, job("Busqueda a pausar")}, {"admin-reanudar", "[Admin] Reanudar cualquier busqueda", 1, job("Busqueda a reanudar")},
 		{"admin-stats", "[Admin] Estadisticas generales del bot", 1, nil}, {"admin-user-stats", "[Admin] Estadisticas de una cuenta", 1, user(true)},

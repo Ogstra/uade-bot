@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -123,7 +122,7 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 	}
 	switch in.Data.Name {
 	case "credenciales":
-		return credentialsModal(stringOption(in.Data.Options, "modo")), nil
+		return credentialsModal(), nil
 	case "buscar":
 		return d.buscar(ctx, userID, in.ChannelID, in.GuildID, in.Data.Options)
 	case "estado":
@@ -148,49 +147,31 @@ func message(content string) InteractionResponse {
 	return InteractionResponse{Type: 4, Data: map[string]any{"content": content, "flags": ephemeral}}
 }
 
-func credentialsModal(mode string) InteractionResponse {
-	if mode == "" {
-		mode = "todo"
-	}
+func credentialsModal() InteractionResponse {
 	fields := []any{}
 	add := func(id, label string, style int) {
 		fields = append(fields, map[string]any{"type": 1, "components": []any{map[string]any{
 			"type": 4, "custom_id": id, "label": label, "style": style, "required": true,
 		}}})
 	}
-	if mode != "link" {
-		add("uade_username", "Usuario UADE", 1)
-		add("uade_password", "Password UADE", 1)
-	}
-	add("uade_start_url", "Link de inscripción", 2)
+	add("uade_username", "Usuario UADE", 1)
+	add("uade_password", "Password UADE", 1)
 	return InteractionResponse{Type: 9, Data: map[string]any{
-		"custom_id": "credentials:" + mode, "title": "Credenciales UADE", "components": fields,
+		"custom_id": "credentials", "title": "Credenciales UADE", "components": fields,
 	}}
 }
 
 func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, customID string, raw json.RawMessage) (InteractionResponse, error) {
-	if !strings.HasPrefix(customID, "credentials:") {
+	if customID != "credentials" {
 		return message("Formulario desconocido."), nil
 	}
 	values := modalValues(raw)
-	startURL := values["uade_start_url"]
-	if !validStartURL(startURL) {
-		return message("El link debe ser de inscripcionespia.uade.edu.ar e incluir param=. No se guardó nada."), nil
+	creds, err := d.readCredentials(ctx, userID)
+	if err != nil && err != sql.ErrNoRows {
+		return InteractionResponse{}, err
 	}
-	mode := strings.TrimPrefix(customID, "credentials:")
-	creds := credentialcrypto.Credentials{UADEUsername: values["uade_username"], UADEPassword: values["uade_password"], UADEStartURL: startURL}
-	if mode == "link" || mode == "usuario_password" {
-		current, err := d.readCredentials(ctx, userID)
-		if err != nil {
-			return message("Primero cargá todas tus credenciales con /credenciales modo:Todo."), nil
-		}
-		if mode == "link" {
-			current.UADEStartURL = startURL
-		} else {
-			current = creds
-		}
-		creds = current
-	}
+	creds.UADEUsername = values["uade_username"]
+	creds.UADEPassword = values["uade_password"]
 	if creds.UADEUsername == "" || creds.UADEPassword == "" || d.MasterKey == "" {
 		return message("Faltan datos para guardar las credenciales."), nil
 	}
@@ -216,7 +197,7 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 	if d.OnAccountReady != nil {
 		d.OnAccountReady(userID)
 	}
-	return message("Credenciales guardadas de forma cifrada. Tus búsquedas quedan listas para continuar."), nil
+	return message("Credenciales guardadas de forma cifrada. Todavía no creé ninguna búsqueda: volvé a usar /buscar para crearla."), nil
 }
 
 func (d CommandDispatcher) readCredentials(ctx context.Context, userID string) (credentialcrypto.Credentials, error) {
@@ -245,11 +226,6 @@ func modalValues(raw json.RawMessage) map[string]string {
 	return out
 }
 
-func validStartURL(value string) bool {
-	u, err := url.Parse(value)
-	return err == nil && u.Scheme == "https" && strings.EqualFold(u.Hostname(), "inscripcionespia.uade.edu.ar") && u.Query().Has("param")
-}
-
 func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildID string, options []Option) (InteractionResponse, error) {
 	code := strings.TrimSpace(stringOption(options, "cod_materia"))
 	if !materiaPattern.MatchString(code) {
@@ -260,7 +236,12 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 		return InteractionResponse{}, err
 	}
 	if credentials == 0 {
-		return message("Primero cargá tus credenciales con /credenciales; se abrirá un formulario privado."), nil
+		// Abrir el modal directamente evita que el usuario tenga que descubrir y
+		// tipear /credenciales. Los parámetros de esta búsqueda se pierden acá:
+		// el custom_id de un modal está limitado a 100 caracteres y no entran, y
+		// persistirlos requeriría schema nuevo. submitCredentials le avisa que
+		// repita /buscar.
+		return credentialsModal(), nil
 	}
 	var active int
 	if err := d.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE discord_user_id=? AND status IN ('active','paused_by_user')`, userID).Scan(&active); err != nil {
