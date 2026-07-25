@@ -88,9 +88,16 @@ func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken stri
 // statement of a goroutine body (or, for Start's ticker loop, of safeTick --
 // scoped to one tick, never the whole outer goroutine, so a recovered panic
 // does not silently stop all future ticks). See CR-01 in 03.3-REVIEW.md.
+//
+// The value returned by recover() is used only to decide whether a panic
+// occurred; it is never formatted, wrapped, returned, or logged. A panic
+// can originate from dependencies handling UADE credentials, Discord
+// tokens, or start URLs, so the recovered value itself must never reach a
+// log sink (D-06/GO-02, T-03.3-13-01). Only a fixed marker plus the
+// caller's static stage name is logged.
 func recoverGoroutine(name string) {
-	if r := recover(); r != nil {
-		log.Printf("%s panic recovered: %v", name, r)
+	if recover() != nil {
+		log.Printf("runtime goroutine panic recovered stage=%s", name)
 	}
 }
 
