@@ -197,7 +197,64 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 	if d.OnAccountReady != nil {
 		d.OnAccountReady(userID)
 	}
+	jobID, jobErr := d.materializePendingSearch(ctx, userID)
+	if jobErr != nil {
+		return InteractionResponse{}, jobErr
+	}
+	if jobID != "" {
+		if d.OnJobCreated != nil {
+			d.OnJobCreated(jobID)
+		}
+		return message("Credenciales guardadas de forma cifrada. Ya creé la búsqueda que habías pedido con /buscar."), nil
+	}
 	return message("Credenciales guardadas de forma cifrada. Todavía no creé ninguna búsqueda: volvé a usar /buscar para crearla."), nil
+}
+
+// savePendingSearch persists the exact filters/channel/guild/label of a
+// /buscar request made while the user has no saved credentials yet, so
+// submitCredentials can materialize it later instead of losing it. Upserts
+// by discord_user_id: a second /buscar before the modal is completed
+// overwrites the previous pending row rather than accumulating rows.
+func (d CommandDispatcher) savePendingSearch(ctx context.Context, userID, channelID, guildID, label, filtersJSON string) error {
+	_, err := d.DB.ExecContext(ctx, `INSERT INTO pending_searches(discord_user_id,filtros_json,channel_id,guild_id,label,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(discord_user_id) DO UPDATE SET filtros_json=excluded.filtros_json,channel_id=excluded.channel_id,guild_id=excluded.guild_id,label=excluded.label,created_at=excluded.created_at`, userID, filtersJSON, nullable(channelID), nullable(guildID), label, time.Now().UnixMilli())
+	return err
+}
+
+// materializePendingSearch converts a saved pending_searches row (if any)
+// into an active job with the exact filters originally requested, then
+// deletes the pending row. Returns "" (no error) when there is nothing
+// pending -- that's the normal case, not a failure.
+func (d CommandDispatcher) materializePendingSearch(ctx context.Context, userID string) (string, error) {
+	var filtersJSON, label string
+	var channelID, guildID sql.NullString
+	err := d.DB.QueryRowContext(ctx, `SELECT filtros_json,channel_id,guild_id,label FROM pending_searches WHERE discord_user_id=?`, userID).Scan(&filtersJSON, &channelID, &guildID, &label)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	tx, err := d.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	now := time.Now().UnixMilli()
+	result, err := tx.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,channel_id,guild_id,label,status,created_at) VALUES(?,?,?,?,?,'active',?)`, userID, filtersJSON, channelID, guildID, label, now)
+	if err != nil {
+		return "", err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM pending_searches WHERE discord_user_id=?`, userID); err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return "", err
+	}
+	return strconv.FormatInt(id, 10), nil
 }
 
 func (d CommandDispatcher) readCredentials(ctx context.Context, userID string) (credentialcrypto.Credentials, error) {
@@ -231,16 +288,24 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 	if !materiaPattern.MatchString(code) {
 		return message("El código de materia no es válido (ejemplo: 3.1.050)."), nil
 	}
+	filters, _ := json.Marshal(map[string]any{"materiaCodigo": code, "turno": stringOption(options, "turno"), "ofrecimiento": stringOption(options, "ofrecimiento"), "dias": csvValues(stringOption(options, "dias"), true), "sedesExcluidas": csvValues(stringOption(options, "sedes_excluidas"), false)})
+	label := stringOption(options, "etiqueta")
+	if label == "" {
+		label = code
+	}
 	var credentials int
 	if err := d.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM credentials WHERE discord_user_id=?`, userID).Scan(&credentials); err != nil {
 		return InteractionResponse{}, err
 	}
 	if credentials == 0 {
 		// Abrir el modal directamente evita que el usuario tenga que descubrir y
-		// tipear /credenciales. Los parámetros de esta búsqueda se pierden acá:
-		// el custom_id de un modal está limitado a 100 caracteres y no entran, y
-		// persistirlos requeriría schema nuevo. submitCredentials le avisa que
-		// repita /buscar.
+		// tipear /credenciales. La búsqueda pedida se persiste en
+		// pending_searches (upsert por discord_user_id) para que
+		// submitCredentials pueda materializarla apenas se guarden las
+		// credenciales, en vez de perderla.
+		if err := d.savePendingSearch(ctx, userID, channelID, guildID, label, string(filters)); err != nil {
+			return InteractionResponse{}, err
+		}
 		return credentialsModal(), nil
 	}
 	var active int
@@ -250,12 +315,7 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 	if active >= 10 {
 		return message("Ya tenés 10 búsquedas activas o pausadas."), nil
 	}
-	filters, _ := json.Marshal(map[string]any{"materiaCodigo": code, "turno": stringOption(options, "turno"), "ofrecimiento": stringOption(options, "ofrecimiento"), "dias": csvValues(stringOption(options, "dias"), true), "sedesExcluidas": csvValues(stringOption(options, "sedes_excluidas"), false)})
 	now := time.Now().UnixMilli()
-	label := stringOption(options, "etiqueta")
-	if label == "" {
-		label = code
-	}
 	result, err := d.DB.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,channel_id,guild_id,label,status,created_at) VALUES(?,?,?,?,?,'active',?)`, userID, string(filters), nullable(channelID), nullable(guildID), label, now)
 	if err != nil {
 		return InteractionResponse{}, err

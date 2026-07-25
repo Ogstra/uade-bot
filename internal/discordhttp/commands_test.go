@@ -216,6 +216,60 @@ func TestBuscarWithoutCredentialsOpensModalDirectly(t *testing.T) {
 	if !ok || len(components) != 2 {
 		t.Fatalf("modal tiene %d campos, want 2 (usuario y password)", len(components))
 	}
+	var raw, channel, guild, label string
+	if err := d.DB.QueryRow(`SELECT filtros_json,channel_id,guild_id,label FROM pending_searches WHERE discord_user_id=?`, "sin-credenciales").Scan(&raw, &channel, &guild, &label); err != nil {
+		t.Fatal(err)
+	}
+	if channel != "any-channel" || guild != "any-guild" || label != "3.1.050" {
+		t.Fatalf("channel=%s guild=%s label=%s", channel, guild, label)
+	}
+	var stored map[string]any
+	if json.Unmarshal([]byte(raw), &stored) != nil || stored["materiaCodigo"] != "3.1.050" {
+		t.Fatalf("filters=%s", raw)
+	}
+}
+
+// Completar el modal de credenciales con una búsqueda pendiente materializa
+// esa búsqueda exacta como job activo, en vez de pedirle al usuario que
+// repita /buscar.
+func TestSubmitCredentialsMaterializesPendingSearch(t *testing.T) {
+	d := testDispatcher(t)
+	searchOptions := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
+	created := ""
+	d.OnJobCreated = func(id string) { created = id }
+	out := dispatchJSON(t, d, command("sin-credenciales", "buscar", "0", searchOptions))
+	if out.Type != 9 {
+		t.Fatalf("buscar sin credenciales debe abrir el modal, got type %d", out.Type)
+	}
+	submit := dispatchJSON(t, d, credentialsSubmit("sin-credenciales", "user", "pass"))
+	if content := responseContent(submit); !strings.Contains(content, "Ya creé la búsqueda") {
+		t.Fatalf("respuesta no menciona la búsqueda ya creada: %s", content)
+	}
+	if created == "" {
+		t.Fatal("OnJobCreated no se disparó")
+	}
+	var jobCount int
+	if err := d.DB.QueryRow(`SELECT COUNT(*) FROM jobs WHERE discord_user_id=? AND status='active'`, "sin-credenciales").Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("jobs activos=%d, want 1", jobCount)
+	}
+	var raw string
+	if err := d.DB.QueryRow(`SELECT filtros_json FROM jobs WHERE discord_user_id=?`, "sin-credenciales").Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]any
+	if json.Unmarshal([]byte(raw), &stored) != nil || stored["materiaCodigo"] != "3.1.050" {
+		t.Fatalf("filters=%s", raw)
+	}
+	var pendingCount int
+	if err := d.DB.QueryRow(`SELECT COUNT(*) FROM pending_searches WHERE discord_user_id=?`, "sin-credenciales").Scan(&pendingCount); err != nil {
+		t.Fatal(err)
+	}
+	if pendingCount != 0 {
+		t.Fatalf("pending_searches=%d, want 0", pendingCount)
+	}
 }
 
 func TestAllTwelveCommandDispatchersAcknowledge(t *testing.T) {

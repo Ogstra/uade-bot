@@ -19,6 +19,33 @@ CREATE TABLE IF NOT EXISTS materias (codigo TEXT PRIMARY KEY, nombre TEXT NOT NU
 CREATE TABLE IF NOT EXISTS command_log (id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT NOT NULL, command_name TEXT NOT NULL, guild_id TEXT, created_at INTEGER NOT NULL);
 `
 
+// pendingSearchesStatements creates pending_searches, which holds the exact
+// filters/channel/guild/label of a /buscar request made before the user has
+// any saved credentials. Deliberately has no FK to users(discord_user_id):
+// a pending search can exist BEFORE the users row does, since that row is
+// only created inside submitCredentials' own transaction.
+var pendingSearchesStatements = []string{
+	"CREATE TABLE IF NOT EXISTS pending_searches (discord_user_id TEXT PRIMARY KEY, filtros_json TEXT NOT NULL, channel_id TEXT, guild_id TEXT, label TEXT, created_at INTEGER NOT NULL)",
+}
+
+// migrateStatements runs statements inside a single explicit transaction: if
+// any statement fails, the deferred Rollback undoes everything executed so
+// far in that same transaction, so a migration never leaves the schema
+// half-applied (D-12).
+func migrateStatements(db *sql.DB, statements []string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, statement := range statements {
+		if _, err = tx.Exec(statement); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func Open(path string) (*sql.DB, error) {
 	if path != ":memory:" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -36,6 +63,10 @@ func Open(path string) (*sql.DB, error) {
 	if err = ensureColumn(db, "jobs", "guild_id", "TEXT"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
+	if err = migrateStatements(db, pendingSearchesStatements); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate pending_searches: %w", err)
 	}
 	return db, nil
 }
