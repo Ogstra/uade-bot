@@ -101,10 +101,16 @@ func Relink(ctx context.Context, client *http.Client, portalURL, user, password 
 
 	startURL, err := extractStartURL(html)
 	if err != nil {
-		return Result{}, err
+		// newInvalidStartURLError enriches the sentinel with non-sensitive
+		// diagnostics (a.inscribite count, distinct data-tipolink values,
+		// Bootstrap tab presence, host+path without query) recoverable via
+		// StartURLDiagnosticsFrom, while errors.Is(err, ErrInvalidStartURL)
+		// still holds for every existing caller (Unwrap returns the sentinel
+		// itself -- see start_url_diagnostics.go).
+		return Result{}, newInvalidStartURLError(pageURL, html)
 	}
 	if !ValidStartURL(startURL) {
-		return Result{}, ErrInvalidStartURL
+		return Result{}, newInvalidStartURLError(pageURL, html)
 	}
 	return Result{StartURL: startURL}, nil
 }

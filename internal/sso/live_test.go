@@ -39,17 +39,42 @@ package sso
 // (03.3-18) -- is rendered client-side from its own $Config blob rather
 // than a raw <form>. It also added MFADiagnostics.ConfigKeys (the NAMES,
 // never the values, of the last $Config's keys) for the case that
-// hypothesis still isn't enough. If the MFA branch below fires again on
-// this fourth attempt, COPY AND PASTE BOTH new log lines: the second
-// t.Logf's full line (AADSTS code, host, path, hops, from 03.3-19) AND the
-// third t.Logf's line below it (MFA $Config keys, from 03.3-20, only
-// printed when present) -- together they determine whether this plan's
-// $Config auto-continuation hypothesis matched reality (in which case
-// ConfigKeys should be empty, because Relink would already have left
-// Microsoft) or whether the real page uses a still-different shape this
-// plan didn't anticipate (in which case ConfigKeys carries the exact names
-// to adjust buildMicrosoftContinuePostValues against, instead of another
-// round of guessing).
+// hypothesis still isn't enough. If the MFA branch below fires again,
+// COPY AND PASTE BOTH new log lines: the second t.Logf's full line (AADSTS
+// code, host, path, hops, from 03.3-19) AND the third t.Logf's line below it
+// (MFA $Config keys, from 03.3-20, only printed when present) -- together
+// they determine whether this plan's $Config auto-continuation hypothesis
+// matched reality (in which case ConfigKeys should be empty, because Relink
+// would already have left Microsoft) or whether the real page uses a
+// still-different shape this plan didn't anticipate (in which case
+// ConfigKeys carries the exact names to adjust
+// buildMicrosoftContinuePostValues against, instead of another round of
+// guessing).
+//
+// 03.3-20's fourth attempt confirmed the KMSI auto-continuation hypothesis
+// worked: Microsoft authentication now completes end to end for the test
+// account (no MFA, no more false-positive ErrMFARequired). The real failure
+// moved to a DIFFERENT, later point: Relink now returns ErrInvalidStartURL
+// ("sso did not produce a valid enrollment URL") once it's back on the
+// final UADE portal page, because that page has no
+// a.inscribite[data-tipolink="InscripcionAsignatura"] with a non-empty
+// data-linkid. 03.3-21 (fifth reopening of this checkpoint) added exactly
+// the bounded diagnostics needed to distinguish the two remaining
+// hypotheses without ever seeing/logging the real data-linkid value:
+//
+//   - Hypothesis A ("no bug"): the test account genuinely has no
+//     InscripcionAsignatura enrollment available right now.
+//     InscribeteLinkCount == 0 (no a.inscribite element of ANY type) is the
+//     strongest signal for this -- confirm the account's real enrollment
+//     state before requesting another round of code changes.
+//   - Hypothesis B ("selector bug"): DataTipolinkValues contains other
+//     types (e.g. "CursosMRI") but never "InscripcionAsignatura" -- that IS
+//     a concrete lead for a follow-up plan to adjust extractStartURL's
+//     filter, informed by the real values observed here.
+//
+// If the ErrInvalidStartURL branch below fires, COPY AND PASTE its full
+// t.Logf line (a.inscribite count, data-tipolink values, Bootstrap tab
+// presence, host, path) before treating this checkpoint as failed.
 
 import (
 	"context"
@@ -122,6 +147,23 @@ func TestRelinkAgainstRealUADESite(t *testing.T) {
 		} else {
 			t.Logf("MFA diagnostics unavailable (unexpected: Relink should always enrich this error)")
 		}
+	case errors.Is(err, ErrInvalidStartURL):
+		// 03.3-21: Microsoft auth completed, but the final portal page had
+		// no valid InscripcionAsignatura enrollment link. Only these five
+		// non-sensitive fields ever cross into this log line -- never
+		// data-linkid/password/email/the full HTML/the query string. See
+		// the two hypotheses documented in this file's header comment.
+		if diag, ok := StartURLDiagnosticsFrom(err); ok {
+			tipolinks := strings.Join(diag.DataTipolinkValues, ",")
+			if tipolinks == "" {
+				tipolinks = "ninguno"
+			}
+			t.Logf("start URL diagnostics: inscribeteLinkCount=%d dataTipolinkValues=%s bootstrapTabPresent=%t host=%s path=%s",
+				diag.InscribeteLinkCount, tipolinks, diag.BootstrapTabPresent, diag.Host, diag.Path)
+		} else {
+			t.Logf("start URL diagnostics unavailable (unexpected: Relink should always enrich this error)")
+		}
+		t.Fatalf("Relink failed: %v", err)
 	default:
 		// internal/sso's errors are fixed sentinels/messages, never
 		// interpolated with secrets or full HTML, so it's safe to include

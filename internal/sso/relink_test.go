@@ -115,6 +115,26 @@ func landingHTML(realStartURL string) string {
 </body></html>`, realStartURL)
 }
 
+// landingHTMLNoInscribeteLinks simulates hypothesis A of 03.3-21: the final
+// portal page has no a.inscribite element of any type -- the account
+// genuinely has no enrollment available right now.
+func landingHTMLNoInscribeteLinks() string {
+	return `<html><body><p>No hay inscripciones disponibles en este momento.</p></body></html>`
+}
+
+// landingHTMLOtherTypesOnly simulates hypothesis B of 03.3-21: the final
+// portal page has a.inscribite elements, but none of type
+// InscripcionAsignatura -- two elements of the SAME other type (to also
+// prove deduplication at the Relink level, not just extractStartURLDiagnostics
+// in isolation). Each data-linkid carries a distinct secret-shaped substring
+// from the one already used in start_url_diagnostics_test.go.
+func landingHTMLOtherTypesOnly() string {
+	return `<html><body>
+<a class="inscribite" data-tipolink="CursosMRI" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=RELINKSECRET001">Curso MRI 1</a>
+<a class="inscribite" data-tipolink="CursosMRI" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=RELINKSECRET002">Curso MRI 2</a>
+</body></html>`
+}
+
 // TestRelinkFullFlow drives the complete portal -> Microsoft -> portal HTTP
 // chain across both step-2 trigger hypotheses (href vs form) and both
 // post-combined-login outcomes (straight back to the portal vs the "Stay
@@ -482,6 +502,108 @@ func TestRelinkRejectsUnverifiedLoginTriggerHost(t *testing.T) {
 	}
 	if evilHit {
 		t.Fatal("the disallowed host received a request")
+	}
+}
+
+// TestRelinkAttachesStartURLDiagnostics drives the same full portal ->
+// Microsoft -> portal HTTP chain as TestRelinkFullFlow's HrefTrigger_DirectLanding
+// case, but serves a /landing page with no valid InscripcionAsignatura link,
+// covering 03.3-21's two hypotheses: zero a.inscribite links at all
+// (hypothesis A -- no enrollment currently available, not a bug), and
+// a.inscribite links of another type only (hypothesis B -- a real selector
+// problem, or the account has a different enrollment type available).
+// Relink must still return an error satisfying errors.Is(err,
+// ErrInvalidStartURL), now enriched with recoverable StartURLDiagnostics.
+func TestRelinkAttachesStartURLDiagnostics(t *testing.T) {
+	cases := []struct {
+		name             string
+		landingHandler   func(w http.ResponseWriter, r *http.Request)
+		wantCount        int
+		wantTipolinks    []string
+		secretSubstrings []string
+	}{
+		{
+			name: "ZeroLinks",
+			landingHandler: func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, landingHTMLNoInscribeteLinks())
+			},
+			wantCount:     0,
+			wantTipolinks: nil,
+		},
+		{
+			name: "OtherTypesOnlyDeduplicated",
+			landingHandler: func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, landingHTMLOtherTypesOnly())
+			},
+			wantCount:        2,
+			wantTipolinks:    []string{"CursosMRI"},
+			secretSubstrings: []string{"RELINKSECRET001", "RELINKSECRET002"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			portalMux := http.NewServeMux()
+			msMux := http.NewServeMux()
+
+			portalSrv := httptest.NewServer(portalMux)
+			defer portalSrv.Close()
+			msSrv := httptest.NewServer(msMux)
+			defer msSrv.Close()
+			msBase := localhostURL(msSrv.URL)
+
+			setMicrosoftLoginHost(t, hostnameOf(msBase))
+
+			portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/Account/Login", http.StatusFound)
+			})
+			portalMux.HandleFunc("/Account/Login", func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, portalLoginHrefHTML(msBase+"/oauth/authorize"))
+			})
+			portalMux.HandleFunc("/landing", tc.landingHandler)
+
+			msMux.HandleFunc("/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, msConfigHTML("/oauth/login", fixtureFlowToken, fixtureSCtx, fixtureCanary, fixtureSessionID))
+			})
+			msMux.HandleFunc("/oauth/login", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, portalSrv.URL+"/landing", http.StatusFound)
+			})
+
+			client, err := NewClient(portalSrv.URL)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			_, err = Relink(context.Background(), client, portalSrv.URL, "jperez", fixturePassword)
+			if !errors.Is(err, ErrInvalidStartURL) {
+				t.Fatalf("err = %v, want ErrInvalidStartURL", err)
+			}
+
+			diag, ok := StartURLDiagnosticsFrom(err)
+			if !ok {
+				t.Fatal("StartURLDiagnosticsFrom(err) ok = false, want true")
+			}
+			if diag.InscribeteLinkCount != tc.wantCount {
+				t.Fatalf("diag.InscribeteLinkCount = %d, want %d", diag.InscribeteLinkCount, tc.wantCount)
+			}
+			if len(diag.DataTipolinkValues) != len(tc.wantTipolinks) {
+				t.Fatalf("diag.DataTipolinkValues = %v, want %v", diag.DataTipolinkValues, tc.wantTipolinks)
+			}
+			for i := range tc.wantTipolinks {
+				if diag.DataTipolinkValues[i] != tc.wantTipolinks[i] {
+					t.Fatalf("diag.DataTipolinkValues = %v, want %v", diag.DataTipolinkValues, tc.wantTipolinks)
+				}
+			}
+			if diag.Host != hostnameOf(portalSrv.URL) {
+				t.Fatalf("diag.Host = %q, want %q (final page is back on the portal, not Microsoft)", diag.Host, hostnameOf(portalSrv.URL))
+			}
+
+			serialized := fmt.Sprintf("%+v", diag)
+			for _, secret := range tc.secretSubstrings {
+				if strings.Contains(serialized, secret) {
+					t.Fatalf("diagnostics leaked data-linkid secret substring: %q contains %q", serialized, secret)
+				}
+			}
+		})
 	}
 }
 
