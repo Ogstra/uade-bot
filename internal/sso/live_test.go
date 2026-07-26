@@ -28,17 +28,35 @@ package sso
 // NOT have MFA enabled -- a false positive, most likely caused by the
 // speculative POST defaults in submitMicrosoftLogin (03.3-18) making
 // Microsoft reject the session or show an interstitial indistinguishable
-// from real MFA. If the MFA branch below fires again, COPY AND PASTE the
-// second t.Logf's full line (AADSTS code, host, path, hops) -- that is
-// exactly the evidence needed to correct msconfig.go/relink.go with a
-// targeted fix instead of another round of guessing at the speculative
-// defaults documented in 03.3-18.
+// from real MFA.
+//
+// 03.3-20 (fourth reopening of this checkpoint) generalized
+// continueMicrosoftChain to auto-continue any Microsoft page with no <form>
+// but a parseable $Config (continueViaMicrosoftConfig in relink.go),
+// covering the hypothesis that the "relink stopped at MFA" false positive
+// was actually the KMSI "Stay signed in?" interstitial (documented in
+// explore-sso-flow.js ~217-234), which -- like the login page itself
+// (03.3-18) -- is rendered client-side from its own $Config blob rather
+// than a raw <form>. It also added MFADiagnostics.ConfigKeys (the NAMES,
+// never the values, of the last $Config's keys) for the case that
+// hypothesis still isn't enough. If the MFA branch below fires again on
+// this fourth attempt, COPY AND PASTE BOTH new log lines: the second
+// t.Logf's full line (AADSTS code, host, path, hops, from 03.3-19) AND the
+// third t.Logf's line below it (MFA $Config keys, from 03.3-20, only
+// printed when present) -- together they determine whether this plan's
+// $Config auto-continuation hypothesis matched reality (in which case
+// ConfigKeys should be empty, because Relink would already have left
+// Microsoft) or whether the real page uses a still-different shape this
+// plan didn't anticipate (in which case ConfigKeys carries the exact names
+// to adjust buildMicrosoftContinuePostValues against, instead of another
+// round of guessing).
 
 import (
 	"context"
 	"errors"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,6 +112,13 @@ func TestRelinkAgainstRealUADESite(t *testing.T) {
 				code = "ninguno"
 			}
 			t.Logf("MFA diagnostics: aadsts=%s host=%s path=%s hops=%d", code, diag.Host, diag.Path, diag.Hops)
+			// 03.3-20: only the KEY NAMES of the last $Config seen (never
+			// any value behind them) -- printed only when present, to avoid
+			// noise in the common case where the final page had no $Config
+			// at all.
+			if len(diag.ConfigKeys) > 0 {
+				t.Logf("MFA $Config keys: %s", strings.Join(diag.ConfigKeys, ","))
+			}
 		} else {
 			t.Logf("MFA diagnostics unavailable (unexpected: Relink should always enrich this error)")
 		}

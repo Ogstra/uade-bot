@@ -36,6 +36,14 @@ type MFADiagnostics struct {
 	Host       string
 	Path       string
 	Hops       int
+
+	// ConfigKeys is, unlike the four fields above, not a value captured from
+	// the page -- it is the list of NAMES (never the values) of the last
+	// $Config blob's keys, per D-06 (03.3-CONTEXT.md): a third party's
+	// $Config field NAMES are Microsoft's own internal identifiers, not
+	// secrets, and are safe to log; the VALUES behind those keys never are.
+	// nil when the last page Relink saw had no $Config at all.
+	ConfigKeys []string
 }
 
 // extractAADSTSCode returns the first bare AADSTS\d+ token found in html, or
@@ -75,6 +83,7 @@ func newMFARequiredError(pageURL, html string, hops int) error {
 	diag := MFADiagnostics{
 		AADSTSCode: extractAADSTSCode(html),
 		Hops:       hops,
+		ConfigKeys: extractMicrosoftConfigKeyNames(html),
 	}
 	if u, err := url.Parse(pageURL); err == nil {
 		diag.Host = u.Hostname()

@@ -92,6 +92,9 @@ func TestNewMFARequiredErrorAndDiagnosticsFrom(t *testing.T) {
 		strings.Contains(diag.Host, "9987766") || strings.Contains(diag.Path, "9987766") {
 		t.Fatalf("query string leaked into Host/Path: host=%q path=%q", diag.Host, diag.Path)
 	}
+	if diag.ConfigKeys != nil {
+		t.Fatalf("diag.ConfigKeys = %v, want nil (fixture html has no $Config)", diag.ConfigKeys)
+	}
 
 	// Independent cross-check via net/url that the fixture actually carries
 	// a query string (i.e. this test would catch a broken fixture, not just
@@ -99,6 +102,40 @@ func TestNewMFARequiredErrorAndDiagnosticsFrom(t *testing.T) {
 	u, err2 := url.Parse(pageURL)
 	if err2 != nil || u.RawQuery == "" {
 		t.Fatal("test setup bug: pageURL must carry a query string")
+	}
+}
+
+// TestNewMFARequiredErrorPopulatesConfigKeysWhenPresent covers the other
+// half of ConfigKeys: when the final page DOES carry a $Config blob (reusing
+// msConfigScriptHTML/msconfigFixture* from msconfig_test.go, same package,
+// not duplicated here), diag.ConfigKeys must be exactly the sorted key names
+// Task 1's extractMicrosoftConfigKeyNames already proved for that fixture --
+// and none of the fixture's synthetic secret-shaped VALUES may ever appear
+// in the joined result.
+func TestNewMFARequiredErrorPopulatesConfigKeysWhenPresent(t *testing.T) {
+	pageURL := "https://login.microsoftonline.com/common/login"
+	html := msConfigScriptHTML(msconfigFixtureURLPost, msconfigFixtureSFT, msconfigFixtureSCtxBraced, msconfigFixtureCanary, msconfigFixtureSessionID)
+	err := newMFARequiredError(pageURL, html, 1)
+
+	diag, ok := MFADiagnosticsFrom(err)
+	if !ok {
+		t.Fatal("MFADiagnosticsFrom(err) ok = false, want true")
+	}
+	want := []string{"anotherIgnoredField", "canary", "extraNestedField", "sCtx", "sFT", "sessionId", "urlPost"}
+	if len(diag.ConfigKeys) != len(want) {
+		t.Fatalf("diag.ConfigKeys = %v, want %v", diag.ConfigKeys, want)
+	}
+	for i := range want {
+		if diag.ConfigKeys[i] != want[i] {
+			t.Fatalf("diag.ConfigKeys = %v, want %v", diag.ConfigKeys, want)
+		}
+	}
+
+	joined := strings.Join(diag.ConfigKeys, ",")
+	for _, secret := range []string{msconfigFixtureSFT, msconfigFixtureCanary, msconfigFixtureSessionID} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("diag.ConfigKeys leaked a field value: %q contains %q", joined, secret)
+		}
 	}
 }
 
