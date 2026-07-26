@@ -190,29 +190,6 @@ func followLoginTrigger(ctx context.Context, fetcher boundedFetcher, pageURL, ht
 	return fetcher.post(ctx, target, values)
 }
 
-// formForField locates the Microsoft login form containing fieldName, using
-// Microsoft's long-stable static field ids as a fallback selector.
-func formForField(doc *goquery.Document, fieldName string) (*goquery.Selection, error) {
-	var selector string
-	switch fieldName {
-	case "loginfmt":
-		selector = `input[name="loginfmt"], #i0116`
-	case "passwd":
-		selector = `input[name="passwd"], #i0118`
-	default:
-		return nil, ErrMicrosoftFormNotFound
-	}
-	field := doc.Find(selector).First()
-	if field.Length() == 0 {
-		return nil, ErrMicrosoftFormNotFound
-	}
-	form := field.Closest("form")
-	if form.Length() == 0 {
-		return nil, ErrMicrosoftFormNotFound
-	}
-	return form, nil
-}
-
 // collectFormValues reunites every named input inside form. This
 // automatically captures whatever anti-forgery hidden field the server
 // happens to use (__RequestVerificationToken, PPFT, canary, or anything
@@ -238,40 +215,60 @@ func collectFormValues(form *goquery.Selection) url.Values {
 	return values
 }
 
-func submitMicrosoftForm(ctx context.Context, fetcher boundedFetcher, pageURL, html, fieldName, fieldValue string) (string, string, error) {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return "", "", ErrMicrosoftFormNotFound
-	}
-	form, err := formForField(doc, fieldName)
-	if err != nil {
-		return "", "", err
-	}
-	values := collectFormValues(form)
-	values.Set(fieldName, fieldValue)
-	target := pageURL
-	if action, _ := form.Attr("action"); strings.TrimSpace(action) != "" {
-		resolved, rErr := resolveURL(pageURL, action)
-		if rErr != nil {
-			return "", "", rErr
-		}
-		target = resolved
-	}
-	return fetcher.post(ctx, target, values)
-}
-
-// submitMicrosoftLogin chains the two Microsoft form submits (email, then
-// password) and falls through to continueMicrosoftChain for any
-// interstitial/relay page still served on the Microsoft host afterwards.
+// submitMicrosoftLogin replaces the old two-step "find an <input>, submit
+// email, then find another <input>, submit password" chain -- confirmed
+// live during the 03.3-17 checkpoint attempt that Microsoft's raw HTML
+// never serves those <input> elements at all (see
+// 03.3-17-live-verification-notes.md, "Paso 3"). Instead it reads the
+// $Config blob Microsoft actually ships and sends a single combined POST
+// with both credentials plus $Config's own anti-forgery/session values.
 func submitMicrosoftLogin(ctx context.Context, fetcher boundedFetcher, pageURL, html, email, password string) (string, string, error) {
-	nextURL, nextHTML, err := submitMicrosoftForm(ctx, fetcher, pageURL, html, "loginfmt", email)
+	cfg, err := parseMicrosoftConfig(html)
 	if err != nil {
 		return "", "", err
 	}
-	if !IsMicrosoftLogin(nextURL) {
-		return nextURL, nextHTML, nil
+
+	target, err := resolveURL(pageURL, cfg.URLPost)
+	if err != nil {
+		return "", "", err
 	}
-	nextURL, nextHTML, err = submitMicrosoftForm(ctx, fetcher, nextURL, nextHTML, "passwd", password)
+
+	values := url.Values{}
+	// Confirmed by 03.3-17-live-verification-notes.md ($Config extracted
+	// live, "Paso 3"): urlPost/sFT/sCtx/canary/sessionId are the only five
+	// fields that section verified. login/loginfmt/passwd are the two
+	// credential fields the flow exists to submit.
+	values.Set("login", email)
+	values.Set("loginfmt", email)
+	values.Set("passwd", password)
+	values.Set("flowToken", cfg.SFT)
+	values.Set("ctx", cfg.SCtx)
+	values.Set("canary", cfg.Canary)
+	values.Set("hpgrequestid", cfg.SessionID)
+
+	// Everything below this line is a SPECULATIVE default, NOT confirmed
+	// live -- 03.3-17-live-verification-notes.md only documents the five
+	// $Config fields above. These mirror the general "ests" hidden-field
+	// pattern other Microsoft/Azure AD login automation tooling reports,
+	// but have not been observed against the real UADE tenant. If 03.3-17
+	// fails again at this exact step, THIS block is the first place to
+	// adjust.
+	values.Set("ps", "2")               // credential-type selector: password
+	values.Set("psRNGCDefaultType", "") // no alternate credential offered by a headless client
+	values.Set("psRNGCEntropy", "")     // no client-side entropy to report
+	values.Set("psRNGCSLK", "")         // no saved-login-key from a headless client
+	values.Set("PPSX", "")              // no persistent-session continuation token
+	values.Set("NewUser", "1")          // marks a fresh login attempt, not a cached account tile
+	values.Set("FoundMSAs", "")         // no consumer (MSA) accounts detected; tenant is work/school
+	values.Set("fspost", "0")           // not a password-recovery flow
+	values.Set("i21", "0")              // inert telemetry counter placeholder
+	values.Set("i19", "0")              // inert telemetry counter placeholder
+	values.Set("CookieDisclosure", "0") // cookie-consent banner does not apply to a headless client
+	values.Set("IsFidoSupported", "1")  // declaring modern support does not trigger extra challenges on the happy path
+	values.Set("isSignupPost", "0")     // this is a login, not a signup
+	values.Set("DfpArtifact", "")       // no device-fingerprint artifact; a plain net/http client never generates one
+
+	nextURL, nextHTML, err := fetcher.post(ctx, target, values)
 	if err != nil {
 		return "", "", err
 	}

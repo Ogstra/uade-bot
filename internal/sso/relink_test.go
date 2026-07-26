@@ -33,10 +33,12 @@ import (
 )
 
 const (
-	fixtureLoginCanary    = "canary-fixed-abc123"
-	fixturePasswordCanary = "flowtoken-fixed-xyz789"
-	fixturePassword       = "s3cr3t!"
-	fixtureStartURL       = "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx?param=abc123"
+	fixtureFlowToken = "flowtoken-fixed-xyz789"
+	fixtureSCtx      = "ctx-fixed-value-1"
+	fixtureCanary    = "canary-fixed-abc123"
+	fixtureSessionID = "session-fixed-value-1"
+	fixturePassword  = "s3cr3t!"
+	fixtureStartURL  = "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx?param=abc123"
 )
 
 func localhostURL(rawURL string) string {
@@ -70,25 +72,15 @@ func portalLoginFormHTML(triggerURL string) string {
 </body></html>`, triggerURL)
 }
 
-func msStep1HTML(actionURL string) string {
-	return fmt.Sprintf(`<html><body>
-<form action="%s" method="post">
-  <input type="hidden" name="canary" value="%s">
-  <input type="hidden" name="ctx" value="ctx-value-1">
-  <input type="email" name="loginfmt" id="i0116" value="">
-  <input type="submit" id="idSIButton9" value="Siguiente">
-</form>
-</body></html>`, actionURL, fixtureLoginCanary)
-}
-
-func msStep2HTML(actionURL string) string {
-	return fmt.Sprintf(`<html><body>
-<form action="%s" method="post">
-  <input type="hidden" name="flowtoken" value="%s">
-  <input type="password" name="passwd" id="i0118" value="">
-  <input type="submit" id="idSIButton9" value="Iniciar sesión">
-</form>
-</body></html>`, actionURL, fixturePasswordCanary)
+// msConfigHTML serves a $Config blob synthesizing the shape confirmed live
+// in 03.3-17-live-verification-notes.md ("Paso 3") -- Microsoft's raw HTML
+// carries no <form>/<input> for email/password at all, only this
+// JavaScript-consumed blob. urlPost is relative to the Microsoft origin,
+// matching the real site's "/{tenant}/login" shape.
+func msConfigHTML(urlPost, sft, sctx, canary, sessionID string) string {
+	return fmt.Sprintf(`<html><body><script>
+$Config={"urlPost":"%s","sFT":"%s","sCtx":"%s","canary":"%s","sessionId":"%s"};
+</script></body></html>`, urlPost, sft, sctx, canary, sessionID)
 }
 
 func msInterstitialHTML(actionURL string) string {
@@ -113,9 +105,10 @@ func landingHTML(realStartURL string) string {
 
 // TestRelinkFullFlow drives the complete portal -> Microsoft -> portal HTTP
 // chain across both step-2 trigger hypotheses (href vs form) and both
-// post-password outcomes (straight back to the portal vs the "Stay signed
-// in?" interstitial), asserting that every hidden field the Microsoft forms
-// serve gets forwarded intact on the following POST.
+// post-combined-login outcomes (straight back to the portal vs the "Stay
+// signed in?" interstitial), asserting that the single combined POST built
+// from $Config carries every field intact (email/password plus $Config's
+// own flowToken/ctx/canary/sessionId).
 func TestRelinkFullFlow(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -142,10 +135,13 @@ func TestRelinkFullFlow(t *testing.T) {
 			setMicrosoftLoginHost(t, hostnameOf(msBase))
 
 			var (
-				emailStepCanary    string
-				gotEmail           string
-				passwordStepCanary string
-				gotPassword        string
+				gotLogin        string
+				gotLoginfmt     string
+				gotPasswd       string
+				gotFlowToken    string
+				gotCtx          string
+				gotCanary       string
+				gotHpgRequestID string
 			)
 
 			portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -164,22 +160,19 @@ func TestRelinkFullFlow(t *testing.T) {
 			})
 
 			msMux.HandleFunc("/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
-				fmt.Fprint(w, msStep1HTML("/oauth/step2"))
+				fmt.Fprint(w, msConfigHTML("/oauth/login", fixtureFlowToken, fixtureSCtx, fixtureCanary, fixtureSessionID))
 			})
-			msMux.HandleFunc("/oauth/step2", func(w http.ResponseWriter, r *http.Request) {
+			msMux.HandleFunc("/oauth/login", func(w http.ResponseWriter, r *http.Request) {
 				if err := r.ParseForm(); err != nil {
-					t.Fatalf("parse email-step form: %v", err)
+					t.Fatalf("parse combined login form: %v", err)
 				}
-				emailStepCanary = r.FormValue("canary")
-				gotEmail = r.FormValue("loginfmt")
-				fmt.Fprint(w, msStep2HTML("/oauth/step3"))
-			})
-			msMux.HandleFunc("/oauth/step3", func(w http.ResponseWriter, r *http.Request) {
-				if err := r.ParseForm(); err != nil {
-					t.Fatalf("parse password-step form: %v", err)
-				}
-				passwordStepCanary = r.FormValue("flowtoken")
-				gotPassword = r.FormValue("passwd")
+				gotLogin = r.FormValue("login")
+				gotLoginfmt = r.FormValue("loginfmt")
+				gotPasswd = r.FormValue("passwd")
+				gotFlowToken = r.FormValue("flowToken")
+				gotCtx = r.FormValue("ctx")
+				gotCanary = r.FormValue("canary")
+				gotHpgRequestID = r.FormValue("hpgrequestid")
 				if tc.interstitial {
 					fmt.Fprint(w, msInterstitialHTML("/oauth/interstitial-continue"))
 					return
@@ -204,17 +197,26 @@ func TestRelinkFullFlow(t *testing.T) {
 			if result.StartURL != fixtureStartURL {
 				t.Fatalf("StartURL = %q, want %q", result.StartURL, fixtureStartURL)
 			}
-			if emailStepCanary != fixtureLoginCanary {
-				t.Fatalf("email-step hidden canary not forwarded intact: got %q want %q", emailStepCanary, fixtureLoginCanary)
+			if gotLogin != MicrosoftEmail("jperez") {
+				t.Fatalf("gotLogin = %q, want %q", gotLogin, MicrosoftEmail("jperez"))
 			}
-			if gotEmail != MicrosoftEmail("jperez") {
-				t.Fatalf("gotEmail = %q, want %q", gotEmail, MicrosoftEmail("jperez"))
+			if gotLoginfmt != MicrosoftEmail("jperez") {
+				t.Fatalf("gotLoginfmt = %q, want %q", gotLoginfmt, MicrosoftEmail("jperez"))
 			}
-			if passwordStepCanary != fixturePasswordCanary {
-				t.Fatalf("password-step hidden flowtoken not forwarded intact: got %q want %q", passwordStepCanary, fixturePasswordCanary)
+			if gotPasswd != fixturePassword {
+				t.Fatalf("gotPasswd mismatch: got %q", gotPasswd)
 			}
-			if gotPassword != fixturePassword {
-				t.Fatalf("gotPassword mismatch: got %q", gotPassword)
+			if gotFlowToken != fixtureFlowToken {
+				t.Fatalf("gotFlowToken = %q, want %q", gotFlowToken, fixtureFlowToken)
+			}
+			if gotCtx != fixtureSCtx {
+				t.Fatalf("gotCtx = %q, want %q", gotCtx, fixtureSCtx)
+			}
+			if gotCanary != fixtureCanary {
+				t.Fatalf("gotCanary = %q, want %q", gotCanary, fixtureCanary)
+			}
+			if gotHpgRequestID != fixtureSessionID {
+				t.Fatalf("gotHpgRequestID = %q, want %q", gotHpgRequestID, fixtureSessionID)
 			}
 		})
 	}
@@ -245,12 +247,9 @@ func TestRelinkMFAWhenNoFormAfterPassword(t *testing.T) {
 	})
 
 	msMux.HandleFunc("/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, msStep1HTML("/oauth/step2"))
+		fmt.Fprint(w, msConfigHTML("/oauth/login", fixtureFlowToken, fixtureSCtx, fixtureCanary, fixtureSessionID))
 	})
-	msMux.HandleFunc("/oauth/step2", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, msStep2HTML("/oauth/step3"))
-	})
-	msMux.HandleFunc("/oauth/step3", func(w http.ResponseWriter, r *http.Request) {
+	msMux.HandleFunc("/oauth/login", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, msNoFormHTML())
 	})
 

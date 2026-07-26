@@ -5,15 +5,22 @@ package sso
 // must NEVER run in CI -- it is skipped unless UADE_LIVE_SSO_TEST=true is
 // set explicitly, and even then it talks to real, non-test accounts.
 //
-// If step 2 (the login trigger discovery in followLoginTrigger /
-// findLoginTrigger / resolveLoginTrigger) fails against the real site, the
-// human running this must capture the real /Account/Login HTML (e.g. a
-// temporary bounded t.Logf, or inspecting with curl/devtools -- never log
-// the full page unbounded, and never log credentials) and correct
-// findLoginTrigger/resolveLoginTrigger in internal/sso/relink.go before
-// treating the checkpoint as approved. Step 2 is the one piece of the
-// 8-step flow explore-sso-flow.js only confirmed via Playwright role
-// locators, not raw HTTP.
+// Step 2 (the login trigger discovery in followLoginTrigger /
+// findLoginTrigger / resolveLoginTrigger) was already confirmed correct
+// against the real site during the first 03.3-17 attempt (see
+// 03.3-17-live-verification-notes.md) -- it is not expected to fail again.
+//
+// If this run fails, the most likely point of failure is now the $Config
+// step this plan (03.3-18) introduced: either parseMicrosoftConfig in
+// msconfig.go (if Microsoft changed the $Config format/field names), or one
+// of the speculative fixed POST defaults in submitMicrosoftLogin in
+// relink.go (if one of those hardcoded hidden fields turns out to be
+// required with a different value than assumed -- see the block comment
+// there marking exactly which fields are speculative). The human running
+// this must capture the real Microsoft response (e.g. a temporary bounded
+// t.Logf, or inspecting with curl/devtools -- never log the full page
+// unbounded, and never log credentials) and correct msconfig.go/relink.go
+// accordingly before treating the checkpoint as approved.
 
 import (
 	"context"
