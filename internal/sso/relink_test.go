@@ -264,6 +264,20 @@ func TestRelinkMFAWhenNoFormAfterPassword(t *testing.T) {
 	if !result.Manual {
 		t.Fatalf("result.Manual = false, want true (result=%+v)", result)
 	}
+
+	diag, ok := MFADiagnosticsFrom(err)
+	if !ok {
+		t.Fatal("MFADiagnosticsFrom(err) ok = false, want true")
+	}
+	if diag.Hops != 0 {
+		t.Fatalf("diag.Hops = %d, want 0 (msNoFormHTML has no <form>, continueMicrosoftChain returns on its first iteration)", diag.Hops)
+	}
+	if diag.AADSTSCode != "" {
+		t.Fatalf("diag.AADSTSCode = %q, want empty string (fixture has no AADSTS code)", diag.AADSTSCode)
+	}
+	if diag.Host != hostnameOf(msBase) {
+		t.Fatalf("diag.Host = %q, want %q", diag.Host, hostnameOf(msBase))
+	}
 }
 
 // TestRelinkRejectsUnverifiedLoginTriggerHost proves the allowlist is

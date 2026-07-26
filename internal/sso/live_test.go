@@ -21,6 +21,18 @@ package sso
 // t.Logf, or inspecting with curl/devtools -- never log the full page
 // unbounded, and never log credentials) and correct msconfig.go/relink.go
 // accordingly before treating the checkpoint as approved.
+//
+// 03.3-19 added exactly that bounded capture: the real second attempt of
+// this checkpoint returned ErrMFARequired ("relink stopped at MFA/
+// additional verification") against a test account the user confirmed does
+// NOT have MFA enabled -- a false positive, most likely caused by the
+// speculative POST defaults in submitMicrosoftLogin (03.3-18) making
+// Microsoft reject the session or show an interstitial indistinguishable
+// from real MFA. If the MFA branch below fires again, COPY AND PASTE the
+// second t.Logf's full line (AADSTS code, host, path, hops) -- that is
+// exactly the evidence needed to correct msconfig.go/relink.go with a
+// targeted fix instead of another round of guessing at the speculative
+// defaults documented in 03.3-18.
 
 import (
 	"context"
@@ -73,6 +85,18 @@ func TestRelinkAgainstRealUADESite(t *testing.T) {
 		// must confirm manually whether the account used actually has
 		// MFA/additional verification enabled.
 		t.Logf("relink stopped at MFA/additional verification, as expected for an MFA account")
+		// 03.3-19: only these four non-sensitive fields ever cross into this
+		// log line -- never password/email/sFT/sCtx/canary/sessionId/
+		// hpgrequestid/the full HTML/the URL's query string.
+		if diag, ok := MFADiagnosticsFrom(err); ok {
+			code := diag.AADSTSCode
+			if code == "" {
+				code = "ninguno"
+			}
+			t.Logf("MFA diagnostics: aadsts=%s host=%s path=%s hops=%d", code, diag.Host, diag.Path, diag.Hops)
+		} else {
+			t.Logf("MFA diagnostics unavailable (unexpected: Relink should always enrich this error)")
+		}
 	default:
 		// internal/sso's errors are fixed sentinels/messages, never
 		// interpolated with secrets or full HTML, so it's safe to include

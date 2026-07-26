@@ -79,8 +79,9 @@ func Relink(ctx context.Context, client *http.Client, portalURL, user, password 
 		}
 	}
 
+	var hopsUsed int
 	if IsMicrosoftLogin(pageURL) {
-		pageURL, html, err = submitMicrosoftLogin(ctx, fetcher, pageURL, html, MicrosoftEmail(user), password)
+		pageURL, html, hopsUsed, err = submitMicrosoftLogin(ctx, fetcher, pageURL, html, MicrosoftEmail(user), password)
 		if err != nil {
 			return Result{}, err
 		}
@@ -89,8 +90,13 @@ func Relink(ctx context.Context, client *http.Client, portalURL, user, password 
 	if IsMicrosoftLogin(pageURL) {
 		// Never guess or submit a challenge/code value we weren't given --
 		// still on a Microsoft host after the password chain means MFA or
-		// another additional-verification step.
-		return Result{Manual: true}, ErrMFARequired
+		// another additional-verification step. newMFARequiredError enriches
+		// the sentinel with non-sensitive diagnostics (AADSTS code if
+		// present, host+path without query, hops consumed) recoverable via
+		// MFADiagnosticsFrom, while errors.Is(err, ErrMFARequired) still
+		// holds for every existing caller (Unwrap returns the sentinel
+		// itself -- see mfa_diagnostics.go).
+		return Result{Manual: true}, newMFARequiredError(pageURL, html, hopsUsed)
 	}
 
 	startURL, err := extractStartURL(html)
@@ -222,15 +228,15 @@ func collectFormValues(form *goquery.Selection) url.Values {
 // 03.3-17-live-verification-notes.md, "Paso 3"). Instead it reads the
 // $Config blob Microsoft actually ships and sends a single combined POST
 // with both credentials plus $Config's own anti-forgery/session values.
-func submitMicrosoftLogin(ctx context.Context, fetcher boundedFetcher, pageURL, html, email, password string) (string, string, error) {
+func submitMicrosoftLogin(ctx context.Context, fetcher boundedFetcher, pageURL, html, email, password string) (finalURL, finalHTML string, hopsUsed int, err error) {
 	cfg, err := parseMicrosoftConfig(html)
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 
 	target, err := resolveURL(pageURL, cfg.URLPost)
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 
 	values := url.Values{}
@@ -270,10 +276,10 @@ func submitMicrosoftLogin(ctx context.Context, fetcher boundedFetcher, pageURL, 
 
 	nextURL, nextHTML, err := fetcher.post(ctx, target, values)
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 	if !IsMicrosoftLogin(nextURL) {
-		return nextURL, nextHTML, nil
+		return nextURL, nextHTML, 0, nil
 	}
 	return continueMicrosoftChain(ctx, fetcher, nextURL, nextHTML)
 }
@@ -284,33 +290,34 @@ func submitMicrosoftLogin(ctx context.Context, fetcher boundedFetcher, pageURL, 
 // as hidden/default fields -- it never fabricates or completes a field it
 // wasn't given, so it can never evade a real challenge; a real challenge
 // simply exhausts the loop and Relink falls into ErrMFARequired.
-func continueMicrosoftChain(ctx context.Context, fetcher boundedFetcher, pageURL, html string) (string, string, error) {
+func continueMicrosoftChain(ctx context.Context, fetcher boundedFetcher, pageURL, html string) (finalURL, finalHTML string, hopsUsed int, err error) {
 	currentURL, currentHTML := pageURL, html
-	for hop := 0; IsMicrosoftLogin(currentURL) && hop < maxMicrosoftHops; hop++ {
-		doc, err := goquery.NewDocumentFromReader(strings.NewReader(currentHTML))
-		if err != nil {
-			return currentURL, currentHTML, nil
+	hop := 0
+	for ; IsMicrosoftLogin(currentURL) && hop < maxMicrosoftHops; hop++ {
+		doc, docErr := goquery.NewDocumentFromReader(strings.NewReader(currentHTML))
+		if docErr != nil {
+			return currentURL, currentHTML, hop, nil
 		}
 		form := doc.Find("form").First()
 		if form.Length() == 0 {
-			return currentURL, currentHTML, nil
+			return currentURL, currentHTML, hop, nil
 		}
 		values := collectFormValues(form)
 		target := currentURL
 		if action, _ := form.Attr("action"); strings.TrimSpace(action) != "" {
 			resolved, rErr := resolveURL(currentURL, action)
 			if rErr != nil {
-				return "", "", rErr
+				return "", "", hop, rErr
 			}
 			target = resolved
 		}
-		nextURL, nextHTML, err := fetcher.post(ctx, target, values)
-		if err != nil {
-			return "", "", err
+		nextURL, nextHTML, postErr := fetcher.post(ctx, target, values)
+		if postErr != nil {
+			return "", "", hop, postErr
 		}
 		currentURL, currentHTML = nextURL, nextHTML
 	}
-	return currentURL, currentHTML, nil
+	return currentURL, currentHTML, hop, nil
 }
 
 // extractStartURL reads the enrollment start URL straight out of the
