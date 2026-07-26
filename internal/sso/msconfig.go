@@ -17,6 +17,7 @@ package sso
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 )
 
@@ -118,4 +119,35 @@ func parseMicrosoftConfig(html string) (microsoftConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// extractMicrosoftConfigKeyNames returns the sorted key NAMES present in the
+// last $Config blob found in html -- never the values behind them. Per D-06
+// (03.3-CONTEXT.md), the key names of a third party's $Config are Microsoft's
+// own internal field identifiers, not secrets, and are safe to log; the
+// VALUES behind those keys never are, and this function never returns them.
+// It reuses extractMicrosoftConfigJSON (the same balanced-brace/string-aware
+// scanner parseMicrosoftConfig uses) and decodes into a generic
+// map[string]json.RawMessage -- unlike parseMicrosoftConfig's 5-field
+// microsoftConfig struct, every key present in the blob matters here, not
+// just the ones submitMicrosoftLogin needs. It fails closed to nil (never
+// panics) when there is no $Config marker at all or when the JSON is
+// malformed.
+func extractMicrosoftConfigKeyNames(html string) []string {
+	raw, err := extractMicrosoftConfigJSON(html)
+	if err != nil {
+		return nil
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		return nil
+	}
+
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

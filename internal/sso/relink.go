@@ -284,6 +284,30 @@ func submitMicrosoftLogin(ctx context.Context, fetcher boundedFetcher, pageURL, 
 	return continueMicrosoftChain(ctx, fetcher, nextURL, nextHTML)
 }
 
+// buildMicrosoftContinuePostValues builds the minimal POST body for
+// auto-continuing through a $Config-only Microsoft interstitial (no
+// server-rendered <form>) -- the same generalization submitMicrosoftLogin
+// already applies to the login step itself. Four of the six fields reuse
+// exactly the $Config values the server just served (same mapping already
+// used by submitMicrosoftLogin: flowToken/ctx/canary/hpgrequestid from
+// SFT/SCtx/Canary/SessionID). The remaining two, LoginOptions="1" and
+// type="28", are SPECULATIVE and NOT confirmed live -- they mirror the
+// general "ests" KMSI ("Stay signed in?") hidden-field pattern other
+// Microsoft/Azure AD login automation tooling reports, but have not been
+// observed against the real UADE tenant. If the 03.3-17 checkpoint fails
+// again at this exact step, THIS block is the first place to adjust (same
+// spirit as the speculative block already in submitMicrosoftLogin).
+func buildMicrosoftContinuePostValues(cfg microsoftConfig) url.Values {
+	values := url.Values{}
+	values.Set("flowToken", cfg.SFT)
+	values.Set("ctx", cfg.SCtx)
+	values.Set("canary", cfg.Canary)
+	values.Set("hpgrequestid", cfg.SessionID)
+	values.Set("LoginOptions", "1")
+	values.Set("type", "28")
+	return values
+}
+
 // continueMicrosoftChain auto-continues through interstitials such as
 // "Stay signed in?" and any auto-submit relay page, bounded to
 // maxMicrosoftHops. It only ever resubmits values the server already served

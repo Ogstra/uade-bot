@@ -327,6 +327,48 @@ func TestExtractStartURLMissingLinkFailsClosed(t *testing.T) {
 	}
 }
 
+// TestBuildMicrosoftContinuePostValues confirms the exact six-key mapping
+// buildMicrosoftContinuePostValues produces from a microsoftConfig fixture --
+// the four reused $Config values plus the two speculative fixed KMSI fields
+// documented in relink.go, and nothing else (in particular never a urlPost
+// form field -- the POST target is resolved separately, not submitted as a
+// form value).
+func TestBuildMicrosoftContinuePostValues(t *testing.T) {
+	cfg := microsoftConfig{
+		URLPost:   "/oauth/kmsi-continue",
+		SFT:       fixtureFlowToken,
+		SCtx:      fixtureSCtx,
+		Canary:    fixtureCanary,
+		SessionID: fixtureSessionID,
+	}
+	values := buildMicrosoftContinuePostValues(cfg)
+
+	if len(values) != 6 {
+		t.Fatalf("len(values) = %d, want 6 (values=%v)", len(values), values)
+	}
+	if got := values.Get("flowToken"); got != fixtureFlowToken {
+		t.Fatalf("flowToken = %q, want %q", got, fixtureFlowToken)
+	}
+	if got := values.Get("ctx"); got != fixtureSCtx {
+		t.Fatalf("ctx = %q, want %q", got, fixtureSCtx)
+	}
+	if got := values.Get("canary"); got != fixtureCanary {
+		t.Fatalf("canary = %q, want %q", got, fixtureCanary)
+	}
+	if got := values.Get("hpgrequestid"); got != fixtureSessionID {
+		t.Fatalf("hpgrequestid = %q, want %q", got, fixtureSessionID)
+	}
+	if got := values.Get("LoginOptions"); got != "1" {
+		t.Fatalf("LoginOptions = %q, want %q", got, "1")
+	}
+	if got := values.Get("type"); got != "28" {
+		t.Fatalf("type = %q, want %q", got, "28")
+	}
+	if values.Has("urlPost") {
+		t.Fatal("buildMicrosoftContinuePostValues must never submit urlPost as a form field")
+	}
+}
+
 func TestSSOURLHelpersFailClosed(t *testing.T) {
 	if MicrosoftEmail("jperez") != "jperez@uade.edu.ar" || MicrosoftEmail("jperez@example.com") != "jperez@example.com" {
 		t.Fatal("Microsoft email normalization mismatch")

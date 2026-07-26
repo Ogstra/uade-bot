@@ -135,6 +135,61 @@ func TestParseMicrosoftConfigMissingRequiredFieldsFailsClosed(t *testing.T) {
 	}
 }
 
+// TestExtractMicrosoftConfigKeyNames covers extractMicrosoftConfigKeyNames'
+// four required behaviors: it returns exactly the sorted key NAMES of a
+// present $Config (never the values behind them, even for nested/nonstring
+// fields), nil when there is no $Config marker at all, and nil (never a
+// panic) when the marker is present but the JSON is malformed.
+func TestExtractMicrosoftConfigKeyNames(t *testing.T) {
+	t.Run("PopulatedReturnsSortedKeyNamesInExactOrder", func(t *testing.T) {
+		html := msConfigScriptHTML(msconfigFixtureURLPost, msconfigFixtureSFT, msconfigFixtureSCtxBraced, msconfigFixtureCanary, msconfigFixtureSessionID)
+		got := extractMicrosoftConfigKeyNames(html)
+		want := []string{"anotherIgnoredField", "canary", "extraNestedField", "sCtx", "sFT", "sessionId", "urlPost"}
+		if len(got) != len(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("got %v, want %v", got, want)
+			}
+		}
+	})
+
+	t.Run("NoMarkerReturnsNil", func(t *testing.T) {
+		if got := extractMicrosoftConfigKeyNames(`<html><body>no config here</body></html>`); got != nil {
+			t.Fatalf("got %v, want nil", got)
+		}
+	})
+
+	t.Run("MalformedJSONReturnsNilWithoutPanic", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("extractMicrosoftConfigKeyNames panicked: %v", r)
+			}
+		}()
+		html := `<html><body><script>$Config={"urlPost":"/x","sFT":,};</script></body></html>`
+		if got := extractMicrosoftConfigKeyNames(html); got != nil {
+			t.Fatalf("got %v, want nil", got)
+		}
+	})
+
+	t.Run("NeverLeaksFieldValues", func(t *testing.T) {
+		html := msConfigScriptHTML(msconfigFixtureURLPost, msconfigFixtureSFT, msconfigFixtureSCtxBraced, msconfigFixtureCanary, msconfigFixtureSessionID)
+		got := extractMicrosoftConfigKeyNames(html)
+		joined := strings.Join(got, ",")
+		for _, secret := range []string{
+			msconfigFixtureSFT,
+			msconfigFixtureSCtxBraced,
+			msconfigFixtureCanary,
+			msconfigFixtureSessionID,
+		} {
+			if strings.Contains(joined, secret) {
+				t.Fatalf("extractMicrosoftConfigKeyNames leaked a field value: %q contains %q", joined, secret)
+			}
+		}
+	})
+}
+
 // TestParseMicrosoftConfigErrorNeverLeaksSecrets confirms that none of the
 // fixture's synthetic secret-shaped values ever appear inside an error's
 // .Error() string -- internal/sso's errors are fixed sentinels, never
