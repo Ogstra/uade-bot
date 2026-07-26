@@ -397,16 +397,29 @@ func continueMicrosoftChain(ctx context.Context, fetcher boundedFetcher, pageURL
 // extractStartURL reads the enrollment start URL straight out of the
 // data-linkid attribute -- no click needed, and no Bootstrap tab activation
 // needed either: data-linkid sits in the served HTML regardless of the
-// display:none tab-pane state. The selector pins both class and
-// data-tipolink because data-tipolink alone is not unique (Phase 3.1 live
-// UAT: UADE's MRI listing carries the same data-tipolink value earlier in
-// the DOM).
+// display:none tab-pane state. It first scopes to the .panel.panel-primary
+// block whose own heading (.lbl-inscripciones) starts with "Asignaturas" via
+// asignaturasPanel (panel.go), then searches for the
+// a.inscribite[data-tipolink="InscripcionAsignatura"] link ONLY within that
+// panel -- data-tipolink alone is NOT unique (UADE's MRI listing carries the
+// exact same value and sits earlier in the DOM), so scoping by class and
+// data-tipolink without also scoping by panel silently picks MRI's link
+// instead of the correct one. This is a real production bug already fixed
+// live in the Node predecessor (commit 1d56530, confirmed 2026-07-12) that
+// this Go port had replicated -- see panel.go's header comment and
+// 03.3-22-PLAN.md for the full writeup. Fails closed (ErrInvalidStartURL)
+// when no Asignaturas panel exists at all, when that panel has no matching
+// link, or when the matching link has no non-empty data-linkid.
 func extractStartURL(html string) (string, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return "", ErrInvalidStartURL
 	}
-	link := doc.Find(`a.inscribite[data-tipolink="InscripcionAsignatura"]`).First()
+	panel := asignaturasPanel(doc)
+	if panel.Length() == 0 {
+		return "", ErrInvalidStartURL
+	}
+	link := panel.Find(inscripcionAsignaturaLinkSelector).First()
 	if link.Length() == 0 {
 		return "", ErrInvalidStartURL
 	}
