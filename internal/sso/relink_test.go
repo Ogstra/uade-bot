@@ -39,6 +39,18 @@ const (
 	fixtureSessionID = "session-fixed-value-1"
 	fixturePassword  = "s3cr3t!"
 	fixtureStartURL  = "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx?param=abc123"
+
+	// fixtureKmsi* simulate a SECOND, distinct $Config blob served by a
+	// $Config-only interstitial after the combined login POST (the KMSI
+	// "Stay signed in?" hypothesis this plan generalizes
+	// continueMicrosoftChain for) -- deliberately different from
+	// fixtureFlowToken/fixtureSCtx/fixtureCanary/fixtureSessionID above so a
+	// test asserting on these values could not pass "by accident" against
+	// the first $Config's values.
+	fixtureKmsiFlowToken = "flowtoken-kmsi-fixed-456"
+	fixtureKmsiSCtx      = "ctx-kmsi-fixed-2"
+	fixtureKmsiCanary    = "canary-kmsi-fixed-def456"
+	fixtureKmsiSessionID = "session-kmsi-fixed-2"
 )
 
 func localhostURL(rawURL string) string {
@@ -277,6 +289,160 @@ func TestRelinkMFAWhenNoFormAfterPassword(t *testing.T) {
 	}
 	if diag.Host != hostnameOf(msBase) {
 		t.Fatalf("diag.Host = %q, want %q", diag.Host, hostnameOf(msBase))
+	}
+}
+
+// TestRelinkAutoContinuesConfigOnlyInterstitial covers the KMSI ("Stay
+// signed in?") hypothesis this plan generalizes continueMicrosoftChain for:
+// after the combined login POST, Microsoft serves ANOTHER page with no
+// <form> at all but a second, distinct $Config blob (simulating the
+// interstitial documented in explore-sso-flow.js lines ~217-234, confirmed
+// live 2026-07-12). Relink must auto-continue through it via
+// continueViaMicrosoftConfig, completing successfully instead of falling
+// into ErrMFARequired -- and the continuation endpoint must have received
+// exactly the six fields buildMicrosoftContinuePostValues documents (four
+// reused from the second $Config plus the two speculative fixed fields).
+func TestRelinkAutoContinuesConfigOnlyInterstitial(t *testing.T) {
+	portalMux := http.NewServeMux()
+	msMux := http.NewServeMux()
+
+	portalSrv := httptest.NewServer(portalMux)
+	defer portalSrv.Close()
+	msSrv := httptest.NewServer(msMux)
+	defer msSrv.Close()
+	msBase := localhostURL(msSrv.URL)
+
+	setMicrosoftLoginHost(t, hostnameOf(msBase))
+
+	var (
+		gotFlowToken    string
+		gotCtx          string
+		gotCanary       string
+		gotHpgRequestID string
+		gotLoginOptions string
+		gotType         string
+	)
+
+	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/Account/Login", http.StatusFound)
+	})
+	portalMux.HandleFunc("/Account/Login", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, portalLoginHrefHTML(msBase+"/oauth/authorize"))
+	})
+	portalMux.HandleFunc("/landing", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, landingHTML(fixtureStartURL))
+	})
+
+	msMux.HandleFunc("/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, msConfigHTML("/oauth/login", fixtureFlowToken, fixtureSCtx, fixtureCanary, fixtureSessionID))
+	})
+	msMux.HandleFunc("/oauth/login", func(w http.ResponseWriter, r *http.Request) {
+		// The $Config-only interstitial: no <form> anywhere in this HTML,
+		// only a second, distinct $Config blob.
+		fmt.Fprint(w, msConfigHTML("/oauth/kmsi-continue", fixtureKmsiFlowToken, fixtureKmsiSCtx, fixtureKmsiCanary, fixtureKmsiSessionID))
+	})
+	msMux.HandleFunc("/oauth/kmsi-continue", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse kmsi-continue form: %v", err)
+		}
+		gotFlowToken = r.FormValue("flowToken")
+		gotCtx = r.FormValue("ctx")
+		gotCanary = r.FormValue("canary")
+		gotHpgRequestID = r.FormValue("hpgrequestid")
+		gotLoginOptions = r.FormValue("LoginOptions")
+		gotType = r.FormValue("type")
+		http.Redirect(w, r, portalSrv.URL+"/landing", http.StatusFound)
+	})
+
+	client, err := NewClient(portalSrv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	result, err := Relink(context.Background(), client, portalSrv.URL, "jperez", fixturePassword)
+	if err != nil {
+		t.Fatalf("Relink error: %v", err)
+	}
+	if result.Manual {
+		t.Fatalf("unexpected Manual=true result=%+v", result)
+	}
+	if result.StartURL != fixtureStartURL {
+		t.Fatalf("StartURL = %q, want %q", result.StartURL, fixtureStartURL)
+	}
+	if gotFlowToken != fixtureKmsiFlowToken {
+		t.Fatalf("gotFlowToken = %q, want %q", gotFlowToken, fixtureKmsiFlowToken)
+	}
+	if gotCtx != fixtureKmsiSCtx {
+		t.Fatalf("gotCtx = %q, want %q", gotCtx, fixtureKmsiSCtx)
+	}
+	if gotCanary != fixtureKmsiCanary {
+		t.Fatalf("gotCanary = %q, want %q", gotCanary, fixtureKmsiCanary)
+	}
+	if gotHpgRequestID != fixtureKmsiSessionID {
+		t.Fatalf("gotHpgRequestID = %q, want %q", gotHpgRequestID, fixtureKmsiSessionID)
+	}
+	if gotLoginOptions != "1" {
+		t.Fatalf("gotLoginOptions = %q, want %q", gotLoginOptions, "1")
+	}
+	if gotType != "28" {
+		t.Fatalf("gotType = %q, want %q", gotType, "28")
+	}
+}
+
+// TestRelinkStillMFAWhenSecondHopHasNoFormOrConfig proves the fail-closed
+// behavior is preserved byte for byte: the FIRST hop after the combined
+// login POST is the same $Config-only interstitial as
+// TestRelinkAutoContinuesConfigOnlyInterstitial (and IS auto-continued), but
+// the continuation endpoint this time serves a genuinely unknown page (no
+// <form>, no $Config -- e.g. a real MFA prompt). Relink must still return
+// ErrMFARequired, with diag.Hops == 1 confirming the first $Config hop DID
+// complete before the second, truly unknown hop stopped the chain.
+func TestRelinkStillMFAWhenSecondHopHasNoFormOrConfig(t *testing.T) {
+	portalMux := http.NewServeMux()
+	msMux := http.NewServeMux()
+
+	portalSrv := httptest.NewServer(portalMux)
+	defer portalSrv.Close()
+	msSrv := httptest.NewServer(msMux)
+	defer msSrv.Close()
+	msBase := localhostURL(msSrv.URL)
+
+	setMicrosoftLoginHost(t, hostnameOf(msBase))
+
+	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/Account/Login", http.StatusFound)
+	})
+	portalMux.HandleFunc("/Account/Login", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, portalLoginHrefHTML(msBase+"/oauth/authorize"))
+	})
+
+	msMux.HandleFunc("/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, msConfigHTML("/oauth/login", fixtureFlowToken, fixtureSCtx, fixtureCanary, fixtureSessionID))
+	})
+	msMux.HandleFunc("/oauth/login", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, msConfigHTML("/oauth/kmsi-continue", fixtureKmsiFlowToken, fixtureKmsiSCtx, fixtureKmsiCanary, fixtureKmsiSessionID))
+	})
+	msMux.HandleFunc("/oauth/kmsi-continue", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, msNoFormHTML())
+	})
+
+	client, err := NewClient(portalSrv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	result, err := Relink(context.Background(), client, portalSrv.URL, "jperez", fixturePassword)
+	if !errors.Is(err, ErrMFARequired) {
+		t.Fatalf("err = %v, want ErrMFARequired", err)
+	}
+	if !result.Manual {
+		t.Fatalf("result.Manual = false, want true (result=%+v)", result)
+	}
+
+	diag, ok := MFADiagnosticsFrom(err)
+	if !ok {
+		t.Fatal("MFADiagnosticsFrom(err) ok = false, want true")
+	}
+	if diag.Hops != 1 {
+		t.Fatalf("diag.Hops = %d, want 1 (first hop auto-continued via $Config, second hop is genuinely unknown)", diag.Hops)
 	}
 }
 

@@ -308,12 +308,46 @@ func buildMicrosoftContinuePostValues(cfg microsoftConfig) url.Values {
 	return values
 }
 
+// continueViaMicrosoftConfig attempts to auto-continue a Microsoft page that
+// has no server-rendered <form> by parsing a $Config blob instead -- the
+// same generalization submitMicrosoftLogin already applies to the login
+// step, reused here via parseMicrosoftConfig without duplicating any
+// parsing logic. attempted=false (with err=nil) means "no $Config either",
+// i.e. a genuinely unknown page: the caller must preserve the original
+// fail-closed behavior rather than treating this as success. attempted=true
+// with a non-nil err means the $Config WAS found but resolving its target or
+// posting to it failed -- a real error, never to be treated as silent
+// "could not continue".
+func continueViaMicrosoftConfig(ctx context.Context, fetcher boundedFetcher, pageURL, html string) (nextURL, nextHTML string, attempted bool, err error) {
+	cfg, cfgErr := parseMicrosoftConfig(html)
+	if cfgErr != nil {
+		return "", "", false, nil
+	}
+
+	target, resolveErr := resolveURL(pageURL, cfg.URLPost)
+	if resolveErr != nil {
+		return "", "", true, resolveErr
+	}
+
+	values := buildMicrosoftContinuePostValues(cfg)
+	nextURL, nextHTML, postErr := fetcher.post(ctx, target, values)
+	if postErr != nil {
+		return "", "", true, postErr
+	}
+	return nextURL, nextHTML, true, nil
+}
+
 // continueMicrosoftChain auto-continues through interstitials such as
 // "Stay signed in?" and any auto-submit relay page, bounded to
 // maxMicrosoftHops. It only ever resubmits values the server already served
 // as hidden/default fields -- it never fabricates or completes a field it
 // wasn't given, so it can never evade a real challenge; a real challenge
-// simply exhausts the loop and Relink falls into ErrMFARequired.
+// simply exhausts the loop and Relink falls into ErrMFARequired. When a hop
+// has no <form>, it now ALSO tries continueViaMicrosoftConfig (parsing a
+// $Config blob instead) before giving up -- the same generalization
+// submitMicrosoftLogin already applies to the login step. A page with
+// neither a <form> nor a parseable $Config is still genuinely unknown and
+// preserves the original fail-closed return byte for byte.
 func continueMicrosoftChain(ctx context.Context, fetcher boundedFetcher, pageURL, html string) (finalURL, finalHTML string, hopsUsed int, err error) {
 	currentURL, currentHTML := pageURL, html
 	hop := 0
@@ -324,7 +358,17 @@ func continueMicrosoftChain(ctx context.Context, fetcher boundedFetcher, pageURL
 		}
 		form := doc.Find("form").First()
 		if form.Length() == 0 {
-			return currentURL, currentHTML, hop, nil
+			nextURL, nextHTML, attempted, cfgErr := continueViaMicrosoftConfig(ctx, fetcher, currentURL, currentHTML)
+			if !attempted {
+				// No <form>, no $Config either -- genuinely unknown page,
+				// preserve the original fail-closed behavior unchanged.
+				return currentURL, currentHTML, hop, nil
+			}
+			if cfgErr != nil {
+				return "", "", hop, cfgErr
+			}
+			currentURL, currentHTML = nextURL, nextHTML
+			continue
 		}
 		values := collectFormValues(form)
 		target := currentURL
