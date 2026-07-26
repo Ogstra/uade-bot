@@ -40,6 +40,12 @@ const (
 	fixturePassword  = "s3cr3t!"
 	fixtureStartURL  = "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx?param=abc123"
 
+	// fixtureMRIDecoyLinkID is the MRI panel's own InscripcionAsignatura
+	// link in landingHTMLMRIBeforeAsignaturas -- a value distinct from
+	// fixtureStartURL and every other fixture* constant in this file, so a
+	// test asserting on it could never pass "by accident".
+	fixtureMRIDecoyLinkID = "https://inscripcionespia.uade.edu.ar/x?param=RELINKMRISECRET001"
+
 	// fixtureKmsi* simulate a SECOND, distinct $Config blob served by a
 	// $Config-only interstitial after the combined login POST (the KMSI
 	// "Stay signed in?" hypothesis this plan generalizes
@@ -108,11 +114,59 @@ func msNoFormHTML() string {
 	return `<html><body><p>Ingresá el código de verificación enviado a tu teléfono.</p></body></html>`
 }
 
+// landingHTML wraps both links in the real .panel.panel-primary /
+// .lbl-inscripciones panel structure extractStartURL now scopes its search
+// to (03.3-22) -- the decoy link sits under a heading that does NOT start
+// with "Asignaturas" (so it stays a decoy even now that panel-scoping is
+// active), and the real link sits under "Asignaturas 2do Cuatrimestre
+// 2026". Neither realStartURL nor either link's data-tipolink changed --
+// only the panel wrapper around them.
 func landingHTML(realStartURL string) string {
 	return fmt.Sprintf(`<html><body>
-<a class="link-inscripciones inscribite" data-tipolink="OtroModulo" data-linkid="https://inscripcionespia.uade.edu.ar/decoy?param=zzz">Otro módulo</a>
-<a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura" data-linkid="%s">¡INSCRIBITE!</a>
+<div class="panel panel-primary">
+  <div class="panel-body">
+    <div class="row list-group-item_on">
+      <span class="lbl-inscripciones">Otro Módulo 2do Cuatrimestre 2026</span>
+    </div>
+    <a class="link-inscripciones inscribite" data-tipolink="OtroModulo" data-linkid="https://inscripcionespia.uade.edu.ar/decoy?param=zzz">Otro módulo</a>
+  </div>
+</div>
+<div class="panel panel-primary">
+  <div class="panel-body">
+    <div class="row list-group-item_on">
+      <span class="lbl-inscripciones">Asignaturas 2do Cuatrimestre 2026</span>
+    </div>
+    <a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura" data-linkid="%s">¡INSCRIBITE!</a>
+  </div>
+</div>
 </body></html>`, realStartURL)
+}
+
+// landingHTMLMRIBeforeAsignaturas is the byte-accurate regression fixture
+// for the real production bug fixed live in Node (commit 1d56530, confirmed
+// 2026-07-12, see src/automation/sso-relink-uat-checklist.md): the MRI
+// panel -- sharing the EXACT SAME data-tipolink="InscripcionAsignatura" as
+// the real Asignaturas panel -- is served FIRST in the DOM, followed by the
+// real Asignaturas panel. Only the panel heading text distinguishes them.
+func landingHTMLMRIBeforeAsignaturas(realStartURL string) string {
+	return fmt.Sprintf(`<html><body>
+<div class="panel panel-primary">
+  <div class="panel-body">
+    <div class="row list-group-item_on">
+      <span class="lbl-inscripciones">Cursos Regulares Intensivos (MRI) 1er Cuatrimestre 2026</span>
+    </div>
+    <a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura" data-linkid="%s">¡INSCRIBITE!</a>
+  </div>
+</div>
+<div class="panel panel-primary">
+  <div class="panel-body">
+    <div class="row list-group-item_on">
+      <span class="lbl-inscripciones">Asignaturas 2do Cuatrimestre 2026</span>
+    </div>
+    <a class="link-inscripciones inscribite" data-tipolink="InscripcionAsignatura" data-linkid="%s">¡INSCRIBITE!</a>
+  </div>
+</div>
+</body></html>`, fixtureMRIDecoyLinkID, realStartURL)
 }
 
 // landingHTMLNoInscribeteLinks simulates hypothesis A of 03.3-21: the final
@@ -251,6 +305,65 @@ func TestRelinkFullFlow(t *testing.T) {
 				t.Fatalf("gotHpgRequestID = %q, want %q", gotHpgRequestID, fixtureSessionID)
 			}
 		})
+	}
+}
+
+// TestRelinkExtractsAsignaturasLinkNotMRIPanel is the end-to-end regression
+// test for the real production bug fixed live in Node (commit 1d56530,
+// confirmed 2026-07-12): it drives the SAME httptest scaffolding as
+// TestRelinkFullFlow's HrefTrigger_DirectLanding case (login trigger via
+// <a href>, msConfigHTML for the combined submit, direct redirect to
+// /landing with no interstitial) but serves
+// landingHTMLMRIBeforeAsignaturas -- the MRI panel sharing the same
+// data-tipolink="InscripcionAsignatura", positioned BEFORE the Asignaturas
+// panel in the DOM -- and confirms Relink() (the full HTTP flow, not just
+// extractStartURL in isolation) extracts the Asignaturas panel's link and
+// never the MRI panel's, despite DOM order.
+func TestRelinkExtractsAsignaturasLinkNotMRIPanel(t *testing.T) {
+	portalMux := http.NewServeMux()
+	msMux := http.NewServeMux()
+
+	portalSrv := httptest.NewServer(portalMux)
+	defer portalSrv.Close()
+	msSrv := httptest.NewServer(msMux)
+	defer msSrv.Close()
+	msBase := localhostURL(msSrv.URL)
+
+	setMicrosoftLoginHost(t, hostnameOf(msBase))
+
+	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/Account/Login", http.StatusFound)
+	})
+	portalMux.HandleFunc("/Account/Login", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, portalLoginHrefHTML(msBase+"/oauth/authorize"))
+	})
+	portalMux.HandleFunc("/landing", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, landingHTMLMRIBeforeAsignaturas(fixtureStartURL))
+	})
+
+	msMux.HandleFunc("/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, msConfigHTML("/oauth/login", fixtureFlowToken, fixtureSCtx, fixtureCanary, fixtureSessionID))
+	})
+	msMux.HandleFunc("/oauth/login", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, portalSrv.URL+"/landing", http.StatusFound)
+	})
+
+	client, err := NewClient(portalSrv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	result, err := Relink(context.Background(), client, portalSrv.URL, "jperez", fixturePassword)
+	if err != nil {
+		t.Fatalf("Relink error: %v", err)
+	}
+	if result.Manual {
+		t.Fatalf("unexpected Manual=true result=%+v", result)
+	}
+	if result.StartURL != fixtureStartURL {
+		t.Fatalf("StartURL = %q, want %q (the Asignaturas panel's link)", result.StartURL, fixtureStartURL)
+	}
+	if result.StartURL == fixtureMRIDecoyLinkID {
+		t.Fatalf("StartURL = %q, the MRI panel's link -- regression of the real production bug fixed in Node (commit 1d56530), despite it appearing first in the DOM", result.StartURL)
 	}
 }
 
