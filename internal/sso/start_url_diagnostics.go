@@ -16,6 +16,16 @@ package sso
 //     extractStartURL's own comment, e.g. "InscripcionAsignatura" vs.
 //     "Cursos Regulares Intensivos (MRI)") -- not a secret.
 //   - BootstrapTabPresent: just a boolean about page structure.
+//   - AsignaturasPanelFound/AsignaturasPanelLinkCount (03.3-22): also just a
+//     boolean and a plain count, exactly as safe as the fields above --
+//     added after 03.3-22 scoped extractStartURL's link search to the
+//     Asignaturas panel (panel.go), to distinguish a THIRD hypothesis
+//     TestRelink's original two couldn't: (A) no InscripcionAsignatura
+//     enrollment at all (InscribeteLinkCount == 0), (B) the panel exists but
+//     has no matching link inside it (AsignaturasPanelFound == true,
+//     AsignaturasPanelLinkCount == 0), or (C) no Asignaturas panel exists at
+//     all (AsignaturasPanelFound == false) even though some OTHER panel
+//     (e.g. MRI) has a link sharing the same data-tipolink.
 //   - Host/Path: captured WITHOUT the query string, which can carry
 //     session-shaped values.
 //
@@ -23,7 +33,9 @@ package sso
 // session credential) is NEVER read by this file -- unlike the "start url
 // length=N" the success path already logs in live_test.go, this file
 // deliberately exposes no length or any other derived signal about
-// data-linkid at all. That asymmetry is intentional.
+// data-linkid at all. That asymmetry is intentional. Nor does this file ever
+// read/log the .lbl-inscripciones heading TEXT itself -- only whether a
+// panel matching it exists (bool) and how many links sit inside it (int).
 
 import (
 	"errors"
@@ -36,13 +48,15 @@ import (
 
 // StartURLDiagnostics carries exactly the non-sensitive diagnostic fields
 // described above. No other field may be added to this struct -- in
-// particular never data-linkid or anything derived from it.
+// particular never data-linkid or the .lbl-inscripciones heading text.
 type StartURLDiagnostics struct {
-	InscribeteLinkCount int
-	DataTipolinkValues  []string
-	BootstrapTabPresent bool
-	Host                string
-	Path                string
+	InscribeteLinkCount       int
+	DataTipolinkValues        []string
+	BootstrapTabPresent       bool
+	AsignaturasPanelFound     bool
+	AsignaturasPanelLinkCount int
+	Host                      string
+	Path                      string
 }
 
 // extractStartURLDiagnostics scans html for every a.inscribite element
@@ -77,6 +91,16 @@ func extractStartURLDiagnostics(html string) StartURLDiagnostics {
 		}
 		sort.Strings(values)
 		diag.DataTipolinkValues = values
+	}
+
+	// 03.3-22: reuse the same panel-scoping helper extractStartURL itself
+	// uses (panel.go), so this diagnostic distinguishes "no Asignaturas
+	// panel exists at all" from "the panel exists but has no matching link
+	// inside it" -- see this file's header comment.
+	panel := asignaturasPanel(doc)
+	diag.AsignaturasPanelFound = panel.Length() > 0
+	if diag.AsignaturasPanelFound {
+		diag.AsignaturasPanelLinkCount = panel.Find(inscripcionAsignaturaLinkSelector).Length()
 	}
 
 	return diag

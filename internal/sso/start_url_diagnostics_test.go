@@ -99,16 +99,79 @@ func TestExtractStartURLDiagnosticsNoPanic(t *testing.T) {
 		}
 	}()
 
-	if diag := extractStartURLDiagnostics(""); diag.InscribeteLinkCount != 0 {
-		t.Fatalf("extractStartURLDiagnostics(empty).InscribeteLinkCount = %d, want 0", diag.InscribeteLinkCount)
+	if diag := extractStartURLDiagnostics(""); diag.InscribeteLinkCount != 0 || diag.AsignaturasPanelFound || diag.AsignaturasPanelLinkCount != 0 {
+		t.Fatalf("extractStartURLDiagnostics(empty) = %+v, want zero values", diag)
 	}
-	if diag := extractStartURLDiagnostics(`<html><body><div class="unclosed`); diag.InscribeteLinkCount != 0 {
-		t.Fatalf("extractStartURLDiagnostics(malformed).InscribeteLinkCount = %d, want 0", diag.InscribeteLinkCount)
+	if diag := extractStartURLDiagnostics(`<html><body><div class="unclosed`); diag.InscribeteLinkCount != 0 || diag.AsignaturasPanelFound || diag.AsignaturasPanelLinkCount != 0 {
+		t.Fatalf("extractStartURLDiagnostics(malformed) = %+v, want zero values", diag)
 	}
 	large := `<html><body>` + strings.Repeat("<p>no inscribete link here</p>", 10_000) + `</body></html>`
-	if diag := extractStartURLDiagnostics(large); diag.InscribeteLinkCount != 0 {
-		t.Fatalf("extractStartURLDiagnostics(large).InscribeteLinkCount = %d, want 0", diag.InscribeteLinkCount)
+	if diag := extractStartURLDiagnostics(large); diag.InscribeteLinkCount != 0 || diag.AsignaturasPanelFound || diag.AsignaturasPanelLinkCount != 0 {
+		t.Fatalf("extractStartURLDiagnostics(large) = %+v, want zero values", diag)
 	}
+}
+
+// TestExtractStartURLDiagnosticsAsignaturasPanel covers the three states
+// AsignaturasPanelFound/AsignaturasPanelLinkCount (03.3-22) distinguish: the
+// panel present with a link inside, the panel present but empty of matching
+// links, and no matching panel at all (only an MRI panel, sharing the same
+// data-tipolink, to prove this doesn't get confused with "any inscribite
+// link exists somewhere").
+func TestExtractStartURLDiagnosticsAsignaturasPanel(t *testing.T) {
+	t.Run("PanelWithLink", func(t *testing.T) {
+		html := `<html><body>
+<div class="panel panel-primary">
+  <div class="panel-body">
+    <span class="lbl-inscripciones">Asignaturas 2do Cuatrimestre 2026</span>
+    <a class="inscribite" data-tipolink="InscripcionAsignatura" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=aaa">Link</a>
+  </div>
+</div>
+</body></html>`
+		diag := extractStartURLDiagnostics(html)
+		if !diag.AsignaturasPanelFound {
+			t.Fatal("AsignaturasPanelFound = false, want true")
+		}
+		if diag.AsignaturasPanelLinkCount != 1 {
+			t.Fatalf("AsignaturasPanelLinkCount = %d, want 1", diag.AsignaturasPanelLinkCount)
+		}
+	})
+
+	t.Run("PanelWithoutLink", func(t *testing.T) {
+		html := `<html><body>
+<div class="panel panel-primary">
+  <div class="panel-body">
+    <span class="lbl-inscripciones">Asignaturas 2do Cuatrimestre 2026</span>
+    <p>No hay inscripciones disponibles.</p>
+    <a class="inscribite" data-tipolink="OtroModulo" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=bbb">Otro</a>
+  </div>
+</div>
+</body></html>`
+		diag := extractStartURLDiagnostics(html)
+		if !diag.AsignaturasPanelFound {
+			t.Fatal("AsignaturasPanelFound = false, want true")
+		}
+		if diag.AsignaturasPanelLinkCount != 0 {
+			t.Fatalf("AsignaturasPanelLinkCount = %d, want 0", diag.AsignaturasPanelLinkCount)
+		}
+	})
+
+	t.Run("NoAsignaturasPanel", func(t *testing.T) {
+		html := `<html><body>
+<div class="panel panel-primary">
+  <div class="panel-body">
+    <span class="lbl-inscripciones">Cursos Regulares Intensivos (MRI) 1er Cuatrimestre 2026</span>
+    <a class="inscribite" data-tipolink="InscripcionAsignatura" data-linkid="https://inscripcionespia.uade.edu.ar/x?param=ccc">Link</a>
+  </div>
+</div>
+</body></html>`
+		diag := extractStartURLDiagnostics(html)
+		if diag.AsignaturasPanelFound {
+			t.Fatal("AsignaturasPanelFound = true, want false")
+		}
+		if diag.AsignaturasPanelLinkCount != 0 {
+			t.Fatalf("AsignaturasPanelLinkCount = %d, want 0", diag.AsignaturasPanelLinkCount)
+		}
+	})
 }
 
 // TestStartURLErrorPreservesSentinel proves startURLError never changes

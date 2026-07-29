@@ -709,6 +709,11 @@ func TestRelinkAttachesStartURLDiagnostics(t *testing.T) {
 			if diag.Host != hostnameOf(portalSrv.URL) {
 				t.Fatalf("diag.Host = %q, want %q (final page is back on the portal, not Microsoft)", diag.Host, hostnameOf(portalSrv.URL))
 			}
+			// 03.3-22: neither fixture has an Asignaturas panel at all, so both
+			// must report AsignaturasPanelFound == false, not just "no link".
+			if diag.AsignaturasPanelFound {
+				t.Fatal("diag.AsignaturasPanelFound = true, want false (neither fixture has an Asignaturas panel)")
+			}
 
 			serialized := fmt.Sprintf("%+v", diag)
 			for _, secret := range tc.secretSubstrings {

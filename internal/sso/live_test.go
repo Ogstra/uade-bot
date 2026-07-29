@@ -72,9 +72,35 @@ package sso
 //     a concrete lead for a follow-up plan to adjust extractStartURL's
 //     filter, informed by the real values observed here.
 //
-// If the ErrInvalidStartURL branch below fires, COPY AND PASTE its full
-// t.Logf line (a.inscribite count, data-tipolink values, Bootstrap tab
-// presence, host, path) before treating this checkpoint as failed.
+// The fifth attempt returned inscribeteLinkCount=0 -- hypothesis A,
+// consistent with no enrollment window open at the time, not a bug. But
+// while reviewing that result, a REAL and separate bug surfaced: the
+// predecessor Node implementation (src/automation/sso-link.js, deleted by
+// commit 44c5e71 but recoverable via `git show 1d56530`) fixed live on
+// 2026-07-12 (commit 1d56530, confirmed in
+// src/automation/sso-relink-uat-checklist.md) that
+// data-tipolink="InscripcionAsignatura" is NOT unique -- the MRI (Cursos
+// Regulares Intensivos) listing's link carries the exact same value and
+// sits earlier in the DOM, so an unscoped selector silently picks MRI's
+// link instead. explore-sso-flow.js (the source 03.3-14 ported
+// extractStartURL from) predates that fix and never mentions it, so Go's
+// port reintroduced the already-fixed Node bug. 03.3-22 (sixth reopening)
+// ported the real fix: extractStartURL now scopes its search to the
+// .panel.panel-primary whose own .lbl-inscripciones heading starts with
+// "Asignaturas", exactly like Node's asignaturasPanelLocator/
+// inscripcionLinkLocator, with a regression test reproducing the MRI-
+// before-Asignaturas DOM order. It also added
+// AsignaturasPanelFound/AsignaturasPanelLinkCount to the diagnostics below,
+// splitting hypothesis B into: no Asignaturas panel at all vs. panel
+// present but empty of matching links -- neither one on its own proves
+// which case fired without seeing the enriched log line.
+//
+// If the ErrInvalidStartURL branch below fires again, COPY AND PASTE its
+// full t.Logf line (a.inscribite count, data-tipolink values, Bootstrap tab
+// presence, the two Asignaturas-panel fields, host, path) before treating
+// this checkpoint as failed. If it instead succeeds (relink ok, start url
+// length=N), GO-09 is verified end to end for the no-MFA test account and
+// this checkpoint can finally be closed.
 
 import (
 	"context"
@@ -158,8 +184,8 @@ func TestRelinkAgainstRealUADESite(t *testing.T) {
 			if tipolinks == "" {
 				tipolinks = "ninguno"
 			}
-			t.Logf("start URL diagnostics: inscribeteLinkCount=%d dataTipolinkValues=%s bootstrapTabPresent=%t host=%s path=%s",
-				diag.InscribeteLinkCount, tipolinks, diag.BootstrapTabPresent, diag.Host, diag.Path)
+			t.Logf("start URL diagnostics: inscribeteLinkCount=%d dataTipolinkValues=%s bootstrapTabPresent=%t asignaturasPanelFound=%t asignaturasPanelLinkCount=%d host=%s path=%s",
+				diag.InscribeteLinkCount, tipolinks, diag.BootstrapTabPresent, diag.AsignaturasPanelFound, diag.AsignaturasPanelLinkCount, diag.Host, diag.Path)
 		} else {
 			t.Logf("start URL diagnostics unavailable (unexpected: Relink should always enrich this error)")
 		}
