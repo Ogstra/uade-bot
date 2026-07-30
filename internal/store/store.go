@@ -13,7 +13,7 @@ import (
 const schema = `
 CREATE TABLE IF NOT EXISTS users (discord_user_id TEXT PRIMARY KEY, pause_reason TEXT, pause_until INTEGER, backoff_attempt INTEGER NOT NULL DEFAULT 0, last_pause_notified_reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS credentials (discord_user_id TEXT PRIMARY KEY REFERENCES users(discord_user_id), ciphertext TEXT NOT NULL, iv TEXT NOT NULL, auth_tag TEXT NOT NULL, updated_at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT NOT NULL REFERENCES users(discord_user_id), filtros_json TEXT NOT NULL, channel_id TEXT, guild_id TEXT, label TEXT, status TEXT NOT NULL DEFAULT 'active', last_polled_at INTEGER, last_outcome TEXT, last_notified_state TEXT, last_notified_cupos INTEGER, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT NOT NULL REFERENCES users(discord_user_id), filtros_json TEXT NOT NULL, materia_code TEXT, channel_id TEXT, guild_id TEXT, label TEXT, status TEXT NOT NULL DEFAULT 'active', last_polled_at INTEGER, last_outcome TEXT, last_notified_state TEXT, last_notified_cupos INTEGER, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS poll_outcome_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, recorded_at INTEGER NOT NULL, outcome_code TEXT NOT NULL, vacancy_count INTEGER, total_cupos INTEGER);
 CREATE INDEX IF NOT EXISTS idx_poll_outcome_history_job_recorded ON poll_outcome_history (job_id, recorded_at DESC, id DESC);
 CREATE TABLE IF NOT EXISTS materias (codigo TEXT PRIMARY KEY, nombre TEXT NOT NULL, updated_at INTEGER NOT NULL);
@@ -86,11 +86,73 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
+	if err = migrateSearchIdentity(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate search identity: %w", err)
+	}
 	if err = migrateStatements(db, pendingSearchesStatements); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate pending_searches: %w", err)
 	}
 	return db, nil
+}
+
+// migrateSearchIdentity adds and backfills the durable product identity for a
+// search. Every schema/data step is kept in one transaction so a legacy DB is
+// either fully converged or left untouched. Invalid legacy JSON deliberately
+// maps to NULL and is excluded from the partial unique index.
+func migrateSearchIdentity(db *sql.DB) error {
+	rows, err := db.Query("PRAGMA table_info(jobs)")
+	if err != nil {
+		return err
+	}
+	hasColumn := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, kind string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		hasColumn = hasColumn || name == "materia_code"
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+
+	statements := make([]string, 0, 4)
+	if !hasColumn {
+		statements = append(statements, "ALTER TABLE jobs ADD COLUMN materia_code TEXT")
+	}
+	statements = append(statements,
+		`UPDATE jobs SET materia_code = CASE
+			WHEN json_valid(filtros_json) THEN CASE
+				WHEN json_type(filtros_json, '$.materiaCodigo') = 'text'
+				 AND trim(json_extract(filtros_json, '$.materiaCodigo')) <> ''
+				 AND trim(json_extract(filtros_json, '$.materiaCodigo')) NOT GLOB '*[^0-9.]*'
+				 AND length(trim(json_extract(filtros_json, '$.materiaCodigo'))) - length(replace(trim(json_extract(filtros_json, '$.materiaCodigo')), '.', '')) = 2
+				 AND trim(json_extract(filtros_json, '$.materiaCodigo')) NOT LIKE '.%'
+				 AND trim(json_extract(filtros_json, '$.materiaCodigo')) NOT LIKE '%.'
+				 AND trim(json_extract(filtros_json, '$.materiaCodigo')) NOT LIKE '%..%'
+				THEN trim(json_extract(filtros_json, '$.materiaCodigo'))
+			END
+		END
+		WHERE materia_code IS NULL`,
+		`DELETE FROM jobs AS duplicate
+		 WHERE duplicate.materia_code IS NOT NULL
+		   AND EXISTS (
+			SELECT 1 FROM jobs AS keeper
+			 WHERE keeper.discord_user_id = duplicate.discord_user_id
+			   AND COALESCE(keeper.guild_id, '') = COALESCE(duplicate.guild_id, '')
+			   AND keeper.materia_code = duplicate.materia_code
+			   AND keeper.id < duplicate.id
+		   )`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_search_identity
+		 ON jobs(discord_user_id, COALESCE(guild_id, ''), materia_code)
+		 WHERE materia_code IS NOT NULL`,
+	)
+	return migrateStatements(db, statements)
 }
 
 func ensureColumn(db *sql.DB, table, column, definition string) error {
