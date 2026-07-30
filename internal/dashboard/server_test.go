@@ -84,6 +84,56 @@ func TestServerAuthenticatedSSRJSONAndLogoutFlow(t *testing.T) {
 	unauthorized.Body.Close()
 }
 
+func TestServerRendersGuildIconAndAccountAvatarWhenPresent(t *testing.T) {
+	iconURL := "https://cdn.discordapp.com/icons/guild-a/abc.png"
+	avatarURL := "https://cdn.discordapp.com/avatars/user-a/def.png"
+	s := &Server{User: "admin", Password: "secret", SessionSecret: []byte("0123456789abcdef0123456789abcdef"), Snapshot: func() (Snapshot, error) {
+		return Snapshot{
+			BotGuilds: []Guild{{ID: "guild-a", Name: "Servidor A", IconURL: iconURL}},
+			Accounts:  []Account{{DiscordUserID: "user-a", DisplayName: "Ana", AvatarURL: avatarURL, Status: Status{Code: "active", Label: "Activa", Tone: "healthy"}, Jobs: []Job{}}},
+			Health:    Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}},
+		}, nil
+	}}
+	httpServer := httptest.NewServer(s)
+	defer httpServer.Close()
+	client := authenticatedClient(t, httpServer, "admin", "secret")
+	dashboard, err := client.Get(httpServer.URL + "/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(dashboard.Body)
+	dashboard.Body.Close()
+	html := string(body)
+	for _, want := range []string{`<img class="avatar" src="` + iconURL + `"`, `<img class="avatar" src="` + avatarURL + `"`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("SSR missing %q: %s", want, html)
+		}
+	}
+}
+
+func TestServerOmitsImgEntirelyWhenIconAndAvatarURLsAreEmpty(t *testing.T) {
+	s := &Server{User: "admin", Password: "secret", SessionSecret: []byte("0123456789abcdef0123456789abcdef"), Snapshot: func() (Snapshot, error) {
+		return Snapshot{
+			BotGuilds: []Guild{{ID: "guild-a", Name: "Servidor A", IconURL: ""}},
+			Accounts:  []Account{{DiscordUserID: "user-a", DisplayName: "Ana", AvatarURL: "", Status: Status{Code: "active", Label: "Activa", Tone: "healthy"}, Jobs: []Job{}}},
+			Health:    Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}},
+		}, nil
+	}}
+	httpServer := httptest.NewServer(s)
+	defer httpServer.Close()
+	client := authenticatedClient(t, httpServer, "admin", "secret")
+	dashboard, err := client.Get(httpServer.URL + "/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(dashboard.Body)
+	dashboard.Body.Close()
+	html := string(body)
+	if strings.Contains(html, "<img") {
+		t.Fatalf("expected no <img> tag when IconURL/AvatarURL are empty: %s", html)
+	}
+}
+
 func TestLoginRequiresCSRFAndRateLimitsFailures(t *testing.T) {
 	s := &Server{User: "a", Password: "b", SessionSecret: []byte("0123456789abcdef0123456789abcdef"), LoginLimit: 2}
 	server := httptest.NewServer(s)
