@@ -126,6 +126,59 @@ func TestFormatTruncateAdminListForcesCutoffOverLimit(t *testing.T) {
 	}
 }
 
+func TestFormatJobChoiceLabel(t *testing.T) {
+	cases := []struct {
+		name          string
+		label         string
+		filters       jobFilters
+		materiaNombre string
+		want          string
+	}{
+		{
+			name:          "label + materia con nombre resuelto + turno/dias",
+			label:         "Mi etiqueta",
+			filters:       jobFilters{MateriaCodigo: "3.1.050", Turno: "Noche", Dias: []string{"LU", "MI"}},
+			materiaNombre: "Algoritmos",
+			want:          "Mi etiqueta: 3.1.050 - Algoritmos · Noche LU/MI",
+		},
+		{
+			name:          "label + materia sin nombre resuelto + turno/dias, sin separador colgado",
+			label:         "Mi etiqueta",
+			filters:       jobFilters{MateriaCodigo: "3.1.050", Turno: "Noche", Dias: []string{"LU", "MI"}},
+			materiaNombre: "",
+			want:          "Mi etiqueta: 3.1.050 · Noche LU/MI",
+		},
+		{
+			name:          "solo turno/dias, sin materia ni label, sin separador huerfano",
+			label:         "",
+			filters:       jobFilters{Turno: "Tarde", Dias: []string{"SA"}},
+			materiaNombre: "",
+			want:          "Tarde SA",
+		},
+		{
+			name:          "filtros vacios, fallback a la etiqueta",
+			label:         "Mi etiqueta",
+			filters:       jobFilters{},
+			materiaNombre: "",
+			want:          "Mi etiqueta",
+		},
+		{
+			name:          "filtros vacios y sin etiqueta -> placeholder fijo",
+			label:         "",
+			filters:       jobFilters{},
+			materiaNombre: "",
+			want:          "sin datos",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatJobChoiceLabel(tc.label, tc.filters, tc.materiaNombre); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFormatFilterSummaryBlock(t *testing.T) {
 	got := filterSummaryBlock(
 		"Algoritmos nocturna",

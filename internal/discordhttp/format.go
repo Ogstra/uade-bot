@@ -57,6 +57,45 @@ func lookupMateriaNombre(ctx context.Context, db *sql.DB, codigo string) string 
 	return strings.TrimSpace(name)
 }
 
+// formatJobChoiceLabel builds the human-readable detail text for a job's
+// autocomplete choice (materia + turno/dias, falling back to the job's own
+// label, then to a fixed placeholder). Pure helper -- never receives nor
+// returns the job's numeric id; prefixing "#{id}" is the caller's job
+// (commands.go's autocomplete()), not this function's, since only the admin
+// path needs that prefix.
+func formatJobChoiceLabel(label string, filters jobFilters, materiaNombre string) string {
+	materia := filters.MateriaCodigo
+	if materiaNombre != "" {
+		if materia != "" {
+			materia += " - " + materiaNombre
+		} else {
+			materia = materiaNombre
+		}
+	}
+	turnoDias := strings.TrimSpace(filters.Turno + " " + strings.Join(filters.Dias, "/"))
+
+	var detail string
+	switch {
+	case materia != "" && turnoDias != "":
+		detail = materia + " · " + turnoDias
+	case materia != "":
+		detail = materia
+	case turnoDias != "":
+		detail = turnoDias
+	}
+
+	if detail == "" {
+		if label != "" {
+			return label
+		}
+		return "sin datos"
+	}
+	if label != "" {
+		return label + ": " + detail
+	}
+	return detail
+}
+
 // formatJobStatusText translates a job's raw status plus the owning
 // account's pause_reason into the same "activa"/"pausada (motivo)" copy
 // Node's formatJobStatus produced: a job paused by the user OR an account
