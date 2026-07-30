@@ -30,6 +30,15 @@ var pendingSearchesStatements = []string{
 	"CREATE TABLE IF NOT EXISTS pending_searches (discord_user_id TEXT PRIMARY KEY, filtros_json TEXT NOT NULL, channel_id TEXT, guild_id TEXT, label TEXT, created_at INTEGER NOT NULL)",
 }
 
+// adminsStatements creates admins, the durable authorization table that
+// replaces Discord's per-guild Administrator permission bit as the gate for
+// the admin-* commands (see internal/discordhttp.isAdmin). added_by/
+// created_at give the dashboard an audit trail of who granted each admin and
+// when.
+var adminsStatements = []string{
+	"CREATE TABLE IF NOT EXISTS admins (discord_user_id TEXT PRIMARY KEY, added_by TEXT NOT NULL, created_at INTEGER NOT NULL)",
+}
+
 // migrateStatements runs statements inside a single explicit transaction: if
 // any statement fails, the deferred Rollback undoes everything executed so
 // far in that same transaction, so a migration never leaves the schema
@@ -93,6 +102,10 @@ func Open(path string) (*sql.DB, error) {
 	if err = migrateStatements(db, pendingSearchesStatements); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate pending_searches: %w", err)
+	}
+	if err = migrateStatements(db, adminsStatements); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate admins: %w", err)
 	}
 	return db, nil
 }

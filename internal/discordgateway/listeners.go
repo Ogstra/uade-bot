@@ -462,10 +462,13 @@ func respondSafely(respond respondFunc, ctx context.Context, id, token string, r
 	return respond(ctx, id, token, response)
 }
 
-// permissionsString formats a resolved member's permission bitmask as the
-// decimal string internal/discordhttp's hasAdministrator expects. It
-// deliberately does not use Permissions.String(), which renders a
-// human-readable name list (e.g. "Administrator") rather than a bitmask.
+// permissionsString formats a resolved member's permission bitmask as a
+// decimal string. It deliberately does not use Permissions.String(), which
+// renders a human-readable name list (e.g. "Administrator") rather than a
+// bitmask. This value is no longer used for admin authorization
+// (internal/discordhttp.isAdmin gates on the fixed super-admin identity and
+// the admins table instead); it is preserved because it still faithfully
+// reflects Discord's own payload.
 func permissionsString(member *discord.ResolvedMember) string {
 	if member == nil {
 		return "0"

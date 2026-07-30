@@ -166,6 +166,16 @@ func credentialsSubmit(user, username, password string) map[string]any {
 	}
 	return map[string]any{"type": 5, "member": map[string]any{"user": map[string]any{"id": user}}, "data": map[string]any{"custom_id": "credentials", "components": []any{field("uade_username", username), field("uade_password", password)}}}
 }
+// seedAdmin inserts a row directly into the admins table, standing in for a
+// grant made through /superadmin-agregar so tests can exercise the admin-*
+// gate (isAdmin) without going through the super-admin-only command path.
+func seedAdmin(t *testing.T, d CommandDispatcher, userID string) {
+	t.Helper()
+	if _, err := d.DB.Exec(`INSERT INTO admins(discord_user_id,added_by,created_at) VALUES(?,?,?)`, userID, "test", time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func seedCredentials(t *testing.T, d CommandDispatcher, user, username, password, link string) {
 	t.Helper()
 	encrypted, err := credentialcrypto.Encrypt(testMaster, user, credentialcrypto.Credentials{UADEUsername: username, UADEPassword: password, UADEStartURL: link})
@@ -181,6 +191,38 @@ func seedCredentials(t *testing.T, d CommandDispatcher, user, username, password
 	}
 	if _, err = d.DB.Exec(`INSERT INTO credentials(discord_user_id,ciphertext,iv,auth_tag,updated_at) VALUES(?,?,?,?,1)`, user, encrypted.Ciphertext, encrypted.IV, encrypted.AuthTag); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestIsAdminCoversSuperAdminAdminsTableAndNeither directly exercises the
+// three isAdmin outcomes documented on CommandDispatcher: the fixed
+// super-admin always qualifies without touching the admins table, a row in
+// admins qualifies independent of SuperAdminID, and neither qualifies for an
+// unrelated user.
+func TestIsAdminCoversSuperAdminAdminsTableAndNeither(t *testing.T) {
+	d := testDispatcher(t)
+	d.SuperAdminID = "boss"
+	seedAdmin(t, d, "granted")
+
+	cases := []struct {
+		name   string
+		userID string
+		want   bool
+	}{
+		{"super-admin", "boss", true},
+		{"admins table row", "granted", true},
+		{"neither", "nobody", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := d.isAdmin(context.Background(), tc.userID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("isAdmin(%q)=%v, want %v", tc.userID, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -268,6 +310,7 @@ func TestCredentialModalEncryptsWithoutEchoingSecrets(t *testing.T) {
 
 func TestOwnershipAdminPermissionAndCommandDispatch(t *testing.T) {
 	d := testDispatcher(t)
+	seedAdmin(t, d, "admin")
 	// Seed users/credentials through modal, then create a job.
 	seedCredentials(t, d, "owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
 	options := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
@@ -277,7 +320,7 @@ func TestOwnershipAdminPermissionAndCommandDispatch(t *testing.T) {
 	if out := dispatchJSON(t, d, command("intruder", "detener", "0", []map[string]any{{"name": "busqueda", "value": "1"}})); !strings.Contains(responseContent(out), "no te pertenece") {
 		t.Fatalf("%s", responseContent(out))
 	}
-	if out := dispatchJSON(t, d, command("intruder", "admin-detener", "0", []map[string]any{{"name": "busqueda", "value": "1"}})); !strings.Contains(responseContent(out), "Administrador") {
+	if out := dispatchJSON(t, d, command("intruder", "admin-detener", "0", []map[string]any{{"name": "busqueda", "value": "1"}})); !strings.Contains(responseContent(out), "permisos de administrador") {
 		t.Fatalf("%s", responseContent(out))
 	}
 	if out := dispatchJSON(t, d, command("admin", "admin-detener", "8", []map[string]any{{"name": "busqueda", "value": "1"}})); !strings.Contains(responseContent(out), "detenida") {
@@ -516,6 +559,7 @@ func TestEstadoShowsDetailedJobStatusAndSuppressesMentions(t *testing.T) {
 
 func TestAdminEstadoUsesCompactLinesAndIgnoresAccountPauseReason(t *testing.T) {
 	d := testDispatcher(t)
+	seedAdmin(t, d, "admin")
 	seedCredentials(t, d, "u1", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
 	seedCredentials(t, d, "u2", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
 	if _, err := d.DB.Exec(`INSERT INTO materias(codigo,nombre,updated_at) VALUES('3.1.050','Algoritmos',1)`); err != nil {
@@ -577,6 +621,7 @@ func TestAllCanonicalAdminCommandsHaveIdentityPolicyCoverage(t *testing.T) {
 
 func TestAdminIdentityResolverIsLiveGuildAwareAndEscaped(t *testing.T) {
 	d := testDispatcher(t)
+	seedAdmin(t, d, "admin")
 	resolver := &mutableIdentityResolver{names: map[string]string{
 		"g1/u1":        "Nick **uno** <@999>",
 		"g2/u2":        "Nick `dos`",
@@ -615,6 +660,7 @@ func TestAdminIdentityResolverIsLiveGuildAwareAndEscaped(t *testing.T) {
 
 func TestAdminAutocompleteUsesInteractionAndJobGuilds(t *testing.T) {
 	d := testDispatcher(t)
+	seedAdmin(t, d, "admin")
 	resolver := &mutableIdentityResolver{names: map[string]string{
 		"any-guild/u1": strings.Repeat("界", 120),
 		"job-guild/u1": "Apodo job",
@@ -727,7 +773,7 @@ func TestAdminAuthorizationPrecedesIdentityResolution(t *testing.T) {
 	resolver := &mutableIdentityResolver{names: map[string]string{"any-guild/victim": "secret"}}
 	d.IdentityResolver = resolver
 	content := responseContent(dispatchJSON(t, d, command("intruder", "admin-user-stats", "0", []map[string]any{{"name": "usuario", "value": "victim"}})))
-	if !strings.Contains(content, "Administrador") {
+	if !strings.Contains(content, "permisos de administrador") {
 		t.Fatalf("denial=%q", content)
 	}
 	resolver.mu.Lock()
@@ -807,6 +853,7 @@ func TestBuscarFiltersInvalidDaysAndShowsSummary(t *testing.T) {
 
 func TestAllTwelveCommandDispatchersAcknowledge(t *testing.T) {
 	d := testDispatcher(t)
+	seedAdmin(t, d, "admin")
 	seedCredentials(t, d, "owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
 	searchOptions := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
 	cases := []struct {

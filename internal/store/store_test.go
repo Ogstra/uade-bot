@@ -239,6 +239,39 @@ func TestMigrateStatementsRollsBackAllStatementsOnFailure(t *testing.T) {
 	}
 }
 
+// TestAdminsTableMigratesIdempotentlyAndPersists proves the admins table
+// (internal/discordhttp's isAdmin authorization source) is created
+// transactionally by Open() and survives across separate process opens of
+// the same on-disk database, the same guarantee pendingSearchesStatements
+// already has.
+func TestAdminsTableMigratesIdempotentlyAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "admins.db")
+	first, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = first.Exec(`INSERT INTO admins(discord_user_id,added_by,created_at) VALUES('u1','super',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	var discordUserID, addedBy string
+	var createdAt int64
+	if err = second.QueryRow(`SELECT discord_user_id,added_by,created_at FROM admins WHERE discord_user_id='u1'`).Scan(&discordUserID, &addedBy, &createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if discordUserID != "u1" || addedBy != "super" || createdAt != 1 {
+		t.Fatalf("admins row=%s/%s/%d", discordUserID, addedBy, createdAt)
+	}
+}
+
 func TestOpenMigratesPreGuildJobsSchemaIdempotently(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	legacy, err := sql.Open("sqlite", path)

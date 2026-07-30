@@ -44,8 +44,9 @@ type InteractionData struct {
 }
 
 // Member mirrors Discord's resolved guild-member object attached to an
-// interaction; Permissions is the decimal-string bitmask Discord sends
-// (see hasAdministrator).
+// interaction; Permissions is the decimal-string bitmask Discord sends.
+// It is no longer used for admin authorization (see isAdmin) -- it is
+// preserved only because it faithfully reflects Discord's own payload.
 type Member struct {
 	Permissions string `json:"permissions"`
 	User        User   `json:"user"`
@@ -78,11 +79,24 @@ type IdentityResolver interface {
 }
 
 // CommandDispatcher implements all global slash commands and modal submits.
-// It does not accept a guild allow-list: ownership is account based and admin
-// authorization comes from Discord's Administrator permission bit.
+// It does not accept a guild allow-list: ownership is account based.
+//
+// Admin authorization deliberately REPLACES the decision recorded in
+// .planning/STATE.md under "[Phase 03 P04, live UAT]" (gating admin-*
+// centrally via Discord's own per-guild Administrator permission bit). That
+// was a conscious, explicitly user-requested architecture change, not a bug
+// fix: admin access is now decoupled from a per-guild Discord permission and
+// instead comes from a fixed super-admin identity (SuperAdminID, sourced
+// from UADE_SUPER_ADMIN_ID and never editable at runtime) plus a durable
+// `admins` table that only the super-admin can mutate via
+// /superadmin-agregar and /superadmin-eliminar. See isAdmin.
 type CommandDispatcher struct {
 	DB             *sql.DB
 	MasterKey      string
+	// SuperAdminID is the fixed operator identity (UADE_SUPER_ADMIN_ID) that
+	// always satisfies isAdmin and is the only identity allowed to mutate the
+	// admins table via /superadmin-agregar and /superadmin-eliminar.
+	SuperAdminID   string
 	OnJobCreated   func(string)
 	OnAccountReady func(string)
 	// PrepareAccount is the production post-credential seam. When present,
@@ -135,12 +149,18 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 	if in.Type != 2 {
 		return InteractionResponse{}, errors.New("unsupported interaction type")
 	}
-	admin := strings.HasPrefix(in.Data.Name, "admin-")
-	if admin && !hasAdministrator(in.Member.Permissions) {
-		return message("Este comando requiere el permiso Administrador."), nil
-	}
 	if d.DB == nil {
 		return InteractionResponse{}, errors.New("database unavailable")
+	}
+	admin := strings.HasPrefix(in.Data.Name, "admin-")
+	if admin {
+		ok, err := d.isAdmin(ctx, userID)
+		if err != nil {
+			return InteractionResponse{}, err
+		}
+		if !ok {
+			return message("Este comando requiere permisos de administrador (tabla admins o super-admin)."), nil
+		}
 	}
 	if err := d.logCommand(ctx, userID, in.Data.Name, in.GuildID); err != nil {
 		return InteractionResponse{}, err
@@ -797,8 +817,14 @@ func (d CommandDispatcher) adminUserStats(ctx context.Context, guildID, userID s
 
 func (d CommandDispatcher) autocomplete(ctx context.Context, userID string, in Interaction) (InteractionResponse, error) {
 	admin := strings.HasPrefix(in.Data.Name, "admin-")
-	if admin && !hasAdministrator(in.Member.Permissions) {
-		return InteractionResponse{Type: 8, Data: map[string]any{"choices": []any{}}}, nil
+	if admin {
+		ok, err := d.isAdmin(ctx, userID)
+		if err != nil {
+			return InteractionResponse{}, err
+		}
+		if !ok {
+			return InteractionResponse{Type: 8, Data: map[string]any{"choices": []any{}}}, nil
+		}
 	}
 	choices := []any{}
 	for _, option := range in.Data.Options {
@@ -929,7 +955,19 @@ func csvValues(value string, upper bool) []string {
 	}
 	return out
 }
-func hasAdministrator(value string) bool {
-	permissions, err := strconv.ParseUint(value, 10, 64)
-	return err == nil && permissions&8 != 0
+// isAdmin is the sole authorization mechanism for the admin-* commands
+// (see CommandDispatcher's doc comment). userID satisfies it either by
+// being the fixed super-admin (SuperAdminID, compared exactly -- an empty
+// SuperAdminID never matches an empty userID) or by having a row in the
+// admins table. It never reads Member.Permissions or any other
+// Discord-supplied permission bit.
+func (d CommandDispatcher) isAdmin(ctx context.Context, userID string) (bool, error) {
+	if d.SuperAdminID != "" && userID == d.SuperAdminID {
+		return true, nil
+	}
+	var count int
+	if err := d.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM admins WHERE discord_user_id=?`, userID).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }

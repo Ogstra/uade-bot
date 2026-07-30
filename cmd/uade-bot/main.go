@@ -133,6 +133,7 @@ func main() {
 		}
 		dispatcher := discordhttp.CommandDispatcher{
 			DB: db, MasterKey: os.Getenv("CREDENTIALS_MASTER_KEY"),
+			SuperAdminID: os.Getenv("UADE_SUPER_ADMIN_ID"),
 			OnJobCreated: runtime.JobCreated, PrepareAccount: runtime.PrepareAccount,
 			OnAccountActivated: runtime.AccountActivated, OnJobsChanged: runtime.JobsChanged,
 			ResolveMateria: runtime.ResolveMateria,
