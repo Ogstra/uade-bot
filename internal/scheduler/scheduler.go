@@ -32,9 +32,9 @@ func (realClock) Sleep(ctx context.Context, delay time.Duration) error {
 }
 
 type Vacancy struct {
-	Turno, Sede, Horario string
-	Dias                 []string
-	Cupos                int
+	Materia, Turno, Sede, Horario string
+	Dias                          []string
+	Cupos                         int
 }
 
 type Outcome struct {
@@ -43,10 +43,12 @@ type Outcome struct {
 }
 
 type Job struct {
-	Account string
-	ID      string
-	Channel string
-	Run     func(context.Context) (Outcome, error)
+	Account       string
+	ID            string
+	Channel       string
+	MateriaCodigo string
+	Label         string
+	Run           func(context.Context) (Outcome, error)
 }
 
 type PersistedJob struct {

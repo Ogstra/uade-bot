@@ -71,11 +71,62 @@ func notificationText(event scheduler.Event) string {
 			return "Pausé temporalmente tus búsquedas de UADE."
 		}
 	}
-	var lines []string
-	for _, vacancy := range event.Outcome.Vacancies {
-		lines = append(lines, fmt.Sprintf("%s · %s · %s · %d cupos", vacancy.Turno, vacancy.Sede, vacancy.Horario, vacancy.Cupos))
+	identity := notificationIdentity(event.Job, event.Outcome)
+	lines := []string{fmt.Sprintf("Se encontro una vacante para **%s**.", identity)}
+	if len(event.Outcome.Vacancies) > 0 {
+		lines = append(lines, fmt.Sprintf("**Turno:** %s", escapeDiscordText(event.Outcome.Vacancies[0].Turno)), "")
 	}
-	return "¡Hay vacantes para tu búsqueda!\n" + strings.Join(lines, "\n")
+	for index, vacancy := range event.Outcome.Vacancies {
+		if index > 0 {
+			lines = append(lines, "")
+		}
+		days := make([]string, 0, len(vacancy.Dias))
+		for _, day := range vacancy.Dias {
+			days = append(days, escapeDiscordText(day))
+		}
+		lines = append(lines,
+			fmt.Sprintf("**Sede:** %s", escapeDiscordText(vacancy.Sede)),
+			fmt.Sprintf("**Horario:** %s", escapeDiscordText(vacancy.Horario)),
+			fmt.Sprintf("**Dias:** %s", strings.Join(days, ", ")),
+			fmt.Sprintf("**%d cupos**", vacancy.Cupos),
+		)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func notificationIdentity(job scheduler.Job, outcome scheduler.Outcome) string {
+	code := escapeDiscordText(job.MateriaCodigo)
+	materia := code
+	for _, vacancy := range outcome.Vacancies {
+		if name := strings.TrimSpace(vacancy.Materia); name != "" {
+			materia += " - " + escapeDiscordText(name)
+			break
+		}
+	}
+	label := strings.TrimSpace(job.Label)
+	if label == "" || label == job.MateriaCodigo {
+		return materia
+	}
+	return escapeDiscordText(label) + " - " + materia
+}
+
+// escapeDiscordText keeps user/UADE-controlled values readable while making
+// Discord mentions and Markdown delimiters inert. Structural Markdown in the
+// formatter itself is intentionally added only after each value is escaped.
+func escapeDiscordText(value string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`*`, `\*`,
+		`_`, `\_`,
+		`~`, `\~`,
+		"`", "\\`",
+		`|`, `\|`,
+		`>`, `\>`,
+		`[`, `\[`,
+		`]`, `\]`,
+		"@", "@\u200b",
+	)
+	return replacer.Replace(value)
 }
 
 func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken, ssoPortalURL string, interval time.Duration, concurrency int, shadow bool) (*Runtime, error) {
@@ -226,7 +277,19 @@ func (r *Runtime) JobsChanged() {
 }
 
 func (r *Runtime) job(record scheduler.PersistedJob) (scheduler.Job, error) {
-	return scheduler.Job{Account: record.Account, ID: record.ID, Channel: record.Channel, Run: func(ctx context.Context) (scheduler.Outcome, error) {
+	var rawFilters, label string
+	if err := r.DB.QueryRowContext(context.Background(), `SELECT filtros_json, COALESCE(label, '') FROM jobs WHERE id=? AND discord_user_id=?`, record.ID, record.Account).Scan(&rawFilters, &label); err != nil {
+		return scheduler.Job{}, err
+	}
+	var selected filters
+	if err := json.Unmarshal([]byte(rawFilters), &selected); err != nil {
+		return scheduler.Job{}, errors.New("invalid stored filters")
+	}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = selected.MateriaCodigo
+	}
+	return scheduler.Job{Account: record.Account, ID: record.ID, Channel: record.Channel, MateriaCodigo: selected.MateriaCodigo, Label: label, Run: func(ctx context.Context) (scheduler.Outcome, error) {
 		return r.poll(ctx, record.ID, record.Account)
 	}}, nil
 }
@@ -270,7 +333,7 @@ func (r *Runtime) poll(ctx context.Context, jobID, account string) (scheduler.Ou
 	outcome := client.Search(ctx, credentials.UADEStartURL, credentials.UADEUsername, credentials.UADEPassword, uade.SearchFilters{MateriaCodigo: selected.MateriaCodigo, Ofrecimiento: selected.Ofrecimiento, Turno: selected.Turno, Dias: selected.Dias}, selected.SedesExcluidas)
 	converted := scheduler.Outcome{Code: string(outcome.Code)}
 	for _, vacancy := range outcome.Vacancies {
-		converted.Vacancies = append(converted.Vacancies, scheduler.Vacancy{Turno: vacancy.Turno, Sede: vacancy.Sede, Horario: vacancy.Horario, Dias: strings.Split(vacancy.Dias, ","), Cupos: vacancy.Cupos})
+		converted.Vacancies = append(converted.Vacancies, scheduler.Vacancy{Materia: vacancy.Materia, Turno: vacancy.Turno, Sede: vacancy.Sede, Horario: vacancy.Horario, Dias: strings.Split(vacancy.Dias, ","), Cupos: vacancy.Cupos})
 	}
 	return converted, nil
 }
