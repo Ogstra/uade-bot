@@ -28,23 +28,78 @@ import (
 )
 
 type fakeDiscordSender struct {
-	dmCalls      []discordSend
-	channelCalls []discordSend
+	dmCalls         []discordSend
+	channelCalls    []discordSend
+	dmFailures      map[int]error
+	channelFailures map[int]error
+	now             time.Time
+	nonceTTL        time.Duration
+	nonceExpiry     map[string]time.Time
+	created         []discordSend
 }
 
 type discordSend struct {
 	target     string
 	content    string
+	nonce      string
 	components []discord.ContainerComponent
 }
 
-func (f *fakeDiscordSender) SendDM(user, content string, components ...discord.ContainerComponent) error {
-	f.dmCalls = append(f.dmCalls, discordSend{target: user, content: content, components: components})
+func (f *fakeDiscordSender) SendDM(user, content, nonce string, components ...discord.ContainerComponent) error {
+	return f.send(notificationRouteDM, user, content, nonce, components)
+}
+
+func (f *fakeDiscordSender) SendMention(channel, owner, content, nonce string, components ...discord.ContainerComponent) error {
+	return f.send(notificationRouteChannel, channel, content, nonce, components)
+}
+
+func (f *fakeDiscordSender) send(route notificationRoute, target, content, nonce string, components []discord.ContainerComponent) error {
+	call := discordSend{target: target, content: content, nonce: nonce, components: components}
+	var calls *[]discordSend
+	var failures map[int]error
+	if route == notificationRouteDM {
+		calls, failures = &f.dmCalls, f.dmFailures
+	} else {
+		calls, failures = &f.channelCalls, f.channelFailures
+	}
+	*calls = append(*calls, call)
+	if err := failures[len(*calls)-1]; err != nil {
+		return err
+	}
+	if f.nonceExpiry != nil {
+		if expiry, ok := f.nonceExpiry[nonce]; ok && f.now.Before(expiry) {
+			return nil
+		}
+		f.nonceExpiry[nonce] = f.now.Add(f.nonceTTL)
+	}
+	f.created = append(f.created, call)
 	return nil
 }
 
-func (f *fakeDiscordSender) Send(channel, content string, components ...discord.ContainerComponent) error {
-	f.channelCalls = append(f.channelCalls, discordSend{target: channel, content: content, components: components})
+type fakeNotificationProgress struct {
+	delivered    map[string]scheduler.NotificationFragment
+	markCalls    []scheduler.NotificationFragment
+	failMarkOnce bool
+}
+
+func (f *fakeNotificationProgress) DeliveredNotificationFragments(context.Context, string, string) ([]scheduler.NotificationFragment, error) {
+	result := make([]scheduler.NotificationFragment, 0, len(f.delivered))
+	for _, fragment := range f.delivered {
+		result = append(result, fragment)
+	}
+	return result, nil
+}
+
+func (f *fakeNotificationProgress) MarkNotificationFragmentDelivered(_ context.Context, _, _ string, fragment scheduler.NotificationFragment) error {
+	f.markCalls = append(f.markCalls, fragment)
+	if f.failMarkOnce {
+		f.failMarkOnce = false
+		return errors.New("injected local mark failure")
+	}
+	if f.delivered == nil {
+		f.delivered = make(map[string]scheduler.NotificationFragment)
+	}
+	f.delivered[fmt.Sprintf("%s/%d", fragment.Route, fragment.FragmentIndex)] = fragment
 	return nil
 }
 
@@ -210,6 +265,122 @@ func parseNotificationVacancies(t *testing.T, payload string) []scheduler.Vacanc
 	return vacancies
 }
 
+func TestOutboundNotifierRoutesAreIndependentAndRetryOnlyPending(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		dmFailures     map[int]error
+		channelFailure map[int]error
+		wantDMCalls    int
+		wantChanCalls  int
+	}{
+		{name: "dm fails channel completes", dmFailures: map[int]error{0: errors.New("dm failed")}, wantDMCalls: 2, wantChanCalls: 1},
+		{name: "channel fails dm completes", channelFailure: map[int]error{0: errors.New("channel failed")}, wantDMCalls: 1, wantChanCalls: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeDiscordSender{dmFailures: tc.dmFailures, channelFailures: tc.channelFailure}
+			progress := &fakeNotificationProgress{}
+			event := vacancyNotificationEvent("channel")
+			event.DeliveryKey = strings.Repeat("a", 64)
+			n := outboundNotifier{discord: fake, progress: progress}
+
+			if err := n.Notify(context.Background(), event); err == nil {
+				t.Fatal("first notify error = nil, want route failure")
+			}
+			if err := n.Notify(context.Background(), event); err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			if len(fake.dmCalls) != tc.wantDMCalls || len(fake.channelCalls) != tc.wantChanCalls {
+				t.Fatalf("calls dm/channel = %d/%d, want %d/%d", len(fake.dmCalls), len(fake.channelCalls), tc.wantDMCalls, tc.wantChanCalls)
+			}
+			if len(progress.delivered) != 2 {
+				t.Fatalf("durable fragments = %d, want one per route", len(progress.delivered))
+			}
+		})
+	}
+}
+
+func TestOutboundNotifierRetryPreservesCompletedFragments(t *testing.T) {
+	event := vacancyNotificationEvent("channel")
+	event.DeliveryKey = strings.Repeat("b", 64)
+	event.Outcome.Vacancies[0].Materia = strings.Repeat("á界", 2500)
+	fake := &fakeDiscordSender{dmFailures: map[int]error{1: errors.New("middle fragment failed")}}
+	progress := &fakeNotificationProgress{}
+	n := outboundNotifier{discord: fake, progress: progress}
+
+	if err := n.Notify(context.Background(), event); err == nil {
+		t.Fatal("first notify error = nil")
+	}
+	dmCount := len(notificationMessages(event, notificationRouteDM))
+	if len(fake.dmCalls) != 2 {
+		t.Fatalf("first attempt dm calls = %d, want stop at second fragment", len(fake.dmCalls))
+	}
+	if err := n.Notify(context.Background(), event); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got := len(fake.dmCalls); got != dmCount+1 {
+		t.Fatalf("total dm calls = %d, want failed fragment plus later pending only (%d)", got, dmCount+1)
+	}
+	if fake.dmCalls[0].nonce == fake.dmCalls[2].nonce {
+		t.Fatal("retry resent the already-confirmed first fragment")
+	}
+}
+
+func TestOutboundNotifierNonceIdentityIsStableAndScoped(t *testing.T) {
+	base := notificationFragmentNonce(notificationRouteDM, "target", 0, 2, "content")
+	if len(base) != 25 || !strings.HasPrefix(base, "uade-") {
+		t.Fatalf("nonce = %q, want uade- plus 20 hex", base)
+	}
+	if base != notificationFragmentNonce(notificationRouteDM, "target", 0, 2, "content") {
+		t.Fatal("identical fragment produced a different nonce")
+	}
+	variants := []string{
+		notificationFragmentNonce(notificationRouteChannel, "target", 0, 2, "content"),
+		notificationFragmentNonce(notificationRouteDM, "other", 0, 2, "content"),
+		notificationFragmentNonce(notificationRouteDM, "target", 1, 2, "content"),
+		notificationFragmentNonce(notificationRouteDM, "target", 0, 3, "content"),
+		notificationFragmentNonce(notificationRouteDM, "target", 0, 2, "changed"),
+	}
+	for i, variant := range variants {
+		if variant == base {
+			t.Fatalf("identity variant %d reused base nonce", i)
+		}
+	}
+}
+
+func TestOutboundNotifierCrashWindowIsAtLeastOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		advance     time.Duration
+		wantCreated int
+	}{
+		{name: "within nonce window deduplicates best effort", advance: time.Minute, wantCreated: 1},
+		{name: "after nonce window may duplicate", advance: 11 * time.Minute, wantCreated: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Unix(1000, 0)
+			fake := &fakeDiscordSender{now: now, nonceTTL: 10 * time.Minute, nonceExpiry: make(map[string]time.Time)}
+			progress := &fakeNotificationProgress{failMarkOnce: true}
+			event := vacancyNotificationEvent("")
+			event.DeliveryKey = strings.Repeat("c", 64)
+			n := outboundNotifier{discord: fake, progress: progress}
+
+			if err := n.Notify(context.Background(), event); err == nil {
+				t.Fatal("REST-success/local-mark-failure returned nil")
+			}
+			fake.now = now.Add(tc.advance)
+			if err := n.Notify(context.Background(), event); err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			if len(fake.dmCalls) != 2 || fake.dmCalls[0].nonce != fake.dmCalls[1].nonce {
+				t.Fatalf("retry calls/nonces = %d/%q/%q", len(fake.dmCalls), fake.dmCalls[0].nonce, fake.dmCalls[1].nonce)
+			}
+			if len(fake.created) != tc.wantCreated {
+				t.Fatalf("messages created = %d, want %d", len(fake.created), tc.wantCreated)
+			}
+		})
+	}
+}
+
 func TestOutboundNotifierVacancyToChannelIncludesActionRow(t *testing.T) {
 	fake := &fakeDiscordSender{}
 	n := outboundNotifier{discord: fake}
@@ -218,10 +389,11 @@ func TestOutboundNotifierVacancyToChannelIncludesActionRow(t *testing.T) {
 	if err := n.Notify(context.Background(), event); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.channelCalls) != 1 || len(fake.dmCalls) != 0 {
+	if len(fake.channelCalls) != 1 || len(fake.dmCalls) != 1 {
 		t.Fatalf("channel calls = %d, dm calls = %d", len(fake.channelCalls), len(fake.dmCalls))
 	}
 	assertVacancyNotification(t, fake.channelCalls[0])
+	assertVacancyNotification(t, fake.dmCalls[0])
 }
 
 func TestOutboundNotifierVacancyToDMIncludesActionRow(t *testing.T) {
