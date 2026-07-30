@@ -72,6 +72,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.dashboard(w, r, nonce)
 	case r.URL.Path == "/api/dashboard" && r.Method == http.MethodGet:
 		s.dashboardJSON(w, r)
+	case r.URL.Path == "/" && r.Method == http.MethodGet:
+		http.Redirect(w, r, "/dashboard", http.StatusFound)
 	default:
 		http.NotFound(w, r)
 	}
