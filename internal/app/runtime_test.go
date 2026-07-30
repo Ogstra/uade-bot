@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
+	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -44,10 +46,55 @@ func (f *fakeDiscordSender) Send(channel, content string, components ...discord.
 	return nil
 }
 
+func vacancyNotificationEvent(channel string) scheduler.Event {
+	return scheduler.Event{
+		Kind: "vacancy",
+		Job: scheduler.Job{
+			ID:            "42",
+			Account:       "user",
+			Channel:       channel,
+			MateriaCodigo: "3.1.050",
+			Label:         "Fisica II",
+		},
+		Outcome: scheduler.Outcome{Code: "found", Vacancies: []scheduler.Vacancy{{
+			Materia: "Física II",
+			Turno:   "Noche",
+			Sede:    "Monserrat",
+			Horario: "18:30 22:00",
+			Dias:    []string{"LU", "MI"},
+			Cupos:   3,
+		}}},
+	}
+}
+
+func assertVacancyNotification(t *testing.T, send discordSend) {
+	t.Helper()
+	for _, want := range []string{"Fisica II", "3.1.050", "Física II", "Noche", "Monserrat", "18:30 22:00", "LU, MI", "3 cupos"} {
+		if !strings.Contains(send.content, want) {
+			t.Errorf("notification missing %q: %q", want, send.content)
+		}
+	}
+	if got := len(send.components); got != 1 {
+		t.Fatalf("components = %d, want 1", got)
+	}
+	row, ok := send.components[0].(discord.ActionRowComponent)
+	if !ok {
+		t.Fatalf("component type = %T, want discord.ActionRowComponent", send.components[0])
+	}
+	buttons := row.Buttons()
+	if len(buttons) != 1 {
+		t.Fatalf("buttons = %d, want 1", len(buttons))
+	}
+	button := buttons[0]
+	if button.CustomID != "detener_job:42" || button.Label != "Detener busqueda" || button.Style != discord.ButtonStyleDanger {
+		t.Fatalf("button = %+v, want detener_job:42 / Detener busqueda / Danger", button)
+	}
+}
+
 func TestOutboundNotifierVacancyToChannelIncludesActionRow(t *testing.T) {
 	fake := &fakeDiscordSender{}
 	n := outboundNotifier{discord: fake}
-	event := scheduler.Event{Kind: "vacancy", Job: scheduler.Job{ID: "42", Account: "user", Channel: "channel"}}
+	event := vacancyNotificationEvent("channel")
 
 	if err := n.Notify(context.Background(), event); err != nil {
 		t.Fatal(err)
@@ -55,15 +102,13 @@ func TestOutboundNotifierVacancyToChannelIncludesActionRow(t *testing.T) {
 	if len(fake.channelCalls) != 1 || len(fake.dmCalls) != 0 {
 		t.Fatalf("channel calls = %d, dm calls = %d", len(fake.channelCalls), len(fake.dmCalls))
 	}
-	if got := len(fake.channelCalls[0].components); got != 1 {
-		t.Fatalf("components = %d, want 1", got)
-	}
+	assertVacancyNotification(t, fake.channelCalls[0])
 }
 
 func TestOutboundNotifierVacancyToDMIncludesActionRow(t *testing.T) {
 	fake := &fakeDiscordSender{}
 	n := outboundNotifier{discord: fake}
-	event := scheduler.Event{Kind: "vacancy", Job: scheduler.Job{ID: "42", Account: "user"}}
+	event := vacancyNotificationEvent("")
 
 	if err := n.Notify(context.Background(), event); err != nil {
 		t.Fatal(err)
@@ -71,8 +116,50 @@ func TestOutboundNotifierVacancyToDMIncludesActionRow(t *testing.T) {
 	if len(fake.dmCalls) != 1 || len(fake.channelCalls) != 0 {
 		t.Fatalf("dm calls = %d, channel calls = %d", len(fake.dmCalls), len(fake.channelCalls))
 	}
-	if got := len(fake.dmCalls[0].components); got != 1 {
-		t.Fatalf("components = %d, want 1", got)
+	assertVacancyNotification(t, fake.dmCalls[0])
+}
+
+func TestOutboundNotifierFallsBackToMateriaCode(t *testing.T) {
+	event := vacancyNotificationEvent("")
+	event.Job.Label = ""
+	event.Outcome.Vacancies[0].Materia = ""
+	text := notificationText(event)
+	if !strings.Contains(text, "3.1.050") {
+		t.Fatalf("notification does not fall back to materia code: %q", text)
+	}
+	if strings.Contains(text, " -  - ") {
+		t.Fatalf("notification contains empty identity segments: %q", text)
+	}
+}
+
+func TestOutboundNotifierEscapesDiscordMentionsInUntrustedFields(t *testing.T) {
+	fake := &fakeDiscordSender{}
+	event := vacancyNotificationEvent("")
+	event.Job.Label = "Fisica @everyone **urgente**"
+	event.Outcome.Vacancies[0] = scheduler.Vacancy{
+		Materia: "Física @here <@123456789>",
+		Turno:   "Noche @everyone",
+		Sede:    "Monserrat @here",
+		Horario: "18:30 <@&987654321>",
+		Dias:    []string{"LU @everyone", "MI @here"},
+		Cupos:   3,
+	}
+	if err := (outboundNotifier{discord: fake}).Notify(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.dmCalls) != 1 || len(fake.dmCalls[0].components) != 1 {
+		t.Fatalf("dm calls/components = %d/%d, want 1/1", len(fake.dmCalls), len(fake.dmCalls[0].components))
+	}
+	content := fake.dmCalls[0].content
+	for _, executable := range []string{"@everyone", "@here", "<@123456789>", "<@&987654321>"} {
+		if strings.Contains(content, executable) {
+			t.Errorf("notification contains executable mention %q: %q", executable, content)
+		}
+	}
+	for _, readable := range []string{"Fisica", "Física", "Noche", "Monserrat", "18:30", "LU", "MI"} {
+		if !strings.Contains(content, readable) {
+			t.Errorf("escaped notification lost readable value %q: %q", readable, content)
+		}
 	}
 }
 
@@ -199,6 +286,56 @@ func seedRuntimeJob(t *testing.T, db *sql.DB, account, filtrosJSON string) strin
 	return strconv.FormatInt(id, 10)
 }
 
+func TestRuntimeJobHydratesNotificationIdentityByIDAndOwner(t *testing.T) {
+	db := newTestRuntimeDB(t)
+	seedRuntimeAccount(t, db, "owner", "secret-user", "secret-password", "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx?param=secret")
+	seedRuntimeAccount(t, db, "other", "other-user", "other-password", "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx?param=other")
+	jobID := seedRuntimeJob(t, db, "owner", `{"materiaCodigo":"3.1.050","turno":"Noche","secret":"must-not-flow"}`)
+	if _, err := db.Exec(`UPDATE jobs SET label='Fisica II' WHERE id=?`, jobID); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := &Runtime{DB: db}
+	job, err := runtime.job(scheduler.PersistedJob{ID: jobID, Account: "owner", Channel: "channel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.MateriaCodigo != "3.1.050" || job.Label != "Fisica II" {
+		t.Fatalf("identity = %q/%q, want 3.1.050/Fisica II", job.MateriaCodigo, job.Label)
+	}
+	if _, err = runtime.job(scheduler.PersistedJob{ID: jobID, Account: "other"}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("wrong-owner error = %v, want sql.ErrNoRows", err)
+	}
+
+	serialized := fmt.Sprintf("%+v", job)
+	for _, secret := range []string{"must-not-flow", "secret-user", "secret-password", "param=secret"} {
+		if strings.Contains(serialized, secret) {
+			t.Errorf("scheduler.Job leaked %q: %s", secret, serialized)
+		}
+	}
+}
+
+func TestRuntimeJobFallsBackToCodeAndRejectsInvalidFilters(t *testing.T) {
+	db := newTestRuntimeDB(t)
+	seedRuntimeAccount(t, db, "owner", "u", "p", testHealedStartURL)
+	jobID := seedRuntimeJob(t, db, "owner", `{"materiaCodigo":"3.1.050"}`)
+	runtime := &Runtime{DB: db}
+
+	job, err := runtime.job(scheduler.PersistedJob{ID: jobID, Account: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Label != "3.1.050" {
+		t.Fatalf("empty label fallback = %q, want 3.1.050", job.Label)
+	}
+	if _, err = db.Exec(`UPDATE jobs SET filtros_json='{' WHERE id=?`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runtime.job(scheduler.PersistedJob{ID: jobID, Account: "owner"}); err == nil {
+		t.Fatal("invalid filtros_json unexpectedly accepted")
+	}
+}
+
 func decryptRuntimeCredentials(t *testing.T, db *sql.DB, account string) credentialcrypto.Credentials {
 	t.Helper()
 	var encrypted credentialcrypto.Ciphertext
@@ -251,7 +388,7 @@ const testHealedStartURL = "https://inscripcionespia.uade.edu.ar/InscripcionClas
 // URL is invalid, with Runtime.relink substituted by a fake returning a
 // valid sso.Result, persists the new (encrypted) start URL and completes the
 // search using that link instead of falling back to stale_start_url.
-func TestPollHealsStaleStartURLViaRelinkAndCompletesSearch(t *testing.T) {
+func TestPollPreservesMateriaAfterHealingStaleStartURL(t *testing.T) {
 	initial := readFixture(t, "initial-form.html")
 	found := readFixture(t, "postback-found.html")
 	found = []byte(strings.Replace(string(found), `<table id="results"><tr class="row_central"><td>Física II</td><td>2 vacantes</td></tr></table>`, `<table id="results" class="grillaInscripcion"><tr class="row_central"><td class="tdTurno">MAÑANA</td><td class="tdSede">Lima</td><td class="tdHorario">08:00</td><td class="tdvacantes">2</td><td><input id="x_hiddenLU" value="True"><input id="x_hiddenMI" value="True"></td></tr></table>`, 1))
@@ -293,6 +430,9 @@ func TestPollHealsStaleStartURLViaRelinkAndCompletesSearch(t *testing.T) {
 	}
 	if outcome.Code != "found" {
 		t.Fatalf("expected the healed link to complete the search with a found outcome, got %+v", outcome)
+	}
+	if len(outcome.Vacancies) != 1 || !strings.Contains(outcome.Vacancies[0].Materia, "Física") {
+		t.Fatalf("poll did not preserve UADE materia name: %+v", outcome.Vacancies)
 	}
 
 	if got := decryptRuntimeCredentials(t, db, account).UADEStartURL; got != testHealedStartURL {
