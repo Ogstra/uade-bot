@@ -32,6 +32,12 @@ func New(token string, dispatcher discordhttp.CommandDispatcher, projections ...
 		bot.WithEventListenerFunc(OnModalSubmit(dispatcher, projection)),
 		bot.WithEventListenerFunc(OnAutocomplete(dispatcher, projection)),
 		bot.WithEventListenerFunc(OnComponentInteraction(dispatcher, projection)),
+		bot.WithEventListenerFunc(OnGuildReady(projection)),
+		bot.WithEventListenerFunc(OnGuildJoin(projection)),
+		bot.WithEventListenerFunc(OnGuildAvailable(projection)),
+		bot.WithEventListenerFunc(OnGuildUpdate(projection)),
+		bot.WithEventListenerFunc(OnGuildUnavailable(projection)),
+		bot.WithEventListenerFunc(OnGuildLeave(projection)),
 	)
 	if err == nil && projection != nil {
 		projection.SetGuildSource(client.Caches())

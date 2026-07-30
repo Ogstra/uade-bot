@@ -43,45 +43,97 @@ type guildSource interface {
 	GuildsForEach(func(discord.Guild))
 }
 
+type projectedIdentity struct {
+	globalName string
+	username   string
+	nicknames  map[string]string
+}
+
 // Projection exposes the bounded, cache-only Discord data required by the
-// dashboard. Guilds remain owned by disgo's FlagGuilds cache; only identities
-// observed on interactions are retained here.
+// dashboard and admin commands. It owns lifecycle state because disgo removes
+// guilds from FlagGuilds before both unavailable and definitive leave events.
 type Projection struct {
 	mu         sync.RWMutex
-	guilds     guildSource
-	identities map[string]string
+	guilds     map[string]dashboard.Guild
+	identities map[string]*projectedIdentity
 }
 
 func NewProjection(source guildSource) *Projection {
-	return &Projection{guilds: source, identities: make(map[string]string)}
+	p := &Projection{guilds: make(map[string]dashboard.Guild), identities: make(map[string]*projectedIdentity)}
+	p.SetGuildSource(source)
+	return p
 }
 
 func (p *Projection) SetGuildSource(source guildSource) {
-	if p == nil {
+	if p == nil || source == nil {
 		return
 	}
-	p.mu.Lock()
-	p.guilds = source
-	p.mu.Unlock()
+	source.GuildsForEach(p.upsertGuild)
 }
 
 func (p *Projection) Observe(guildID snowflake.ID, member *discord.ResolvedMember, user discord.User) {
 	if p == nil || user.ID == 0 {
 		return
 	}
-	name := ""
+	guildKey := guildID.String()
+	nick := ""
 	if member != nil && member.Nick != nil {
-		name = strings.TrimSpace(*member.Nick)
-	}
-	if name == "" {
-		name = strings.TrimSpace(user.EffectiveName())
-	}
-	if name == "" {
-		name = user.ID.String()
+		nick = strings.TrimSpace(*member.Nick)
 	}
 	p.mu.Lock()
-	p.identities[user.ID.String()] = name
+	identity := p.identities[user.ID.String()]
+	if identity == nil {
+		identity = &projectedIdentity{nicknames: make(map[string]string)}
+		p.identities[user.ID.String()] = identity
+	}
+	if nick != "" {
+		identity.nicknames[guildKey] = nick
+	} else {
+		delete(identity.nicknames, guildKey)
+	}
+	if user.GlobalName != nil {
+		identity.globalName = strings.TrimSpace(*user.GlobalName)
+	}
+	if username := strings.TrimSpace(user.Username); username != "" {
+		identity.username = username
+	}
 	p.mu.Unlock()
+}
+
+// ResolveIdentity applies nickname-in-guild, global display name, username,
+// then raw ID precedence. An empty guild chooses the lowest guild ID nickname
+// so dashboard/cross-guild output remains deterministic.
+func (p *Projection) ResolveIdentity(guildID, userID string) string {
+	if p == nil {
+		return userID
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	identity := p.identities[userID]
+	if identity == nil {
+		return userID
+	}
+	if guildID != "" {
+		if nick := identity.nicknames[guildID]; nick != "" {
+			return nick
+		}
+	} else {
+		guildIDs := make([]string, 0, len(identity.nicknames))
+		for id := range identity.nicknames {
+			guildIDs = append(guildIDs, id)
+		}
+		sort.Strings(guildIDs)
+		if len(guildIDs) > 0 {
+			return identity.nicknames[guildIDs[0]]
+		}
+	}
+	if identity.globalName != "" {
+		return identity.globalName
+	}
+	if identity.username != "" {
+		return identity.username
+	}
+	return userID
 }
 
 func (p *Projection) DisplayNames() map[string]string {
@@ -91,10 +143,37 @@ func (p *Projection) DisplayNames() map[string]string {
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	for id, name := range p.identities {
-		out[id] = name
+	for id := range p.identities {
+		out[id] = p.resolveIdentityLocked("", id)
 	}
 	return out
+}
+
+func (p *Projection) resolveIdentityLocked(guildID, userID string) string {
+	identity := p.identities[userID]
+	if identity == nil {
+		return userID
+	}
+	if guildID != "" && identity.nicknames[guildID] != "" {
+		return identity.nicknames[guildID]
+	}
+	if guildID == "" {
+		guildIDs := make([]string, 0, len(identity.nicknames))
+		for id := range identity.nicknames {
+			guildIDs = append(guildIDs, id)
+		}
+		sort.Strings(guildIDs)
+		if len(guildIDs) > 0 {
+			return identity.nicknames[guildIDs[0]]
+		}
+	}
+	if identity.globalName != "" {
+		return identity.globalName
+	}
+	if identity.username != "" {
+		return identity.username
+	}
+	return userID
 }
 
 func (p *Projection) Guilds() []dashboard.Guild {
@@ -102,14 +181,11 @@ func (p *Projection) Guilds() []dashboard.Guild {
 		return []dashboard.Guild{}
 	}
 	p.mu.RLock()
-	source := p.guilds
-	p.mu.RUnlock()
-	out := []dashboard.Guild{}
-	if source != nil {
-		source.GuildsForEach(func(guild discord.Guild) {
-			out = append(out, dashboard.Guild{ID: guild.ID.String(), Name: guild.Name})
-		})
+	out := make([]dashboard.Guild, 0, len(p.guilds))
+	for _, guild := range p.guilds {
+		out = append(out, guild)
 	}
+	p.mu.RUnlock()
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name == out[j].Name {
 			return out[i].ID < out[j].ID
@@ -117,6 +193,52 @@ func (p *Projection) Guilds() []dashboard.Guild {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+func (p *Projection) upsertGuild(guild discord.Guild) {
+	if p == nil || guild.ID == 0 {
+		return
+	}
+	p.mu.Lock()
+	p.guilds[guild.ID.String()] = dashboard.Guild{ID: guild.ID.String(), Name: guild.Name}
+	p.mu.Unlock()
+}
+
+func (p *Projection) removeGuild(guildID snowflake.ID) {
+	if p == nil || guildID == 0 {
+		return
+	}
+	key := guildID.String()
+	p.mu.Lock()
+	delete(p.guilds, key)
+	for _, identity := range p.identities {
+		delete(identity.nicknames, key)
+	}
+	p.mu.Unlock()
+}
+
+func OnGuildReady(p *Projection) func(*events.GuildReady) {
+	return func(e *events.GuildReady) { p.upsertGuild(e.Guild) }
+}
+
+func OnGuildJoin(p *Projection) func(*events.GuildJoin) {
+	return func(e *events.GuildJoin) { p.upsertGuild(e.Guild) }
+}
+
+func OnGuildAvailable(p *Projection) func(*events.GuildAvailable) {
+	return func(e *events.GuildAvailable) { p.upsertGuild(e.Guild) }
+}
+
+func OnGuildUpdate(p *Projection) func(*events.GuildUpdate) {
+	return func(e *events.GuildUpdate) { p.upsertGuild(e.Guild) }
+}
+
+func OnGuildUnavailable(_ *Projection) func(*events.GuildUnavailable) {
+	return func(*events.GuildUnavailable) {}
+}
+
+func OnGuildLeave(p *Projection) func(*events.GuildLeave) {
+	return func(e *events.GuildLeave) { p.removeGuild(e.GuildID) }
 }
 
 func projectionOf(values []*Projection) *Projection {
