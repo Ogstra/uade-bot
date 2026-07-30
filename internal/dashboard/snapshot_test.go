@@ -82,16 +82,20 @@ func TestSnapshotProvidersAreReadOnEveryBuildAndUseRawIDFallback(t *testing.T) {
 	guilds := []Guild{{ID: "b", Name: "Zulu"}, {ID: "a", Name: "Alpha"}}
 	names := map[string]string{}
 	source := SnapshotSource{
-		DB: db,
+		DB:            db,
 		GuildProvider: func() []Guild { return append([]Guild(nil), guilds...) },
 		DisplayNameProvider: func() map[string]string {
 			out := make(map[string]string, len(names))
-			for key, value := range names { out[key] = value }
+			for key, value := range names {
+				out[key] = value
+			}
 			return out
 		},
 	}
 	first, err := source.Build()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(first.BotGuilds) != 2 || first.BotGuilds[0].Name != "Alpha" {
 		t.Fatalf("first guilds = %+v", first.BotGuilds)
 	}
@@ -102,7 +106,9 @@ func TestSnapshotProvidersAreReadOnEveryBuildAndUseRawIDFallback(t *testing.T) {
 	guilds = append(guilds, Guild{ID: "c", Name: "Beta"})
 	names["123"] = "Ana"
 	second, err := source.Build()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(second.BotGuilds) != 3 || second.BotGuilds[1].Name != "Beta" || second.Accounts[0].DisplayName != "Ana" {
 		t.Fatalf("providers were frozen: guilds=%+v accounts=%+v", second.BotGuilds, second.Accounts)
 	}

@@ -87,10 +87,12 @@ type Health struct {
 }
 
 type SnapshotSource struct {
-	DB           *sql.DB
-	Now          func() time.Time
-	DisplayNames map[string]string
-	Guilds       []Guild
+	DB                  *sql.DB
+	Now                 func() time.Time
+	DisplayNames        map[string]string
+	Guilds              []Guild
+	DisplayNameProvider func() map[string]string
+	GuildProvider       func() []Guild
 }
 
 type rawJob struct {
@@ -108,7 +110,15 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 	if s.Now != nil {
 		now = s.Now()
 	}
-	out := Snapshot{GeneratedAt: now.UnixMilli(), BotGuilds: append([]Guild{}, s.Guilds...), Accounts: []Account{}, Health: Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}, Jobs: JobsHealth{}}}
+	guilds := append([]Guild{}, s.Guilds...)
+	if s.GuildProvider != nil {
+		guilds = append([]Guild{}, s.GuildProvider()...)
+	}
+	displayNames := s.DisplayNames
+	if s.DisplayNameProvider != nil {
+		displayNames = s.DisplayNameProvider()
+	}
+	out := Snapshot{GeneratedAt: now.UnixMilli(), BotGuilds: guilds, Accounts: []Account{}, Health: Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}, Jobs: JobsHealth{}}}
 	if s.DB == nil {
 		return out, nil
 	}
@@ -177,9 +187,9 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 		pause, paused := pauses[r.user]
 		a := grouped[r.user]
 		if a == nil {
-			name := s.DisplayNames[r.user]
+			name := displayNames[r.user]
 			if name == "" {
-				name = "Usuario " + r.user
+				name = r.user
 			}
 			a = &Account{DiscordUserID: r.user, DisplayName: name, Status: accountStatus(func() string {
 				if paused {

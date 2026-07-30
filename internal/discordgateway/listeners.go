@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/ogs/uade-bot/internal/dashboard"
 	"github.com/ogs/uade-bot/internal/discordhttp"
 )
 
@@ -35,6 +39,100 @@ type Dispatcher interface {
 	DispatchInteraction(context.Context, discordhttp.Interaction) (discordhttp.InteractionResponse, error)
 }
 
+type guildSource interface {
+	GuildsForEach(func(discord.Guild))
+}
+
+// Projection exposes the bounded, cache-only Discord data required by the
+// dashboard. Guilds remain owned by disgo's FlagGuilds cache; only identities
+// observed on interactions are retained here.
+type Projection struct {
+	mu         sync.RWMutex
+	guilds     guildSource
+	identities map[string]string
+}
+
+func NewProjection(source guildSource) *Projection {
+	return &Projection{guilds: source, identities: make(map[string]string)}
+}
+
+func (p *Projection) SetGuildSource(source guildSource) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.guilds = source
+	p.mu.Unlock()
+}
+
+func (p *Projection) Observe(guildID snowflake.ID, member *discord.ResolvedMember, user discord.User) {
+	if p == nil || user.ID == 0 {
+		return
+	}
+	name := ""
+	if member != nil && member.Nick != nil {
+		name = strings.TrimSpace(*member.Nick)
+	}
+	if name == "" {
+		name = strings.TrimSpace(user.EffectiveName())
+	}
+	if name == "" {
+		name = user.ID.String()
+	}
+	p.mu.Lock()
+	p.identities[user.ID.String()] = name
+	p.mu.Unlock()
+}
+
+func (p *Projection) DisplayNames() map[string]string {
+	out := map[string]string{}
+	if p == nil {
+		return out
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for id, name := range p.identities {
+		out[id] = name
+	}
+	return out
+}
+
+func (p *Projection) Guilds() []dashboard.Guild {
+	if p == nil {
+		return []dashboard.Guild{}
+	}
+	p.mu.RLock()
+	source := p.guilds
+	p.mu.RUnlock()
+	out := []dashboard.Guild{}
+	if source != nil {
+		source.GuildsForEach(func(guild discord.Guild) {
+			out = append(out, dashboard.Guild{ID: guild.ID.String(), Name: guild.Name})
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func projectionOf(values []*Projection) *Projection {
+	if len(values) == 0 {
+		return nil
+	}
+	return values[0]
+}
+
+func observeInteraction(p *Projection, guildID *snowflake.ID, member *discord.ResolvedMember, user discord.User) {
+	if p == nil || guildID == nil {
+		return
+	}
+	p.Observe(*guildID, member, user)
+}
+
 // respondFunc sends a fully-built interaction response back to Discord.
 // dispatchAndRespond accepts one as a parameter so tests can substitute a
 // fake instead of performing a real network call.
@@ -56,8 +154,9 @@ func defaultRespond(_ context.Context, id, token string, response discordhttp.In
 
 // OnSlashCommand adapts a Gateway ApplicationCommandInteractionCreate event
 // into a discordhttp.Interaction and dispatches it through dispatcher.
-func OnSlashCommand(dispatcher Dispatcher) func(*events.ApplicationCommandInteractionCreate) {
+func OnSlashCommand(dispatcher Dispatcher, projections ...*Projection) func(*events.ApplicationCommandInteractionCreate) {
 	return func(e *events.ApplicationCommandInteractionCreate) {
+		observeInteraction(projectionOf(projections), e.GuildID(), e.Member(), e.User())
 		in := base(e.GuildID(), e.ChannelID(), e.Member(), e.User())
 		in.Type = 2
 		in.Data = discordhttp.InteractionData{
@@ -70,8 +169,9 @@ func OnSlashCommand(dispatcher Dispatcher) func(*events.ApplicationCommandIntera
 
 // OnModalSubmit adapts a Gateway ModalSubmitInteractionCreate event into a
 // discordhttp.Interaction and dispatches it through dispatcher.
-func OnModalSubmit(dispatcher Dispatcher) func(*events.ModalSubmitInteractionCreate) {
+func OnModalSubmit(dispatcher Dispatcher, projections ...*Projection) func(*events.ModalSubmitInteractionCreate) {
 	return func(e *events.ModalSubmitInteractionCreate) {
+		observeInteraction(projectionOf(projections), e.GuildID(), e.Member(), e.User())
 		in := base(e.GuildID(), e.ChannelID(), e.Member(), e.User())
 		in.Type = 5
 		in.Data = discordhttp.InteractionData{
@@ -84,8 +184,9 @@ func OnModalSubmit(dispatcher Dispatcher) func(*events.ModalSubmitInteractionCre
 
 // OnAutocomplete adapts a Gateway AutocompleteInteractionCreate event into a
 // discordhttp.Interaction and dispatches it through dispatcher.
-func OnAutocomplete(dispatcher Dispatcher) func(*events.AutocompleteInteractionCreate) {
+func OnAutocomplete(dispatcher Dispatcher, projections ...*Projection) func(*events.AutocompleteInteractionCreate) {
 	return func(e *events.AutocompleteInteractionCreate) {
+		observeInteraction(projectionOf(projections), e.GuildID(), e.Member(), e.User())
 		in := base(e.GuildID(), e.ChannelID(), e.Member(), e.User())
 		in.Type = 4
 		in.Data = discordhttp.InteractionData{
@@ -98,8 +199,9 @@ func OnAutocomplete(dispatcher Dispatcher) func(*events.AutocompleteInteractionC
 
 // OnComponentInteraction adapts a Gateway message-component interaction into
 // the transport-agnostic shape handled by discordhttp.CommandDispatcher.
-func OnComponentInteraction(dispatcher Dispatcher) func(*events.ComponentInteractionCreate) {
+func OnComponentInteraction(dispatcher Dispatcher, projections ...*Projection) func(*events.ComponentInteractionCreate) {
 	return func(e *events.ComponentInteractionCreate) {
+		observeInteraction(projectionOf(projections), e.GuildID(), e.Member(), e.User())
 		in := base(e.GuildID(), e.ChannelID(), e.Member(), e.User())
 		in.Type = 3
 		in.Data = discordhttp.InteractionData{CustomID: e.Data.CustomID()}

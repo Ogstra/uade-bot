@@ -98,7 +98,8 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	production := os.Getenv("APP_ENV") == "production" || os.Getenv("GO_ENV") == "production"
-	snapshotSource := dashboard.SnapshotSource{DB: db}
+	gatewayProjection := discordgateway.NewProjection(nil)
+	snapshotSource := dashboardSnapshotSource(db, gatewayProjection)
 	mux.Handle("/", &dashboard.Server{
 		User: user, Password: os.Getenv("DASHBOARD_PASSWORD"), SessionSecret: sessionSecret,
 		Production: production, Snapshot: snapshotSource.Build,
@@ -126,7 +127,7 @@ func main() {
 		dispatcher := discordhttp.CommandDispatcher{DB: db, MasterKey: os.Getenv("CREDENTIALS_MASTER_KEY"), OnJobCreated: runtime.JobCreated, OnAccountReady: runtime.AccountReady, OnJobsChanged: runtime.JobsChanged}
 		notifier := discordrest.New(token)
 		dispatcher.SendChannel = func(channel, content string) error { return notifier.Send(channel, content) }
-		client, clientErr := discordgateway.New(token, dispatcher)
+		client, clientErr := discordgateway.New(token, dispatcher, gatewayProjection)
 		if clientErr != nil {
 			log.Fatal(clientErr)
 		}
@@ -151,4 +152,13 @@ func main() {
 		}
 	}
 	log.Fatal(<-serverErr)
+}
+
+func dashboardSnapshotSource(db *sql.DB, projection *discordgateway.Projection) dashboard.SnapshotSource {
+	source := dashboard.SnapshotSource{DB: db}
+	if projection != nil {
+		source.GuildProvider = projection.Guilds
+		source.DisplayNameProvider = projection.DisplayNames
+	}
+	return source
 }

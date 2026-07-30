@@ -3,6 +3,7 @@ package discordgateway
 import (
 	"github.com/disgoorg/disgo"
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/gateway"
 
 	"github.com/ogs/uade-bot/internal/discordhttp"
@@ -19,12 +20,21 @@ import (
 // configured intents, and member.permissions already arrives resolved in
 // the interaction payload, so no cache.FlagRoles/cache.FlagMembers or
 // privileged IntentGuildMembers is needed.
-func New(token string, dispatcher discordhttp.CommandDispatcher) (bot.Client, error) {
-	return disgo.New(token,
+func New(token string, dispatcher discordhttp.CommandDispatcher, projections ...*Projection) (bot.Client, error) {
+	var projection *Projection
+	if len(projections) > 0 {
+		projection = projections[0]
+	}
+	client, err := disgo.New(token,
+		bot.WithCacheConfigOpts(cache.WithCaches(cache.FlagGuilds)),
 		bot.WithGatewayConfigOpts(gateway.WithIntents(gateway.IntentGuilds)),
-		bot.WithEventListenerFunc(OnSlashCommand(dispatcher)),
-		bot.WithEventListenerFunc(OnModalSubmit(dispatcher)),
-		bot.WithEventListenerFunc(OnAutocomplete(dispatcher)),
-		bot.WithEventListenerFunc(OnComponentInteraction(dispatcher)),
+		bot.WithEventListenerFunc(OnSlashCommand(dispatcher, projection)),
+		bot.WithEventListenerFunc(OnModalSubmit(dispatcher, projection)),
+		bot.WithEventListenerFunc(OnAutocomplete(dispatcher, projection)),
+		bot.WithEventListenerFunc(OnComponentInteraction(dispatcher, projection)),
 	)
+	if err == nil && projection != nil {
+		projection.SetGuildSource(client.Caches())
+	}
+	return client, err
 }
