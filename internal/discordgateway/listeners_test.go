@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/ogs/uade-bot/internal/discordhttp"
@@ -291,7 +293,8 @@ func (f *fakeGuildCache) GuildsForEach(fn func(discord.Guild)) {
 
 func TestGatewayProjectionGuildAndIdentityPrecedence(t *testing.T) {
 	global := "Nombre global"
-	nick := "Apodo guild"
+	nick := "Apodo **guild** <@9>"
+	otherNick := "Otro apodo"
 	guilds := &fakeGuildCache{guilds: []discord.Guild{
 		{ID: snowflake.ID(2), Name: "Zulu"},
 		{ID: snowflake.ID(1), Name: "Alpha"},
@@ -300,13 +303,22 @@ func TestGatewayProjectionGuildAndIdentityPrecedence(t *testing.T) {
 	projection.Observe(snowflake.ID(2), &discord.ResolvedMember{Member: discord.Member{Nick: &nick}}, discord.User{
 		ID: snowflake.ID(10), Username: "usuario", GlobalName: &global,
 	})
+	projection.Observe(snowflake.ID(1), &discord.ResolvedMember{Member: discord.Member{Nick: &otherNick}}, discord.User{
+		ID: snowflake.ID(10), Username: "usuario", GlobalName: &global,
+	})
 
 	gotGuilds := projection.Guilds()
 	if len(gotGuilds) != 2 || gotGuilds[0].Name != "Alpha" || gotGuilds[1].Name != "Zulu" {
 		t.Fatalf("Guilds() = %+v, want stable name/ID order", gotGuilds)
 	}
-	if got := projection.DisplayNames()[snowflake.ID(10).String()]; got != nick {
-		t.Fatalf("DisplayNames()[10] = %q, want nickname %q", got, nick)
+	if got := projection.DisplayNames()[snowflake.ID(10).String()]; got != otherNick {
+		t.Fatalf("DisplayNames()[10] = %q, want deterministic nickname %q", got, otherNick)
+	}
+	if got := projection.ResolveIdentity("1", "10"); got != otherNick {
+		t.Fatalf("ResolveIdentity(guild 1,user 10) = %q, want %q", got, otherNick)
+	}
+	if got := projection.ResolveIdentity("2", "10"); got != nick {
+		t.Fatalf("ResolveIdentity(guild 2,user 10) = %q, want %q", got, nick)
 	}
 
 	projection.Observe(snowflake.ID(2), &discord.ResolvedMember{}, discord.User{
@@ -322,12 +334,78 @@ func TestGatewayProjectionGuildAndIdentityPrecedence(t *testing.T) {
 
 	copyNames := projection.DisplayNames()
 	copyNames[snowflake.ID(10).String()] = "mutado"
-	if got := projection.DisplayNames()[snowflake.ID(10).String()]; got != nick {
+	if got := projection.DisplayNames()[snowflake.ID(10).String()]; got != otherNick {
 		t.Fatalf("DisplayNames returned mutable internal state: %q", got)
 	}
 
-	guilds.guilds = append(guilds.guilds, discord.Guild{ID: snowflake.ID(3), Name: "Beta"})
-	if got := projection.Guilds(); len(got) != 3 || got[1].Name != "Beta" {
-		t.Fatalf("late guild not visible: %+v", got)
+	projection.Observe(snowflake.ID(2), nil, discord.User{ID: snowflake.ID(13)})
+	if got := projection.ResolveIdentity("2", "13"); got != "13" {
+		t.Fatalf("empty identity fallback = %q, want raw ID once", got)
+	}
+}
+
+func TestGatewayProjectionGuildLifecycleUnavailableLeaveAndRejoin(t *testing.T) {
+	projection := NewProjection(nil)
+	guild := discord.Guild{ID: snowflake.ID(77), Name: "Zulu"}
+	generic := func(value discord.Guild) *events.GenericGuild {
+		return &events.GenericGuild{GuildID: value.ID, Guild: value}
+	}
+	nick := "Nickname"
+	projection.Observe(guild.ID, &discord.ResolvedMember{Member: discord.Member{Nick: &nick}}, discord.User{ID: snowflake.ID(10), Username: "user"})
+
+	OnGuildJoin(projection)(&events.GuildJoin{GenericGuild: generic(guild)})
+	if got := projection.Guilds(); len(got) != 1 || got[0].Name != "Zulu" {
+		t.Fatalf("join guilds=%+v", got)
+	}
+	OnGuildUnavailable(projection)(&events.GuildUnavailable{GenericGuild: generic(guild)})
+	if got := projection.Guilds(); len(got) != 1 {
+		t.Fatalf("unavailable removed guild: %+v", got)
+	}
+	updated := guild
+	updated.Name = "Alpha"
+	OnGuildUpdate(projection)(&events.GuildUpdate{GenericGuild: generic(updated), OldGuild: guild})
+	if got := projection.Guilds(); len(got) != 1 || got[0].Name != "Alpha" {
+		t.Fatalf("update guilds=%+v", got)
+	}
+	OnGuildLeave(projection)(&events.GuildLeave{GenericGuild: generic(updated)})
+	if got := projection.Guilds(); len(got) != 0 {
+		t.Fatalf("leave guilds=%+v", got)
+	}
+	if got := projection.ResolveIdentity("77", "10"); got != "user" {
+		t.Fatalf("leave retained guild nickname: %q", got)
+	}
+	OnGuildJoin(projection)(&events.GuildJoin{GenericGuild: generic(guild)})
+	OnGuildJoin(projection)(&events.GuildJoin{GenericGuild: generic(guild)})
+	if got := projection.Guilds(); len(got) != 1 || got[0].ID != "77" {
+		t.Fatalf("rejoin duplicated guild: %+v", got)
+	}
+}
+
+func TestGatewayProjectionConcurrentLiveIdentityUpdates(t *testing.T) {
+	projection := NewProjection(nil)
+	guild := snowflake.ID(4)
+	user := discord.User{ID: snowflake.ID(5), Username: "initial"}
+	projection.Observe(guild, nil, user)
+	consumer := projection
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			name := fmt.Sprintf("nick-%02d", i)
+			projection.Observe(guild, &discord.ResolvedMember{Member: discord.Member{Nick: &name}}, user)
+		}(i)
+		go func() {
+			defer wg.Done()
+			_ = consumer.ResolveIdentity("4", "5")
+			_ = consumer.DisplayNames()
+			_ = consumer.Guilds()
+		}()
+	}
+	wg.Wait()
+	late := "late"
+	projection.Observe(guild, &discord.ResolvedMember{Member: discord.Member{Nick: &late}}, user)
+	if got := consumer.ResolveIdentity("4", "5"); got != late {
+		t.Fatalf("live consumer got %q, want late update", got)
 	}
 }
