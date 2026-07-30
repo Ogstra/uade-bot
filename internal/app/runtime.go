@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,11 +46,19 @@ type filters struct {
 }
 
 type discordSender interface {
-	SendDM(user, content string, components ...discord.ContainerComponent) error
-	Send(channel, content string, components ...discord.ContainerComponent) error
+	SendDM(user, content, nonce string, components ...discord.ContainerComponent) error
+	SendMention(channel, owner, content, nonce string, components ...discord.ContainerComponent) error
 }
 
-type outboundNotifier struct{ discord discordSender }
+type notificationProgressStore interface {
+	DeliveredNotificationFragments(context.Context, string, string) ([]scheduler.NotificationFragment, error)
+	MarkNotificationFragmentDelivered(context.Context, string, string, scheduler.NotificationFragment) error
+}
+
+type outboundNotifier struct {
+	discord  discordSender
+	progress notificationProgressStore
+}
 
 const discordContentLimit = 2000
 
@@ -59,30 +70,81 @@ const (
 )
 
 type notificationMessage struct {
-	Content    string
-	Components []discord.ContainerComponent
+	Content             string
+	Components          []discord.ContainerComponent
+	FragmentIndex       int
+	FragmentCount       int
+	FragmentFingerprint string
+	Nonce               string
 }
 
-func (n outboundNotifier) Notify(_ context.Context, event scheduler.Event) error {
+func (n outboundNotifier) Notify(ctx context.Context, event scheduler.Event) error {
 	if event.Kind == "vacancy" {
-		route := notificationRouteDM
+		if n.progress != nil && event.DeliveryKey == "" {
+			return errors.New("notification delivery key is required")
+		}
+		delivered := make(map[string]scheduler.NotificationFragment)
+		if n.progress != nil {
+			fragments, err := n.progress.DeliveredNotificationFragments(ctx, event.Job.ID, event.DeliveryKey)
+			if err != nil {
+				log.Printf("notification progress unavailable job=%s", event.Job.ID)
+				return errors.New("notification progress unavailable")
+			}
+			for _, fragment := range fragments {
+				delivered[notificationFragmentKey(notificationRoute(fragment.Route), fragment.FragmentIndex)] = fragment
+			}
+		}
+
+		routes := []notificationRoute{notificationRouteDM}
 		if event.Job.Channel != "" {
-			route = notificationRouteChannel
+			routes = append(routes, notificationRouteChannel)
 		}
-		for _, message := range notificationMessages(event, route) {
-			if route == notificationRouteChannel {
-				if err := n.discord.Send(event.Job.Channel, message.Content, message.Components...); err != nil {
-					return err
+		var routeErrors []error
+		for _, route := range routes {
+			messages := notificationMessages(event, route)
+			for _, message := range messages {
+				key := notificationFragmentKey(route, message.FragmentIndex)
+				if previous, ok := delivered[key]; ok {
+					if previous.FragmentCount != message.FragmentCount || previous.FragmentFingerprint != message.FragmentFingerprint {
+						log.Printf("notification delivery conflict job=%s route=%s", event.Job.ID, route)
+						routeErrors = append(routeErrors, fmt.Errorf("notification delivery conflict route=%s", route))
+						break
+					}
+					continue
 				}
-				continue
-			}
-			if err := n.discord.SendDM(event.Job.Account, message.Content, message.Components...); err != nil {
-				return err
+				var sendErr error
+				if route == notificationRouteChannel {
+					sendErr = n.discord.SendMention(event.Job.Channel, event.Job.Account, message.Content, message.Nonce, message.Components...)
+				} else {
+					sendErr = n.discord.SendDM(event.Job.Account, message.Content, message.Nonce, message.Components...)
+				}
+				if sendErr != nil {
+					log.Printf("notification delivery failed job=%s route=%s", event.Job.ID, route)
+					routeErrors = append(routeErrors, fmt.Errorf("notification delivery failed route=%s", route))
+					break
+				}
+				fragment := scheduler.NotificationFragment{
+					Route:               string(route),
+					FragmentIndex:       message.FragmentIndex,
+					FragmentCount:       message.FragmentCount,
+					FragmentFingerprint: message.FragmentFingerprint,
+					DeliveredAt:         time.Now().UTC(),
+				}
+				if n.progress != nil {
+					if err := n.progress.MarkNotificationFragmentDelivered(ctx, event.Job.ID, event.DeliveryKey, fragment); err != nil {
+						log.Printf("notification progress mark failed job=%s route=%s", event.Job.ID, route)
+						routeErrors = append(routeErrors, fmt.Errorf("notification progress mark failed route=%s", route))
+						break
+					}
+				}
+				delivered[key] = fragment
 			}
 		}
-		return nil
+		return errors.Join(routeErrors...)
 	}
-	return n.discord.SendDM(event.Job.Account, notificationText(event))
+	content := notificationText(event)
+	nonce := notificationFragmentNonce(notificationRouteDM, event.Job.Account, 0, 1, content)
+	return n.discord.SendDM(event.Job.Account, content, nonce)
 }
 
 func notificationMessages(event scheduler.Event, route notificationRoute) []notificationMessage {
@@ -93,12 +155,51 @@ func notificationMessages(event scheduler.Event, route notificationRoute) []noti
 	contents := splitNotificationContent(notificationText(event), mention)
 	messages := make([]notificationMessage, len(contents))
 	for i, content := range contents {
-		messages[i].Content = content
+		target := event.Job.Account
+		if route == notificationRouteChannel {
+			target = event.Job.Channel
+		}
+		fingerprint := sha256.Sum256([]byte(content))
+		messages[i] = notificationMessage{
+			Content:             content,
+			FragmentIndex:       i,
+			FragmentCount:       len(contents),
+			FragmentFingerprint: hex.EncodeToString(fingerprint[:]),
+			Nonce:               notificationFragmentNonce(route, target, i, len(contents), content),
+		}
 		if i == len(contents)-1 {
 			messages[i].Components = []discord.ContainerComponent{discordrest.VacancyActionRow(event.Job.ID)}
 		}
 	}
 	return messages
+}
+
+func notificationFragmentKey(route notificationRoute, index int) string {
+	return fmt.Sprintf("%s/%d", route, index)
+}
+
+func notificationFragmentNonce(route notificationRoute, target string, index, count int, content string) string {
+	hash := sha256.New()
+	writeNotificationIdentityString(hash, string(route))
+	writeNotificationIdentityString(hash, target)
+	var number [8]byte
+	binary.BigEndian.PutUint64(number[:], uint64(index))
+	hash.Write(number[:])
+	binary.BigEndian.PutUint64(number[:], uint64(count))
+	hash.Write(number[:])
+	writeNotificationIdentityString(hash, content)
+	return "uade-" + hex.EncodeToString(hash.Sum(nil))[:20]
+}
+
+type notificationIdentityWriter interface {
+	Write([]byte) (int, error)
+}
+
+func writeNotificationIdentityString(writer notificationIdentityWriter, value string) {
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+	_, _ = writer.Write(length[:])
+	_, _ = writer.Write([]byte(value))
 }
 
 func splitNotificationContent(payload, firstPrefix string) []string {
@@ -206,7 +307,7 @@ func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken, sso
 	store := scheduler.SQLStore{DB: db}
 	options := []scheduler.Option{scheduler.WithStore(store), scheduler.WithShadow(shadow)}
 	if discordToken != "" && !shadow {
-		options = append(options, scheduler.WithNotifier(&scheduler.ThrottledNotifier{Next: outboundNotifier{discord: discordrest.New(discordToken)}, Delay: 250 * time.Millisecond}))
+		options = append(options, scheduler.WithNotifier(&scheduler.ThrottledNotifier{Next: outboundNotifier{discord: discordrest.New(discordToken), progress: store}, Delay: 250 * time.Millisecond}))
 	}
 	runtime := &Runtime{DB: db, MasterKey: masterKey, SSOPortalURL: ssoPortalURL, Scheduler: scheduler.New(concurrency, options...), ctx: ctx, cancel: cancel, interval: interval, relink: sso.Relink}
 	if _, err := runtime.Scheduler.Reconcile(ctx, runtime.job); err != nil {

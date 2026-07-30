@@ -20,7 +20,31 @@ func VacancyActionRow(jobID string) discord.ActionRowComponent {
 	return discord.NewActionRow(discord.NewDangerButton("Detener busqueda", "detener_job:"+jobID))
 }
 
-func (n Notifier) SendDM(user, content string, components ...discord.ContainerComponent) error {
+func dmMessageCreate(content, nonce string, components []discord.ContainerComponent) discord.MessageCreate {
+	return discord.MessageCreate{
+		Content:      content,
+		Nonce:        nonce,
+		EnforceNonce: true,
+		Components:   components,
+		AllowedMentions: &discord.AllowedMentions{
+			Parse: []discord.AllowedMentionType{},
+			Roles: []snowflake.ID{},
+			Users: []snowflake.ID{},
+		},
+	}
+}
+
+func mentionMessageCreate(owner, content, nonce string, components []discord.ContainerComponent) (discord.MessageCreate, error) {
+	ownerID, err := snowflake.Parse(owner)
+	if err != nil {
+		return discord.MessageCreate{}, err
+	}
+	message := dmMessageCreate(content, nonce, components)
+	message.AllowedMentions.Users = []snowflake.ID{ownerID}
+	return message, nil
+}
+
+func (n Notifier) SendDM(user, content, nonce string, components ...discord.ContainerComponent) error {
 	id, err := snowflake.Parse(user)
 	if err != nil {
 		return err
@@ -29,14 +53,19 @@ func (n Notifier) SendDM(user, content string, components ...discord.ContainerCo
 	if err != nil {
 		return err
 	}
-	_, err = n.Rest.CreateMessage(channel.ID(), discord.MessageCreate{Content: content, Components: components})
+	_, err = n.Rest.CreateMessage(channel.ID(), dmMessageCreate(content, nonce, components))
 	return err
 }
-func (n Notifier) Send(channel string, content string, components ...discord.ContainerComponent) error {
-	id, e := snowflake.Parse(channel)
-	if e != nil {
-		return e
+
+func (n Notifier) SendMention(channel, owner, content, nonce string, components ...discord.ContainerComponent) error {
+	id, err := snowflake.Parse(channel)
+	if err != nil {
+		return err
 	}
-	_, e = n.Rest.CreateMessage(id, discord.MessageCreate{Content: content, Components: components})
-	return e
+	message, err := mentionMessageCreate(owner, content, nonce, components)
+	if err != nil {
+		return err
+	}
+	_, err = n.Rest.CreateMessage(id, message)
+	return err
 }
