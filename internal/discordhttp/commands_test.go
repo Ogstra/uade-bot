@@ -530,8 +530,8 @@ func TestAdminEstadoUsesCompactLinesAndIgnoresAccountPauseReason(t *testing.T) {
 
 	content := responseContent(dispatchJSON(t, d, command("admin", "admin-estado", "8", nil)))
 	for _, want := range []string{
-		"**#1** <@u1> · Mi etiqueta - 3.1.050 - Algoritmos · Noche LU/MI · activa · <#c1> · sin vacantes",
-		"**#2** <@u2> · 3.1.050 - Algoritmos · Noche LU/MI · pausada · <#c2> · fallo la busqueda",
+		"**#1** u1 · Mi etiqueta - 3.1.050 - Algoritmos · Noche LU/MI · activa · <#c1> · sin vacantes",
+		"**#2** u2 · 3.1.050 - Algoritmos · Noche LU/MI · pausada · <#c2> · fallo la busqueda",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("/admin-estado no contiene %q: %s", want, content)

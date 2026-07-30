@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
 	"github.com/ogs/uade-bot/internal/sso"
@@ -70,6 +71,12 @@ type InteractionResponse struct {
 	Data any `json:"data,omitempty"`
 }
 
+// IdentityResolver is the read-only, cache-only identity view supplied by the
+// live Gateway projection. Implementations must resolve at call time.
+type IdentityResolver interface {
+	ResolveIdentity(guildID, userID string) string
+}
+
 // CommandDispatcher implements all global slash commands and modal submits.
 // It does not accept a guild allow-list: ownership is account based and admin
 // authorization comes from Discord's Administrator permission bit.
@@ -86,6 +93,7 @@ type CommandDispatcher struct {
 	OnJobsChanged      func()
 	SendChannel        func(channelID, content string) error
 	ResolveMateria     func(context.Context, string, string) (string, error)
+	IdentityResolver   IdentityResolver
 }
 
 var credentialActivationTimeout = 2 * time.Minute
@@ -154,7 +162,7 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 	case "admin-stats":
 		return d.adminStats(ctx)
 	case "admin-user-stats":
-		return d.adminUserStats(ctx, stringOption(in.Data.Options, "usuario"))
+		return d.adminUserStats(ctx, in.GuildID, stringOption(in.Data.Options, "usuario"))
 	default:
 		return message("Comando desconocido."), nil
 	}
@@ -638,7 +646,7 @@ func (d CommandDispatcher) estado(ctx context.Context, userID string, admin bool
 				identity = label + " - " + materia
 			}
 			status := formatJobStatusText(job.status, sql.NullString{})
-			lines = append(lines, fmt.Sprintf("**#%d** <@%s> · %s · %s %s · %s · %s · %s", job.id, job.owner, identity, filters.Turno, strings.Join(filters.Dias, "/"), status, formatJobLocation(job.guildID, job.channelID), lastOutcome))
+			lines = append(lines, fmt.Sprintf("**#%d** %s · %s · %s %s · %s · %s · %s", job.id, d.adminIdentity(job.guildID.String, job.owner), identity, filters.Turno, strings.Join(filters.Dias, "/"), status, formatJobLocation(job.guildID, job.channelID), lastOutcome))
 		} else {
 			block := fmt.Sprintf("**%s**\n**Materia:** %s\n**Turno:** %s\n**Dias:** %s\n", label, materia, filters.Turno, strings.Join(filters.Dias, ", "))
 			if len(filters.SedesExcluidas) > 0 {
@@ -665,7 +673,7 @@ func (d CommandDispatcher) estado(ctx context.Context, userID string, admin bool
 }
 
 func (d CommandDispatcher) pendingSearchLine(ctx context.Context, admin bool, userID, filter string) (string, error) {
-	query := `SELECT discord_user_id,COALESCE(label,'') FROM pending_searches`
+	query := `SELECT discord_user_id,COALESCE(label,''),guild_id FROM pending_searches`
 	args := []any{}
 	if !admin {
 		query += ` WHERE discord_user_id=?`
@@ -682,7 +690,8 @@ func (d CommandDispatcher) pendingSearchLine(ctx context.Context, admin bool, us
 	lines := []string{}
 	for rows.Next() {
 		var owner, label string
-		if err = rows.Scan(&owner, &label); err != nil {
+		var guildID sql.NullString
+		if err = rows.Scan(&owner, &label, &guildID); err != nil {
 			rows.Close()
 			return "", err
 		}
@@ -690,7 +699,7 @@ func (d CommandDispatcher) pendingSearchLine(ctx context.Context, admin bool, us
 			label = "sin etiqueta"
 		}
 		if admin {
-			lines = append(lines, fmt.Sprintf("⏳ <@%s> · %s · pendiente de credenciales", owner, label))
+			lines = append(lines, fmt.Sprintf("⏳ %s · %s · pendiente de credenciales", d.adminIdentity(guildID.String, owner), label))
 		} else {
 			lines = append(lines, fmt.Sprintf("⏳ **%s** — pendiente: todavía no completaste el modal de credenciales para esta búsqueda. Volvé a intentar con `/credenciales`.", label))
 		}
@@ -764,7 +773,7 @@ func (d CommandDispatcher) adminStats(ctx context.Context) (InteractionResponse,
 	return message(fmt.Sprintf("Usuarios: %d\nBúsquedas: %d\nCuentas pausadas: %d\nResultados registrados: %d", users, jobs, paused, history)), nil
 }
 
-func (d CommandDispatcher) adminUserStats(ctx context.Context, userID string) (InteractionResponse, error) {
+func (d CommandDispatcher) adminUserStats(ctx context.Context, guildID, userID string) (InteractionResponse, error) {
 	if userID == "" {
 		return message("Seleccioná un usuario."), nil
 	}
@@ -783,7 +792,7 @@ func (d CommandDispatcher) adminUserStats(ctx context.Context, userID string) (I
 	if reason.Valid {
 		pause = reason.String
 	}
-	return message(fmt.Sprintf("Usuario: %s\nBúsquedas: %d\nComandos: %d\nPausa: %s", userID, jobs, commands, pause)), nil
+	return message(fmt.Sprintf("Usuario: %s\nBúsquedas: %d\nComandos: %d\nPausa: %s", d.adminIdentity(guildID, userID), jobs, commands, pause)), nil
 }
 
 func (d CommandDispatcher) autocomplete(ctx context.Context, userID string, in Interaction) (InteractionResponse, error) {
@@ -804,12 +813,12 @@ func (d CommandDispatcher) autocomplete(ctx context.Context, userID string, in I
 				if err = rows.Scan(&account); err != nil {
 					return InteractionResponse{}, err
 				}
-				choices = append(choices, map[string]any{"name": account, "value": account})
+				choices = append(choices, map[string]any{"name": truncateChoiceName(d.adminIdentity(in.GuildID, account)), "value": account})
 			}
 			return InteractionResponse{Type: 8, Data: map[string]any{"choices": choices}}, rows.Err()
 		}
 	}
-	query := `SELECT id,discord_user_id,COALESCE(label,'') FROM jobs`
+	query := `SELECT id,discord_user_id,COALESCE(label,''),guild_id FROM jobs`
 	args := []any{}
 	if !admin {
 		query += ` WHERE discord_user_id=?`
@@ -824,16 +833,42 @@ func (d CommandDispatcher) autocomplete(ctx context.Context, userID string, in I
 	for rows.Next() {
 		var id int
 		var owner, label string
-		if err = rows.Scan(&id, &owner, &label); err != nil {
+		var guildID sql.NullString
+		if err = rows.Scan(&id, &owner, &label, &guildID); err != nil {
 			return InteractionResponse{}, err
 		}
 		name := fmt.Sprintf("#%d %s", id, label)
 		if admin {
-			name += ` · ` + owner
+			name += ` · ` + d.adminIdentity(guildID.String, owner)
 		}
-		choices = append(choices, map[string]any{"name": name, "value": strconv.Itoa(id)})
+		choices = append(choices, map[string]any{"name": truncateChoiceName(name), "value": strconv.Itoa(id)})
 	}
 	return InteractionResponse{Type: 8, Data: map[string]any{"choices": choices}}, rows.Err()
+}
+
+func (d CommandDispatcher) adminIdentity(guildID, userID string) string {
+	name := userID
+	if d.IdentityResolver != nil {
+		name = strings.TrimSpace(d.IdentityResolver.ResolveIdentity(guildID, userID))
+	}
+	if name == "" || name == userID {
+		return escapeDiscordIdentity(userID)
+	}
+	return fmt.Sprintf("%s (%s)", escapeDiscordIdentity(name), escapeDiscordIdentity(userID))
+}
+
+func escapeDiscordIdentity(value string) string {
+	return strings.NewReplacer(
+		`\`, `\\`, "*", `\*`, "_", `\_`, "~", `\~`, "`", "\\`",
+		"|", `\|`, ">", `\>`, "<", `\<`,
+	).Replace(value)
+}
+
+func truncateChoiceName(value string) string {
+	if utf8.RuneCountInString(value) <= 100 {
+		return value
+	}
+	return string([]rune(value)[:99]) + "…"
 }
 
 func (d CommandDispatcher) logCommand(ctx context.Context, userID, name, guild string) error {

@@ -137,6 +137,7 @@ func main() {
 			OnAccountActivated: runtime.AccountActivated, OnJobsChanged: runtime.JobsChanged,
 			ResolveMateria: runtime.ResolveMateria,
 		}
+		dispatcher = wireGatewayIdentity(dispatcher, gatewayProjection)
 		notifier := discordrest.New(token)
 		dispatcher.SendChannel = func(channel, content string) error { return notifier.Send(channel, content) }
 		client, clientErr := discordgateway.New(token, dispatcher, gatewayProjection)
@@ -170,6 +171,11 @@ func main() {
 		log.Printf("discord gateway connected with interaction listeners")
 	}
 	log.Fatal(<-serverErr)
+}
+
+func wireGatewayIdentity(dispatcher discordhttp.CommandDispatcher, projection *discordgateway.Projection) discordhttp.CommandDispatcher {
+	dispatcher.IdentityResolver = projection
+	return dispatcher
 }
 
 func dashboardSnapshotSource(db *sql.DB, projection *discordgateway.Projection) dashboard.SnapshotSource {
