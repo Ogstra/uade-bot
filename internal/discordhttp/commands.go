@@ -78,10 +78,17 @@ type CommandDispatcher struct {
 	MasterKey      string
 	OnJobCreated   func(string)
 	OnAccountReady func(string)
-	OnJobsChanged  func()
-	SendChannel    func(channelID, content string) error
-	ResolveMateria func(context.Context, string, string) (string, error)
+	// PrepareAccount is the production post-credential seam. When present,
+	// submitCredentials detaches a bounded activation from Discord's request
+	// deadline, waits for UADE relink, and only then materializes a pending job.
+	PrepareAccount     func(context.Context, string) error
+	OnAccountActivated func(account, excludeJobID string)
+	OnJobsChanged      func()
+	SendChannel        func(channelID, content string) error
+	ResolveMateria     func(context.Context, string, string) (string, error)
 }
+
+var credentialActivationTimeout = 2 * time.Minute
 
 // Dispatch is a thin JSON-unmarshal wrapper around DispatchInteraction, kept
 // for the HTTP-webhook transport's wire format. Gateway ingress
@@ -236,19 +243,23 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 	if err = tx.Commit(); err != nil {
 		return InteractionResponse{}, err
 	}
+	if d.PrepareAccount != nil {
+		go d.activateCredentials(userID)
+		return message("Credenciales guardadas de forma cifrada. La activación de tus búsquedas está en curso."), nil
+	}
 	if d.OnAccountReady != nil {
 		d.OnAccountReady(userID)
 	}
-	jobID, jobErr := d.materializePendingSearch(ctx, userID)
+	activation, jobErr := d.materializePendingSearchResult(ctx, userID)
 	if jobErr != nil {
 		return message("Credenciales guardadas, pero no pude validar la materia pendiente en UADE. No creé la búsqueda; volvé a intentar."), nil
 	}
-	if jobID != "" {
-		if d.OnJobCreated != nil {
-			d.OnJobCreated(jobID)
+	if activation.id != "" {
+		if activation.created && d.OnJobCreated != nil {
+			d.OnJobCreated(activation.id)
 		}
 		var label, rawFilters string
-		if err := d.DB.QueryRowContext(ctx, `SELECT COALESCE(label,''),filtros_json FROM jobs WHERE id=? AND discord_user_id=?`, jobID, userID).Scan(&label, &rawFilters); err != nil {
+		if err := d.DB.QueryRowContext(ctx, `SELECT COALESCE(label,''),filtros_json FROM jobs WHERE id=? AND discord_user_id=?`, activation.id, userID).Scan(&label, &rawFilters); err != nil {
 			return InteractionResponse{}, err
 		}
 		filters := parseJobFilters(rawFilters)
@@ -258,14 +269,45 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 	return message("Credenciales guardadas de forma cifrada. Todavía no creé ninguna búsqueda: volvé a usar /buscar para crearla."), nil
 }
 
+func (d CommandDispatcher) activateCredentials(userID string) {
+	defer func() { _ = recover() }()
+	ctx, cancel := context.WithTimeout(context.Background(), credentialActivationTimeout)
+	defer cancel()
+	if err := d.PrepareAccount(ctx, userID); err != nil {
+		return
+	}
+	activation, err := d.materializePendingSearchResult(ctx, userID)
+	if err != nil {
+		if d.OnAccountActivated != nil {
+			d.OnAccountActivated(userID, "")
+		}
+		return
+	}
+	if activation.created && d.OnJobCreated != nil {
+		d.OnJobCreated(activation.id)
+	}
+	if d.OnAccountActivated != nil {
+		exclude := ""
+		if activation.created {
+			exclude = activation.id
+		}
+		d.OnAccountActivated(userID, exclude)
+	}
+}
+
 // savePendingSearch persists the exact filters/channel/guild/label of a
 // /buscar request made while the user has no saved credentials yet, so
 // submitCredentials can materialize it later instead of losing it. Upserts
 // by discord_user_id: a second /buscar before the modal is completed
 // overwrites the previous pending row rather than accumulating rows.
 func (d CommandDispatcher) savePendingSearch(ctx context.Context, userID, channelID, guildID, label, filtersJSON string) error {
-	_, err := d.DB.ExecContext(ctx, `INSERT INTO pending_searches(discord_user_id,filtros_json,channel_id,guild_id,label,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(discord_user_id) DO UPDATE SET filtros_json=excluded.filtros_json,channel_id=excluded.channel_id,guild_id=excluded.guild_id,label=excluded.label,created_at=excluded.created_at`, userID, filtersJSON, nullable(channelID), nullable(guildID), label, time.Now().UnixMilli())
+	_, err := d.DB.ExecContext(ctx, `INSERT INTO pending_searches(discord_user_id,filtros_json,channel_id,guild_id,label,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(discord_user_id) DO UPDATE SET filtros_json=excluded.filtros_json,channel_id=excluded.channel_id,guild_id=excluded.guild_id,label=excluded.label,created_at=CASE WHEN excluded.created_at <= pending_searches.created_at THEN pending_searches.created_at + 1 ELSE excluded.created_at END`, userID, filtersJSON, nullable(channelID), nullable(guildID), label, time.Now().UnixMilli())
 	return err
+}
+
+type jobCreation struct {
+	id      string
+	created bool
 }
 
 // materializePendingSearch converts a saved pending_searches row (if any)
@@ -273,46 +315,84 @@ func (d CommandDispatcher) savePendingSearch(ctx context.Context, userID, channe
 // deletes the pending row. Returns "" (no error) when there is nothing
 // pending -- that's the normal case, not a failure.
 func (d CommandDispatcher) materializePendingSearch(ctx context.Context, userID string) (string, error) {
-	var filtersJSON, label string
-	var channelID, guildID sql.NullString
-	err := d.DB.QueryRowContext(ctx, `SELECT filtros_json,channel_id,guild_id,label FROM pending_searches WHERE discord_user_id=?`, userID).Scan(&filtersJSON, &channelID, &guildID, &label)
+	result, err := d.materializePendingSearchResult(ctx, userID)
+	return result.id, err
+}
+
+func (d CommandDispatcher) materializePendingSearchResult(ctx context.Context, userID string) (jobCreation, error) {
+	for {
+		var filtersJSON, label string
+		var channelID, guildID sql.NullString
+		var version int64
+		err := d.DB.QueryRowContext(ctx, `SELECT filtros_json,channel_id,guild_id,label,created_at FROM pending_searches WHERE discord_user_id=?`, userID).Scan(&filtersJSON, &channelID, &guildID, &label, &version)
+		if err == sql.ErrNoRows {
+			return jobCreation{}, nil
+		}
+		if err != nil {
+			return jobCreation{}, err
+		}
+		filters := parseJobFilters(filtersJSON)
+		materiaName, err := d.resolveMateriaName(ctx, userID, filters.MateriaCodigo)
+		if err != nil {
+			return jobCreation{}, err
+		}
+		tx, err := d.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return jobCreation{}, err
+		}
+		deleted, err := tx.ExecContext(ctx, `DELETE FROM pending_searches WHERE discord_user_id=? AND created_at=?`, userID, version)
+		if err != nil {
+			tx.Rollback()
+			return jobCreation{}, err
+		}
+		matched, err := deleted.RowsAffected()
+		if err != nil {
+			tx.Rollback()
+			return jobCreation{}, err
+		}
+		if matched == 0 {
+			tx.Rollback()
+			continue
+		}
+		now := time.Now().UnixMilli()
+		if materiaName != "" {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO materias(codigo,nombre,updated_at) VALUES(?,?,?) ON CONFLICT(codigo) DO UPDATE SET nombre=excluded.nombre,updated_at=excluded.updated_at`, filters.MateriaCodigo, materiaName, now); err != nil {
+				tx.Rollback()
+				return jobCreation{}, err
+			}
+		}
+		inserted, err := tx.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,materia_code,channel_id,guild_id,label,status,created_at) VALUES(?,?,?,?,?,?,'active',?)`, userID, filtersJSON, filters.MateriaCodigo, channelID, guildID, label, now)
+		if err != nil {
+			tx.Rollback()
+			existing, findErr := d.findExistingJob(ctx, userID, guildID.String, filters.MateriaCodigo)
+			if findErr != nil || existing == "" {
+				return jobCreation{}, err
+			}
+			_, deleteErr := d.DB.ExecContext(ctx, `DELETE FROM pending_searches WHERE discord_user_id=? AND created_at=?`, userID, version)
+			if deleteErr != nil {
+				return jobCreation{}, deleteErr
+			}
+			return jobCreation{id: existing}, nil
+		}
+		id, err := inserted.LastInsertId()
+		if err != nil {
+			tx.Rollback()
+			return jobCreation{}, err
+		}
+		if err = tx.Commit(); err != nil {
+			return jobCreation{}, err
+		}
+		return jobCreation{id: strconv.FormatInt(id, 10), created: true}, nil
+	}
+}
+
+func (d CommandDispatcher) findExistingJob(ctx context.Context, userID, guildID, code string) (string, error) {
+	var id string
+	err := d.DB.QueryRowContext(ctx, `SELECT id FROM jobs WHERE discord_user_id=? AND COALESCE(guild_id,'')=? AND materia_code=? ORDER BY id LIMIT 1`, userID, guildID, code).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
-	if err != nil {
-		return "", err
-	}
-	filters := parseJobFilters(filtersJSON)
-	materiaName, err := d.resolveMateriaName(ctx, userID, filters.MateriaCodigo)
-	if err != nil {
-		return "", err
-	}
-	tx, err := d.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-	now := time.Now().UnixMilli()
-	if materiaName != "" {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO materias(codigo,nombre,updated_at) VALUES(?,?,?) ON CONFLICT(codigo) DO UPDATE SET nombre=excluded.nombre,updated_at=excluded.updated_at`, filters.MateriaCodigo, materiaName, now); err != nil {
-			return "", err
-		}
-	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,channel_id,guild_id,label,status,created_at) VALUES(?,?,?,?,?,'active',?)`, userID, filtersJSON, channelID, guildID, label, now)
-	if err != nil {
-		return "", err
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM pending_searches WHERE discord_user_id=?`, userID); err != nil {
-		return "", err
-	}
-	if err = tx.Commit(); err != nil {
-		return "", err
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return "", err
-	}
-	return strconv.FormatInt(id, 10), nil
+	return id, err
 }
 
 func (d CommandDispatcher) readCredentials(ctx context.Context, userID string) (credentialcrypto.Credentials, error) {
@@ -424,6 +504,11 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 	if active >= 10 {
 		return message("Ya tenés 10 búsquedas activas o pausadas."), nil
 	}
+	if existing, err := d.findExistingJob(ctx, userID, guildID, code); err != nil {
+		return InteractionResponse{}, err
+	} else if existing != "" {
+		return message(fmt.Sprintf("La materia `%s` ya está siendo monitoreada en esta ubicación (búsqueda #%s).", code, existing)), nil
+	}
 	materiaName, resolveErr := d.resolveMateriaName(ctx, userID, code)
 	if resolveErr != nil {
 		return message("No pude validar esa materia en UADE. No creé la búsqueda; volvé a intentar."), nil
@@ -439,8 +524,13 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 			return InteractionResponse{}, err
 		}
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,channel_id,guild_id,label,status,created_at) VALUES(?,?,?,?,?,'active',?)`, userID, string(filters), nullable(channelID), nullable(guildID), label, now)
+	result, err := tx.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,materia_code,channel_id,guild_id,label,status,created_at) VALUES(?,?,?,?,?,?,'active',?)`, userID, string(filters), code, nullable(channelID), nullable(guildID), label, now)
 	if err != nil {
+		tx.Rollback()
+		existing, findErr := d.findExistingJob(ctx, userID, guildID, code)
+		if findErr == nil && existing != "" {
+			return message(fmt.Sprintf("La materia `%s` ya está siendo monitoreada en esta ubicación (búsqueda #%s).", code, existing)), nil
+		}
 		return InteractionResponse{}, err
 	}
 	if err = tx.Commit(); err != nil {

@@ -430,19 +430,52 @@ func (r *Runtime) JobCreated(id string) {
 func (r *Runtime) AccountReady(account string) {
 	go func() {
 		defer recoverGoroutine("runtime.AccountReady")
-		r.attemptRelinkOnAccountReady(r.ctx, account)
-		if _, err := r.Scheduler.Reconcile(r.ctx, r.job); err != nil {
-			log.Printf("scheduler reconcile after credential update failed: %v", err)
-			return
-		}
-		r.pollAllActiveJobs(r.ctx, account)
+		_ = r.PrepareAccount(r.ctx, account)
+		r.AccountActivated(account, "")
 	}()
+}
+
+// PrepareAccount completes the remote UADE relink before callers resolve a
+// pending materia. The caller owns a bounded context; shutdown is also folded
+// in so detached credential activation cannot outlive Runtime.Close.
+func (r *Runtime) PrepareAccount(ctx context.Context, account string) error {
+	combined, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(r.ctx, cancel)
+	defer func() {
+		stop()
+		cancel()
+	}()
+	var encrypted credentialcrypto.Ciphertext
+	if err := r.DB.QueryRowContext(combined, `SELECT ciphertext,iv,auth_tag FROM credentials WHERE discord_user_id=?`, account).Scan(&encrypted.Ciphertext, &encrypted.IV, &encrypted.AuthTag); err != nil {
+		return err
+	}
+	credentials, err := credentialcrypto.Decrypt(r.MasterKey, account, encrypted)
+	if err != nil {
+		return err
+	}
+	_, err = r.healStartURL(combined, account, credentials)
+	return err
+}
+
+// AccountActivated reconciles the durable schedule and polls pre-existing
+// active jobs once. A newly materialized job is excluded because JobCreated
+// owns its one immediate poll.
+func (r *Runtime) AccountActivated(account, excludeJobID string) {
+	if _, err := r.Scheduler.Reconcile(r.ctx, r.job); err != nil {
+		log.Printf("scheduler reconcile after credential update failed: %v", err)
+		return
+	}
+	r.pollAllActiveJobsExcept(r.ctx, account, excludeJobID)
 }
 
 // pollAllActiveJobs triggers an immediate poll for every active job of
 // account. Factored out of AccountReady so it can be reused unchanged after
 // attemptRelinkOnAccountReady runs first.
 func (r *Runtime) pollAllActiveJobs(ctx context.Context, account string) {
+	r.pollAllActiveJobsExcept(ctx, account, "")
+}
+
+func (r *Runtime) pollAllActiveJobsExcept(ctx context.Context, account, excludeJobID string) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT id FROM jobs WHERE discord_user_id=? AND status='active' ORDER BY id`, account)
 	if err != nil {
 		return
@@ -450,7 +483,7 @@ func (r *Runtime) pollAllActiveJobs(ctx context.Context, account string) {
 	defer rows.Close()
 	for rows.Next() {
 		var id string
-		if rows.Scan(&id) == nil {
+		if rows.Scan(&id) == nil && id != excludeJobID {
 			r.Scheduler.PollNow(ctx, id)
 		}
 	}
@@ -469,16 +502,7 @@ func (r *Runtime) pollAllActiveJobs(ctx context.Context, account string) {
 // decryption fails, this is a silent no-op -- the first real poll's own
 // healStartURL call will retry.
 func (r *Runtime) attemptRelinkOnAccountReady(ctx context.Context, account string) {
-	var encrypted credentialcrypto.Ciphertext
-	err := r.DB.QueryRowContext(ctx, `SELECT ciphertext,iv,auth_tag FROM credentials WHERE discord_user_id=?`, account).Scan(&encrypted.Ciphertext, &encrypted.IV, &encrypted.AuthTag)
-	if err != nil {
-		return
-	}
-	credentials, err := credentialcrypto.Decrypt(r.MasterKey, account, encrypted)
-	if err != nil {
-		return
-	}
-	_, _ = r.healStartURL(ctx, account, credentials)
+	_ = r.PrepareAccount(ctx, account)
 }
 
 func (r *Runtime) JobsChanged() {

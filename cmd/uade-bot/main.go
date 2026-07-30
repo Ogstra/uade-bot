@@ -124,7 +124,12 @@ func main() {
 	}()
 
 	if token != "" && mode != "shadow" {
-		dispatcher := discordhttp.CommandDispatcher{DB: db, MasterKey: os.Getenv("CREDENTIALS_MASTER_KEY"), OnJobCreated: runtime.JobCreated, OnAccountReady: runtime.AccountReady, OnJobsChanged: runtime.JobsChanged, ResolveMateria: runtime.ResolveMateria}
+		dispatcher := discordhttp.CommandDispatcher{
+			DB: db, MasterKey: os.Getenv("CREDENTIALS_MASTER_KEY"),
+			OnJobCreated: runtime.JobCreated, PrepareAccount: runtime.PrepareAccount,
+			OnAccountActivated: runtime.AccountActivated, OnJobsChanged: runtime.JobsChanged,
+			ResolveMateria: runtime.ResolveMateria,
+		}
 		notifier := discordrest.New(token)
 		dispatcher.SendChannel = func(channel, content string) error { return notifier.Send(channel, content) }
 		client, clientErr := discordgateway.New(token, dispatcher, gatewayProjection)
