@@ -18,8 +18,9 @@ type Snapshot struct {
 	Accounts    []Account `json:"accounts"`
 }
 type Guild struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	IconURL string `json:"iconUrl"`
 }
 type Status struct {
 	Code  any    `json:"code"`
@@ -59,6 +60,7 @@ type Job struct {
 type Account struct {
 	DiscordUserID string `json:"discordUserId"`
 	DisplayName   string `json:"displayName"`
+	AvatarURL     string `json:"avatarUrl"`
 	Status        Status `json:"status"`
 	PauseUntil    *int64 `json:"pauseUntil"`
 	JobCount      int    `json:"jobCount"`
@@ -91,8 +93,10 @@ type SnapshotSource struct {
 	Now                 func() time.Time
 	DisplayNames        map[string]string
 	Guilds              []Guild
+	AvatarURLs          map[string]string
 	DisplayNameProvider func() map[string]string
 	GuildProvider       func() []Guild
+	AvatarURLProvider   func() map[string]string
 }
 
 type rawJob struct {
@@ -117,6 +121,10 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 	displayNames := s.DisplayNames
 	if s.DisplayNameProvider != nil {
 		displayNames = s.DisplayNameProvider()
+	}
+	avatarURLs := s.AvatarURLs
+	if s.AvatarURLProvider != nil {
+		avatarURLs = s.AvatarURLProvider()
 	}
 	out := Snapshot{GeneratedAt: now.UnixMilli(), BotGuilds: guilds, Accounts: []Account{}, Health: Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}, Jobs: JobsHealth{}}}
 	if s.DB == nil {
@@ -191,7 +199,7 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 			if name == "" {
 				name = r.user
 			}
-			a = &Account{DiscordUserID: r.user, DisplayName: name, Status: accountStatus(func() string {
+			a = &Account{DiscordUserID: r.user, DisplayName: name, AvatarURL: avatarURLs[r.user], Status: accountStatus(func() string {
 				if paused {
 					return pause.reason
 				}

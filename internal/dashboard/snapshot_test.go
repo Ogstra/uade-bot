@@ -23,7 +23,7 @@ func TestSnapshotProjectsSQLiteParityWithoutSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := (SnapshotSource{DB: db, Now: func() time.Time { return time.UnixMilli(500) }, DisplayNames: map[string]string{"user-a": "Ana"}, Guilds: []Guild{{ID: "guild-a", Name: "Servidor <script>"}}}).Build()
+	snapshot, err := (SnapshotSource{DB: db, Now: func() time.Time { return time.UnixMilli(500) }, DisplayNames: map[string]string{"user-a": "Ana"}, Guilds: []Guild{{ID: "guild-a", Name: "Servidor <script>", IconURL: "https://cdn.discordapp.com/icons/guild-a/abc.png"}}, AvatarURLs: map[string]string{"user-a": "https://cdn.discordapp.com/avatars/user-a/def.png"}}).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,6 +33,12 @@ func TestSnapshotProjectsSQLiteParityWithoutSecrets(t *testing.T) {
 	if len(snapshot.Accounts) != 2 || snapshot.Accounts[0].DisplayName != "Ana" || snapshot.Accounts[0].Jobs[0].Filters.MateriaNombre == nil || *snapshot.Accounts[0].Jobs[0].Filters.MateriaNombre != "Análisis Matemático" {
 		t.Fatalf("accounts=%+v", snapshot.Accounts)
 	}
+	if snapshot.Accounts[0].AvatarURL != "https://cdn.discordapp.com/avatars/user-a/def.png" {
+		t.Fatalf("avatarURL=%+v", snapshot.Accounts[0])
+	}
+	if snapshot.BotGuilds[0].IconURL != "https://cdn.discordapp.com/icons/guild-a/abc.png" {
+		t.Fatalf("iconURL=%+v", snapshot.BotGuilds[0])
+	}
 	if snapshot.Accounts[1].Jobs[0].Outcome.Code != "found" || *snapshot.Accounts[1].Jobs[0].Outcome.TotalCupos != 4 {
 		t.Fatalf("outcome=%+v", snapshot.Accounts[1].Jobs[0].Outcome)
 	}
@@ -41,6 +47,11 @@ func TestSnapshotProjectsSQLiteParityWithoutSecrets(t *testing.T) {
 	for _, secret := range []string{"SECRET_", "ciphertext", "channelId", "lastOutcome", "lastNotifiedState", "password"} {
 		if strings.Contains(serialized, secret) {
 			t.Errorf("snapshot leaked %q: %s", secret, serialized)
+		}
+	}
+	for _, want := range []string{`"iconUrl":"https://cdn.discordapp.com/icons/guild-a/abc.png"`, `"avatarUrl":"https://cdn.discordapp.com/avatars/user-a/def.png"`} {
+		if !strings.Contains(serialized, want) {
+			t.Errorf("snapshot missing %q: %s", want, serialized)
 		}
 	}
 }
@@ -81,12 +92,20 @@ func TestSnapshotProvidersAreReadOnEveryBuildAndUseRawIDFallback(t *testing.T) {
 	}
 	guilds := []Guild{{ID: "b", Name: "Zulu"}, {ID: "a", Name: "Alpha"}}
 	names := map[string]string{}
+	avatars := map[string]string{}
 	source := SnapshotSource{
 		DB:            db,
 		GuildProvider: func() []Guild { return append([]Guild(nil), guilds...) },
 		DisplayNameProvider: func() map[string]string {
 			out := make(map[string]string, len(names))
 			for key, value := range names {
+				out[key] = value
+			}
+			return out
+		},
+		AvatarURLProvider: func() map[string]string {
+			out := make(map[string]string, len(avatars))
+			for key, value := range avatars {
 				out[key] = value
 			}
 			return out
@@ -102,15 +121,22 @@ func TestSnapshotProvidersAreReadOnEveryBuildAndUseRawIDFallback(t *testing.T) {
 	if len(first.Accounts) != 1 || first.Accounts[0].DisplayName != "123" {
 		t.Fatalf("raw ID fallback missing: %+v", first.Accounts)
 	}
+	if first.Accounts[0].AvatarURL != "" {
+		t.Fatalf("avatar should be empty until observed: %+v", first.Accounts[0])
+	}
 
 	guilds = append(guilds, Guild{ID: "c", Name: "Beta"})
 	names["123"] = "Ana"
+	avatars["123"] = "https://cdn.discordapp.com/avatars/123/xyz.png"
 	second, err := source.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(second.BotGuilds) != 3 || second.BotGuilds[1].Name != "Beta" || second.Accounts[0].DisplayName != "Ana" {
 		t.Fatalf("providers were frozen: guilds=%+v accounts=%+v", second.BotGuilds, second.Accounts)
+	}
+	if second.Accounts[0].AvatarURL != "https://cdn.discordapp.com/avatars/123/xyz.png" {
+		t.Fatalf("avatar provider was frozen: %+v", second.Accounts[0])
 	}
 }
 
