@@ -396,13 +396,22 @@ func materiaName(db *sql.DB, code string) (*string, error) {
 	}
 	return &name, nil
 }
+// historyDisplayLimit is the number of deduplicated (real-change) history
+// entries shown to the user, applied AFTER dedupeHistory collapses
+// consecutive identical polls -- not a raw-row limit.
+const historyDisplayLimit = 10
+
 func loadHistory(db *sql.DB, job int64) ([]HistoryItem, error) {
-	rows, err := db.Query(`SELECT id, recorded_at, outcome_code, vacancy_count, total_cupos FROM poll_outcome_history WHERE job_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 10`, job)
+	// Raw LIMIT is intentionally wider than historyDisplayLimit: consecutive
+	// identical polls collapse to a single entry below (dedupeHistory), so a
+	// job that repeats the same outcome many times in a row needs a larger
+	// raw window to still surface up to historyDisplayLimit real changes.
+	rows, err := db.Query(`SELECT id, recorded_at, outcome_code, vacancy_count, total_cupos FROM poll_outcome_history WHERE job_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 50`, job)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []HistoryItem{}
+	raw := []HistoryItem{}
 	for rows.Next() {
 		var id, at int64
 		var code string
@@ -419,9 +428,42 @@ func loadHistory(db *sql.DB, job int64) ([]HistoryItem, error) {
 			v := int(t.Int64)
 			tp = &v
 		}
-		out = append(out, HistoryItem{id, at, outcomeCode(code, cp, tp)})
+		raw = append(raw, HistoryItem{id, at, outcomeCode(code, cp, tp)})
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return dedupeHistory(raw, historyDisplayLimit), nil
+}
+
+// dedupeHistory collapses consecutive raw poll rows (raw is ordered DESC,
+// most recent first) that resolve to the same Outcome as the chronologically
+// previous row -- raw[i+1] in this DESC ordering -- into a single entry, so
+// the "Historial de cambios" only shows real changes. The result preserves
+// the DESC order and is capped at limit deduplicated entries.
+func dedupeHistory(raw []HistoryItem, limit int) []HistoryItem {
+	out := []HistoryItem{}
+	for i := 0; i < len(raw); i++ {
+		if i < len(raw)-1 && outcomesEqual(raw[i].Outcome, raw[i+1].Outcome) {
+			continue
+		}
+		out = append(out, raw[i])
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func outcomesEqual(a, b Outcome) bool {
+	return a.Code == b.Code && intPtrEqual(a.VacancyCount, b.VacancyCount) && intPtrEqual(a.TotalCupos, b.TotalCupos)
+}
+
+func intPtrEqual(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 func maxPtr(current *int64, v int64) *int64 {
 	if current == nil || v > *current {

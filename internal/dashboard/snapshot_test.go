@@ -113,3 +113,37 @@ func TestSnapshotProvidersAreReadOnEveryBuildAndUseRawIDFallback(t *testing.T) {
 		t.Fatalf("providers were frozen: guilds=%+v accounts=%+v", second.BotGuilds, second.Accounts)
 	}
 }
+
+func TestDedupeHistoryCollapsesConsecutiveIdenticalOutcomes(t *testing.T) {
+	raw := []HistoryItem{
+		{ID: 5, RecordedAt: 500, Outcome: outcomeCode("no_vacancies", nil, nil)},
+		{ID: 4, RecordedAt: 400, Outcome: outcomeCode("no_vacancies", nil, nil)},
+		{ID: 3, RecordedAt: 300, Outcome: outcomeCode("no_vacancies", nil, nil)},
+		{ID: 2, RecordedAt: 200, Outcome: outcomeCode("no_vacancies", nil, nil)},
+		{ID: 1, RecordedAt: 100, Outcome: outcomeCode("no_vacancies", nil, nil)},
+	}
+	out := dedupeHistory(raw, 10)
+	if len(out) != 1 || out[0].RecordedAt != 100 {
+		t.Fatalf("expected single oldest entry, got %+v", out)
+	}
+}
+
+func TestDedupeHistoryKeepsRealVacancyCountChange(t *testing.T) {
+	oneA, oneB := 1, 1
+	cuposA, cuposB := 3, 5
+	raw := []HistoryItem{
+		{ID: 2, RecordedAt: 200, Outcome: outcomeCode("found", &oneA, &cuposA)},
+		{ID: 1, RecordedAt: 100, Outcome: outcomeCode("found", &oneB, &cuposB)},
+	}
+	out := dedupeHistory(raw, 10)
+	if len(out) != 2 || out[0].RecordedAt != 200 || out[1].RecordedAt != 100 {
+		t.Fatalf("expected both entries preserved in DESC order, got %+v", out)
+	}
+}
+
+func TestDedupeHistoryEmptyInputReturnsEmptyNonNilSlice(t *testing.T) {
+	out := dedupeHistory([]HistoryItem{}, 10)
+	if out == nil || len(out) != 0 {
+		t.Fatalf("expected empty non-nil slice, got %+v", out)
+	}
+}
