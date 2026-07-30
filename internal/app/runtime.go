@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/disgoorg/disgo/discord"
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
@@ -48,16 +49,84 @@ type discordSender interface {
 
 type outboundNotifier struct{ discord discordSender }
 
+const discordContentLimit = 2000
+
+type notificationRoute string
+
+const (
+	notificationRouteDM      notificationRoute = "dm"
+	notificationRouteChannel notificationRoute = "channel"
+)
+
+type notificationMessage struct {
+	Content    string
+	Components []discord.ContainerComponent
+}
+
 func (n outboundNotifier) Notify(_ context.Context, event scheduler.Event) error {
-	content := notificationText(event)
 	if event.Kind == "vacancy" {
-		row := discordrest.VacancyActionRow(event.Job.ID)
+		route := notificationRouteDM
 		if event.Job.Channel != "" {
-			return n.discord.Send(event.Job.Channel, content, row)
+			route = notificationRouteChannel
 		}
-		return n.discord.SendDM(event.Job.Account, content, row)
+		for _, message := range notificationMessages(event, route) {
+			if route == notificationRouteChannel {
+				if err := n.discord.Send(event.Job.Channel, message.Content, message.Components...); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := n.discord.SendDM(event.Job.Account, message.Content, message.Components...); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return n.discord.SendDM(event.Job.Account, content)
+	return n.discord.SendDM(event.Job.Account, notificationText(event))
+}
+
+func notificationMessages(event scheduler.Event, route notificationRoute) []notificationMessage {
+	mention := ""
+	if route == notificationRouteChannel {
+		mention = "<@" + event.Job.Account + ">\n"
+	}
+	contents := splitNotificationContent(notificationText(event), mention)
+	messages := make([]notificationMessage, len(contents))
+	for i, content := range contents {
+		messages[i].Content = content
+		if i == len(contents)-1 {
+			messages[i].Components = []discord.ContainerComponent{discordrest.VacancyActionRow(event.Job.ID)}
+		}
+	}
+	return messages
+}
+
+func splitNotificationContent(payload, firstPrefix string) []string {
+	runes := []rune(payload)
+	for expectedCount := 1; ; {
+		contents := make([]string, 0, expectedCount)
+		position := 0
+		for index := 1; position < len(runes) || (len(runes) == 0 && index == 1); index++ {
+			prefix := fmt.Sprintf("⟦parte %d/%d⟧\n", index, expectedCount)
+			if index == 1 {
+				prefix = firstPrefix + prefix
+			}
+			capacity := discordContentLimit - utf8.RuneCountInString(prefix)
+			if capacity <= 0 {
+				panic("notification fragment prefix exceeds Discord content limit")
+			}
+			end := position + capacity
+			if end > len(runes) {
+				end = len(runes)
+			}
+			contents = append(contents, prefix+string(runes[position:end]))
+			position = end
+		}
+		if len(contents) == expectedCount {
+			return contents
+		}
+		expectedCount = len(contents)
+	}
 }
 
 func notificationText(event scheduler.Event) string {
@@ -73,18 +142,15 @@ func notificationText(event scheduler.Event) string {
 	}
 	identity := notificationIdentity(event.Job, event.Outcome)
 	lines := []string{fmt.Sprintf("Se encontro una vacante para **%s**.", identity)}
-	if len(event.Outcome.Vacancies) > 0 {
-		lines = append(lines, fmt.Sprintf("**Turno:** %s", escapeDiscordText(event.Outcome.Vacancies[0].Turno)), "")
-	}
-	for index, vacancy := range event.Outcome.Vacancies {
-		if index > 0 {
-			lines = append(lines, "")
-		}
+	for _, vacancy := range event.Outcome.Vacancies {
+		lines = append(lines, "")
 		days := make([]string, 0, len(vacancy.Dias))
 		for _, day := range vacancy.Dias {
 			days = append(days, escapeDiscordText(day))
 		}
 		lines = append(lines,
+			fmt.Sprintf("**Materia:** %s", escapeDiscordText(vacancy.Materia)),
+			fmt.Sprintf("**Turno:** %s", escapeDiscordText(vacancy.Turno)),
 			fmt.Sprintf("**Sede:** %s", escapeDiscordText(vacancy.Sede)),
 			fmt.Sprintf("**Horario:** %s", escapeDiscordText(vacancy.Horario)),
 			fmt.Sprintf("**Dias:** %s", strings.Join(days, ", ")),

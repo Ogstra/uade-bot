@@ -97,7 +97,11 @@ func TestNotificationMessagesLongMultibyteReconstructExactly(t *testing.T) {
 	event := vacancyNotificationEvent("channel")
 	event.Outcome.Vacancies = make([]scheduler.Vacancy, 12)
 	for i := range event.Outcome.Vacancies {
-		repeated := strings.Repeat(fmt.Sprintf("á界-%02d-", i), 42)
+		repetitions := 42
+		if i == 0 {
+			repetitions = 400
+		}
+		repeated := strings.Repeat(fmt.Sprintf("á界-%02d-", i), repetitions)
 		event.Outcome.Vacancies[i] = scheduler.Vacancy{
 			Materia: fmt.Sprintf("Materia única %02d %s", i, repeated),
 			Turno:   fmt.Sprintf("Turno único %02d", i),
@@ -196,11 +200,11 @@ func parseNotificationVacancies(t *testing.T, payload string) []scheduler.Vacanc
 		}
 		vacancies = append(vacancies, scheduler.Vacancy{
 			Materia: strings.TrimPrefix(lines[0], "**Materia:** "),
-			Turno: strings.TrimPrefix(lines[1], "**Turno:** "),
-			Sede: strings.TrimPrefix(lines[2], "**Sede:** "),
+			Turno:   strings.TrimPrefix(lines[1], "**Turno:** "),
+			Sede:    strings.TrimPrefix(lines[2], "**Sede:** "),
 			Horario: strings.TrimPrefix(lines[3], "**Horario:** "),
-			Dias: strings.Split(strings.TrimPrefix(lines[4], "**Dias:** "), ", "),
-			Cupos: cupos,
+			Dias:    strings.Split(strings.TrimPrefix(lines[4], "**Dias:** "), ", "),
+			Cupos:   cupos,
 		})
 	}
 	return vacancies
