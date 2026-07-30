@@ -143,13 +143,30 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 	if err != nil {
 		return out, fmt.Errorf("dashboard jobs: %w", err)
 	}
-	defer jobRows.Close()
-	grouped := map[string]*Account{}
+	// Fully drain and close jobRows before running any nested queries
+	// (materiaName/loadHistory below). s.DB's pool is pinned to a single
+	// connection (store.Open -- see .planning/debug/resolved/nested-sqlite-tx-scheduler.md);
+	// holding jobRows open while issuing further queries on the same
+	// *sql.DB would block forever waiting for a second connection that
+	// can never be granted.
+	var jobs []rawJob
 	for jobRows.Next() {
 		var r rawJob
 		if err = jobRows.Scan(&r.id, &r.user, &r.label, &r.status, &r.filters, &r.last, &r.outcome); err != nil {
+			jobRows.Close()
 			return out, err
 		}
+		jobs = append(jobs, r)
+	}
+	if err = jobRows.Err(); err != nil {
+		jobRows.Close()
+		return out, err
+	}
+	if err = jobRows.Close(); err != nil {
+		return out, err
+	}
+	grouped := map[string]*Account{}
+	for _, r := range jobs {
 		out.Health.Jobs.Total++
 		if r.status == "active" {
 			out.Health.Jobs.Active++
@@ -218,9 +235,6 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 		}
 		a.Jobs = append(a.Jobs, j)
 		a.JobCount++
-	}
-	if err = jobRows.Err(); err != nil {
-		return out, err
 	}
 	ids := make([]string, 0, len(grouped))
 	for id := range grouped {
