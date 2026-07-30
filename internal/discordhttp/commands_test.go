@@ -11,10 +11,54 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
 	"github.com/ogs/uade-bot/internal/store"
 )
+
+func TestCredentialsActivationPreparesBeforePendingMaterialization(t *testing.T) {
+	d := testDispatcher(t)
+	options := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
+	dispatchJSON(t, d, command("activation-owner", "buscar", "0", options))
+	prepareStarted := make(chan struct{})
+	releasePrepare := make(chan struct{})
+	prepared := atomic.Bool{}
+	d.PrepareAccount = func(context.Context, string) error {
+		close(prepareStarted)
+		<-releasePrepare
+		prepared.Store(true)
+		return nil
+	}
+	d.ResolveMateria = func(context.Context, string, string) (string, error) {
+		if !prepared.Load() {
+			t.Fatal("resolved pending materia before account preparation")
+		}
+		return "ÁLGEBRA", nil
+	}
+	created := make(chan string, 1)
+	d.OnJobCreated = func(id string) { created <- id }
+	response := make(chan InteractionResponse, 1)
+	go func() { response <- dispatchJSON(t, d, credentialsSubmit("activation-owner", "u", "p")) }()
+	<-prepareStarted
+	select {
+	case out := <-response:
+		if !strings.Contains(responseContent(out), "activación") {
+			t.Fatalf("response=%q", responseContent(out))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("credential response waited for remote account preparation")
+	}
+	close(releasePrepare)
+	select {
+	case id := <-created:
+		if id == "" {
+			t.Fatal("empty created job id")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending search was not activated after preparation")
+	}
+}
 
 func TestBuscarDuplicateReturnsExistingAndNotifiesExactlyOnce(t *testing.T) {
 	d := testDispatcher(t)
