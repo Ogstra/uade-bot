@@ -226,8 +226,120 @@ func TestIsAdminCoversSuperAdminAdminsTableAndNeither(t *testing.T) {
 	}
 }
 
-func TestGlobalCommandsContainsExactlyTwelveRequiredCommands(t *testing.T) {
-	want := []string{"buscar", "estado", "detener", "pausar", "reanudar", "credenciales", "admin-estado", "admin-detener", "admin-pausar", "admin-reanudar", "admin-stats", "admin-user-stats"}
+// TestSuperadminCommandsRejectNonSuperAdminEvenIfAlreadyAdmin proves being in
+// the admins table is NOT sufficient for superadmin-agregar/superadmin-
+// eliminar -- only SuperAdminID qualifies (T-260730-gav-02). No DB mutation
+// happens on denial.
+func TestSuperadminCommandsRejectNonSuperAdminEvenIfAlreadyAdmin(t *testing.T) {
+	d := testDispatcher(t)
+	d.SuperAdminID = "boss"
+	seedAdmin(t, d, "already-admin")
+	for _, name := range []string{"superadmin-agregar", "superadmin-eliminar"} {
+		content := responseContent(dispatchJSON(t, d, command("already-admin", name, "0", []map[string]any{{"name": "usuario", "value": "target"}})))
+		if !strings.Contains(content, "super-admin configurado") {
+			t.Fatalf("%s denial=%q", name, content)
+		}
+	}
+	var count int
+	if err := d.DB.QueryRow(`SELECT COUNT(*) FROM admins WHERE discord_user_id='target'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("target unexpectedly mutated: count=%d", count)
+	}
+}
+
+// TestSuperadminAgregarUpsertsAndSuperadminEliminarReportsMissing covers the
+// success path for both commands: idempotent add (no duplicate/error on a
+// second identical add), and delete reporting distinctly whether a row
+// existed.
+func TestSuperadminAgregarUpsertsAndSuperadminEliminarReportsMissing(t *testing.T) {
+	d := testDispatcher(t)
+	d.SuperAdminID = "boss"
+
+	first := responseContent(dispatchJSON(t, d, command("boss", "superadmin-agregar", "0", []map[string]any{{"name": "usuario", "value": "newadmin"}})))
+	if !strings.Contains(first, "newadmin") {
+		t.Fatalf("agregar response=%q", first)
+	}
+	var addedBy string
+	var count int
+	if err := d.DB.QueryRow(`SELECT COUNT(*),added_by FROM admins WHERE discord_user_id='newadmin' GROUP BY added_by`).Scan(&count, &addedBy); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || addedBy != "boss" {
+		t.Fatalf("count=%d addedBy=%q", count, addedBy)
+	}
+
+	// Repeating the add must upsert, not duplicate or fail.
+	second := responseContent(dispatchJSON(t, d, command("boss", "superadmin-agregar", "0", []map[string]any{{"name": "usuario", "value": "newadmin"}})))
+	if !strings.Contains(second, "newadmin") {
+		t.Fatalf("second agregar response=%q", second)
+	}
+	if err := d.DB.QueryRow(`SELECT COUNT(*) FROM admins WHERE discord_user_id='newadmin'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("upsert duplicated row: count=%d", count)
+	}
+
+	// Deleting a non-existent admin reports "no estaba" without error.
+	missing := responseContent(dispatchJSON(t, d, command("boss", "superadmin-eliminar", "0", []map[string]any{{"name": "usuario", "value": "ghost"}})))
+	if !strings.Contains(missing, "no estaba") {
+		t.Fatalf("missing-delete response=%q", missing)
+	}
+
+	// Deleting the real admin removes the row and confirms removal.
+	removed := responseContent(dispatchJSON(t, d, command("boss", "superadmin-eliminar", "0", []map[string]any{{"name": "usuario", "value": "newadmin"}})))
+	if !strings.Contains(removed, "ya no es admin") {
+		t.Fatalf("removed response=%q", removed)
+	}
+	if err := d.DB.QueryRow(`SELECT COUNT(*) FROM admins WHERE discord_user_id='newadmin'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("admin row survived eliminar: count=%d", count)
+	}
+}
+
+// TestSuperadminSelfTargetIsRejectedWithoutMutatingAdminsTable covers
+// T-260730-gav-05: the super-admin cannot add or remove itself from the
+// admins table, since its access never depends on that table.
+func TestSuperadminSelfTargetIsRejectedWithoutMutatingAdminsTable(t *testing.T) {
+	d := testDispatcher(t)
+	d.SuperAdminID = "boss"
+	for _, name := range []string{"superadmin-agregar", "superadmin-eliminar"} {
+		content := responseContent(dispatchJSON(t, d, command("boss", name, "0", []map[string]any{{"name": "usuario", "value": "boss"}})))
+		if !strings.Contains(content, "ya tiene acceso de administrador siempre") {
+			t.Fatalf("%s self-target response=%q", name, content)
+		}
+	}
+	var count int
+	if err := d.DB.QueryRow(`SELECT COUNT(*) FROM admins WHERE discord_user_id='boss'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("admins table mutated for super-admin self-target: count=%d", count)
+	}
+}
+
+// TestSuperadminAgregarGrantsImmediateIsAdminAccess closes the loop with
+// Task 1: a user added via superadmin-agregar can immediately run an
+// existing admin-* command in the same dispatcher.
+func TestSuperadminAgregarGrantsImmediateIsAdminAccess(t *testing.T) {
+	d := testDispatcher(t)
+	d.SuperAdminID = "boss"
+	dispatchJSON(t, d, command("boss", "superadmin-agregar", "0", []map[string]any{{"name": "usuario", "value": "freshadmin"}}))
+	out := dispatchJSON(t, d, command("freshadmin", "admin-estado", "0", nil))
+	if out.Type != 4 {
+		t.Fatalf("admin-estado type=%d", out.Type)
+	}
+	if content := responseContent(out); strings.Contains(content, "permisos de administrador") {
+		t.Fatalf("freshly granted admin was denied: %q", content)
+	}
+}
+
+func TestGlobalCommandsContainsExactlyFourteenRequiredCommands(t *testing.T) {
+	want := []string{"buscar", "estado", "detener", "pausar", "reanudar", "credenciales", "admin-estado", "admin-detener", "admin-pausar", "admin-reanudar", "admin-stats", "admin-user-stats", "superadmin-agregar", "superadmin-eliminar"}
 	commands := GlobalCommands()
 	if len(commands) != len(want) {
 		t.Fatalf("got %d", len(commands))

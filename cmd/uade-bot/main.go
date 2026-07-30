@@ -162,7 +162,7 @@ func main() {
 					log.Printf("discord command convergence failed: %v", err)
 					return
 				}
-				log.Printf("converged 12 global discord commands and cleared guild-scoped copies in %d guilds", len(guildIDs))
+				log.Printf("converged 14 global discord commands and cleared guild-scoped copies in %d guilds", len(guildIDs))
 			}()
 		}))
 		if clientErr = client.OpenGateway(context.Background()); clientErr != nil {

@@ -152,6 +152,11 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 	if d.DB == nil {
 		return InteractionResponse{}, errors.New("database unavailable")
 	}
+	if in.Data.Name == "superadmin-agregar" || in.Data.Name == "superadmin-eliminar" {
+		if d.SuperAdminID == "" || userID != d.SuperAdminID {
+			return message("Este comando requiere ser el super-admin configurado."), nil
+		}
+	}
 	admin := strings.HasPrefix(in.Data.Name, "admin-")
 	if admin {
 		ok, err := d.isAdmin(ctx, userID)
@@ -183,6 +188,10 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 		return d.adminStats(ctx)
 	case "admin-user-stats":
 		return d.adminUserStats(ctx, in.GuildID, stringOption(in.Data.Options, "usuario"))
+	case "superadmin-agregar":
+		return d.superadminAgregar(ctx, userID, stringOption(in.Data.Options, "usuario"))
+	case "superadmin-eliminar":
+		return d.superadminEliminar(ctx, userID, stringOption(in.Data.Options, "usuario"))
 	default:
 		return message("Comando desconocido."), nil
 	}
@@ -813,6 +822,51 @@ func (d CommandDispatcher) adminUserStats(ctx context.Context, guildID, userID s
 		pause = reason.String
 	}
 	return message(fmt.Sprintf("Usuario: %s\nBúsquedas: %d\nComandos: %d\nPausa: %s", d.adminIdentity(guildID, userID), jobs, commands, pause)), nil
+}
+
+// superadminAgregar grants admin-* access to targetID by upserting a row in
+// the admins table (added_by is always the super-admin authenticated by
+// DispatchInteraction's earlier gate, never a client-supplied value -- see
+// T-260730-gav-03). Rejects targetID == d.SuperAdminID: the super-admin's
+// access never depends on this table, so a row for it would be redundant
+// (T-260730-gav-05).
+func (d CommandDispatcher) superadminAgregar(ctx context.Context, superAdminID, targetID string) (InteractionResponse, error) {
+	if targetID == "" {
+		return message("Seleccioná un usuario."), nil
+	}
+	if targetID == d.SuperAdminID {
+		return message("El super-admin ya tiene acceso de administrador siempre; no hace falta ni se permite agregarlo a la tabla admins."), nil
+	}
+	_, err := d.DB.ExecContext(ctx, `INSERT INTO admins(discord_user_id,added_by,created_at) VALUES(?,?,?) ON CONFLICT(discord_user_id) DO UPDATE SET added_by=excluded.added_by,created_at=excluded.created_at`, targetID, superAdminID, time.Now().UnixMilli())
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	return message(fmt.Sprintf("Agregué a <@%s> como admin.", targetID)), nil
+}
+
+// superadminEliminar revokes targetID's row in the admins table, if any.
+// Rejects targetID == d.SuperAdminID for the same reason as
+// superadminAgregar: the super-admin's access is never sourced from this
+// table.
+func (d CommandDispatcher) superadminEliminar(ctx context.Context, _, targetID string) (InteractionResponse, error) {
+	if targetID == "" {
+		return message("Seleccioná un usuario."), nil
+	}
+	if targetID == d.SuperAdminID {
+		return message("El super-admin ya tiene acceso de administrador siempre; no hace falta ni se permite eliminarlo de la tabla admins."), nil
+	}
+	result, err := d.DB.ExecContext(ctx, `DELETE FROM admins WHERE discord_user_id=?`, targetID)
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	if n == 0 {
+		return message(fmt.Sprintf("<@%s> no estaba en la tabla de admins.", targetID)), nil
+	}
+	return message(fmt.Sprintf("<@%s> ya no es admin.", targetID)), nil
 }
 
 func (d CommandDispatcher) autocomplete(ctx context.Context, userID string, in Interaction) (InteractionResponse, error) {

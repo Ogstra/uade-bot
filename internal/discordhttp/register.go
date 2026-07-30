@@ -27,7 +27,7 @@ func opt(name, description string, required, autocomplete bool) commandOption {
 	return value
 }
 
-// GlobalCommands is the single registration source for all twelve commands.
+// GlobalCommands is the single registration source for all fourteen commands.
 // Registration deliberately uses the application-global endpoint; there is no
 // guild ID argument or guild-specific fallback.
 func GlobalCommands() []globalCommand {
@@ -45,6 +45,13 @@ func GlobalCommands() []globalCommand {
 	user := func(required bool) []commandOption {
 		return []commandOption{opt("usuario", "Cuenta a consultar", required, true)}
 	}
+	// discordUser builds a native Discord USER-type (type 6) option instead of
+	// the STRING+autocomplete pattern user() uses: the target of
+	// superadmin-agregar may not have a row in the users table yet, so
+	// autocomplete filtered against that table would not find them.
+	discordUser := func() []commandOption {
+		return []commandOption{{"type": 6, "name": "usuario", "description": "Usuario de Discord", "required": true}}
+	}
 	return []globalCommand{
 		{"buscar", "Crear una busqueda de vacantes en UADE", 1, buscar}, {"estado", "Ver tus busquedas activas o pausadas", 1, nil},
 		{"detener", "Detener una de tus busquedas", 1, job("Busqueda a detener")}, {"pausar", "Pausar una de tus busquedas", 1, job("Busqueda a pausar")},
@@ -52,6 +59,7 @@ func GlobalCommands() []globalCommand {
 		{"admin-estado", "[Admin] Ver todas las busquedas", 1, user(false)}, {"admin-detener", "[Admin] Detener cualquier busqueda", 1, job("Busqueda a detener")},
 		{"admin-pausar", "[Admin] Pausar cualquier busqueda", 1, job("Busqueda a pausar")}, {"admin-reanudar", "[Admin] Reanudar cualquier busqueda", 1, job("Busqueda a reanudar")},
 		{"admin-stats", "[Admin] Estadisticas generales del bot", 1, nil}, {"admin-user-stats", "[Admin] Estadisticas de una cuenta", 1, user(true)},
+		{"superadmin-agregar", "[Super-admin] Agregar un admin", 1, discordUser()}, {"superadmin-eliminar", "[Super-admin] Quitar un admin", 1, discordUser()},
 	}
 }
 

@@ -36,7 +36,7 @@ func TestRegisterCommandCleanupConvergesGlobalThenSortedGuilds(t *testing.T) {
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("paths=%v want=%v", paths, want)
 	}
-	if len(bodies[0]) != 12 || len(bodies[1]) != 0 || len(bodies[2]) != 0 {
+	if len(bodies[0]) != 14 || len(bodies[1]) != 0 || len(bodies[2]) != 0 {
 		t.Fatalf("body sizes=%d,%d,%d", len(bodies[0]), len(bodies[1]), len(bodies[2]))
 	}
 }
