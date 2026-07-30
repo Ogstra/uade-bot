@@ -62,6 +62,22 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// modernc.org/sqlite's ResetSession only checks that the connection is
+	// still open (sqlite.go conn.usable), not whether it is still mid an
+	// uncommitted transaction. If a Tx.Commit fails (e.g. SQLITE_BUSY because
+	// a concurrent connection on database/sql's default unbounded pool holds
+	// a SHARED read lock while this one tries to escalate to EXCLUSIVE at
+	// commit time), Go's database/sql already set tx.done=1 before invoking
+	// the driver, so the safety-net `defer tx.Rollback()` becomes a no-op
+	// (ErrTxDone) and never issues an actual ROLLBACK. The connection then
+	// goes back into the idle pool still inside that open transaction, and
+	// the next Begin() on it fails hard with "cannot start a transaction
+	// within a transaction". Pinning the pool to a single physical
+	// connection makes concurrent SQLite access from this process
+	// impossible, so that race -- and the poisoned-connection state it
+	// produces -- can never occur (see .planning/debug/resolved/nested-sqlite-tx-scheduler.md).
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if _, err = db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize schema: %w", err)
