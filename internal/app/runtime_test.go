@@ -194,6 +194,31 @@ func TestSplitNotificationContentExactSingleAndMultipartBoundaries(t *testing.T)
 	}
 }
 
+func TestNotificationMessagesSinglePartKeepsRouteAndDurableIdentity(t *testing.T) {
+	event := vacancyNotificationEvent("channel")
+	event.DeliveryKey = strings.Repeat("f", 64)
+	for route, wantPrefix := range map[notificationRoute]string{
+		notificationRouteDM:      "",
+		notificationRouteChannel: "<@user>\n",
+	} {
+		first := notificationMessages(event, route)
+		retry := notificationMessages(event, route)
+		if len(first) != 1 || len(retry) != 1 {
+			t.Fatalf("route %s parts=%d/%d, want 1/1", route, len(first), len(retry))
+		}
+		message := first[0]
+		if !strings.HasPrefix(message.Content, wantPrefix) || strings.Contains(message.Content, "⟦parte") {
+			t.Fatalf("route %s content=%q", route, message.Content)
+		}
+		if message.FragmentIndex != 0 || message.FragmentCount != 1 || len(message.Components) != 1 {
+			t.Fatalf("route %s metadata=%+v", route, message)
+		}
+		if !reflect.DeepEqual(first, retry) {
+			t.Fatalf("route %s retry changed durable message identity", route)
+		}
+	}
+}
+
 func TestNotificationMessagesLongMultibyteReconstructExactly(t *testing.T) {
 	event := vacancyNotificationEvent("channel")
 	event.Outcome.Vacancies = make([]scheduler.Vacancy, 12)
@@ -270,7 +295,11 @@ func decodeNotificationMessages(messages []notificationMessage, owner string) (s
 	for i := range messages {
 		contents[i] = messages[i].Content
 	}
-	return decodeNotificationContents(contents, "<@"+owner+">\n")
+	mention := "<@" + owner + ">\n"
+	if len(contents) > 0 && strings.HasPrefix(contents[0], mention) {
+		contents[0] = strings.TrimPrefix(contents[0], mention)
+	}
+	return decodeNotificationContents(contents, "")
 }
 
 func decodeNotificationContents(contents []string, firstPrefix string) (string, error) {

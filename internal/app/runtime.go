@@ -219,6 +219,9 @@ func writeNotificationIdentityBytes(writer notificationIdentityWriter, value []b
 }
 
 func splitNotificationContent(payload, firstPrefix string) []string {
+	if utf8.RuneCountInString(firstPrefix)+utf8.RuneCountInString(payload) <= discordContentLimit {
+		return []string{firstPrefix + payload}
+	}
 	runes := []rune(payload)
 	for expectedCount := 1; ; {
 		contents := make([]string, 0, expectedCount)
