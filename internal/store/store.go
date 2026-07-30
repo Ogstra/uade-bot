@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS poll_outcome_history (id INTEGER PRIMARY KEY AUTOINCR
 CREATE INDEX IF NOT EXISTS idx_poll_outcome_history_job_recorded ON poll_outcome_history (job_id, recorded_at DESC, id DESC);
 CREATE TABLE IF NOT EXISTS materias (codigo TEXT PRIMARY KEY, nombre TEXT NOT NULL, updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS command_log (id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT NOT NULL, command_name TEXT NOT NULL, guild_id TEXT, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS notification_delivery_progress (job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, delivery_fingerprint TEXT NOT NULL, route TEXT NOT NULL, fragment_index INTEGER NOT NULL, fragment_count INTEGER NOT NULL, fragment_fingerprint TEXT NOT NULL, delivered_at INTEGER NOT NULL, PRIMARY KEY (job_id, delivery_fingerprint, route, fragment_index));
 `
 
 // pendingSearchesStatements creates pending_searches, which holds the exact
@@ -52,7 +54,11 @@ func Open(path string) (*sql.DB, error) {
 			return nil, err
 		}
 	}
-	db, err := sql.Open("sqlite", path)
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	db, err := sql.Open("sqlite", path+separator+"_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
