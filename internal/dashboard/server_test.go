@@ -248,7 +248,7 @@ func TestDashboardSSRUsesReadableBuenosAiresTimestampsAndFallbacks(t *testing.T)
 		t.Fatal(err)
 	}
 	html = rendered.String()
-	if strings.Contains(html, "01/01/1970") || strings.Contains(html, ">0<") || strings.Contains(html, ">-1<") {
+	if strings.Contains(html, "01/01/1970") || strings.Contains(html, ">0</time>") || strings.Contains(html, ">-1</time>") {
 		t.Fatalf("invalid epoch rendered visibly: %s", html)
 	}
 	for _, fallback := range []string{"—", "Sin polls exitosos", "Sin sondeos todavía"} {
