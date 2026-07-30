@@ -688,6 +688,22 @@ func TestRuntimeJobFallsBackToCodeAndRejectsInvalidFilters(t *testing.T) {
 	}
 }
 
+func TestRuntimeResolveMateriaDecryptsCredentialsAndUsesCatalogResolver(t *testing.T) {
+	db := newTestRuntimeDB(t)
+	seedRuntimeAccount(t, db, "owner", "catalog-user", "catalog-pass", testHealedStartURL)
+	runtime := &Runtime{DB: db, MasterKey: testMasterKey}
+	runtime.catalogResolver = func(_ context.Context, credentials credentialcrypto.Credentials, code string) (string, error) {
+		if credentials.UADEUsername != "catalog-user" || credentials.UADEPassword != "catalog-pass" || credentials.UADEStartURL != testHealedStartURL || code != "3.1.050" {
+			t.Fatalf("resolver inputs=%+v code=%s", credentials, code)
+		}
+		return "Física II", nil
+	}
+	name, err := runtime.ResolveMateria(context.Background(), "owner", "3.1.050")
+	if err != nil || name != "Física II" {
+		t.Fatalf("ResolveMateria=%q,%v", name, err)
+	}
+}
+
 func decryptRuntimeCredentials(t *testing.T, db *sql.DB, account string) credentialcrypto.Credentials {
 	t.Helper()
 	var encrypted credentialcrypto.Ciphertext

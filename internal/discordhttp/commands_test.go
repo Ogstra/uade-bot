@@ -197,6 +197,44 @@ func TestBuscarPersistsNodeCompatibleContractAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBuscarResolvesMateriaPersistsBeforeCallbackAndConfirmsMonitoring(t *testing.T) {
+	d := testDispatcher(t)
+	seedCredentials(t, d, "owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	resolveCalls := 0
+	d.ResolveMateria = func(_ context.Context, user, code string) (string, error) {
+		resolveCalls++
+		if user != "owner" || code != "3.1.050" {
+			t.Fatalf("resolver args=%s/%s", user, code)
+		}
+		return "PROGRAMACIÓN 2", nil
+	}
+	d.OnJobCreated = func(string) {
+		var name string
+		if err := d.DB.QueryRow(`SELECT nombre FROM materias WHERE codigo='3.1.050'`).Scan(&name); err != nil || name != "PROGRAMACIÓN 2" {
+			t.Fatalf("callback before materia commit: %q %v", name, err)
+		}
+	}
+	options := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
+	content := responseContent(dispatchJSON(t, d, command("owner", "buscar", "0", options)))
+	for _, want := range []string{"3.1.050", "PROGRAMACIÓN 2", "Monitoreo", "activo"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("missing %q: %s", want, content)
+		}
+	}
+	if strings.Contains(content, "El scheduler hará el primer intento sin bloquear esta interacción.") {
+		t.Fatalf("leaked scheduler detail: %s", content)
+	}
+	if resolveCalls != 1 {
+		t.Fatalf("resolver calls=%d", resolveCalls)
+	}
+
+	// A clean cache hit must avoid UADE resolution.
+	dispatchJSON(t, d, command("owner", "buscar", "0", options))
+	if resolveCalls != 1 {
+		t.Fatalf("cache hit called resolver: %d", resolveCalls)
+	}
+}
+
 // Un usuario sin credenciales que corre /buscar recibe el modal directamente en
 // vez de un texto pidiendole que descubra y tipee /credenciales.
 func TestBuscarWithoutCredentialsOpensModalDirectly(t *testing.T) {

@@ -78,6 +78,19 @@ func TestBuildSearchFormMatchesNodeFixtureContract(t *testing.T) {
 	}
 }
 
+func TestMateriaNombreUsesAcademicCellAndPreservesLegitimateDigits(t *testing.T) {
+	for _, test := range []struct{ code, row, want string }{
+		{"1.1.010", `<tr><td>1.1.010</td><td>ELEMENTOS DE ÁLGEBRA Y GEOMETRÍA85EXAMEN FINAL OBLIGATORIO (85EXAMEN FINAL OBLIGATORIO)</td><td>85EXAMEN FINAL OBLIGATORIO</td><td><input id="x_chkSeleccionar_0" name="m1" type="checkbox"></td></tr>`, "ELEMENTOS DE ÁLGEBRA Y GEOMETRÍA"},
+		{"2.2.020", `<tr><td>2.2.020</td><td>PROGRAMACIÓN 2</td><td><section>85 EXAMEN FINAL OBLIGATORIO</section></td><td><input id="x_chkSeleccionar_1" name="m2" type="checkbox"></td></tr>`, "PROGRAMACIÓN 2"},
+	} {
+		html := `<form><table>` + test.row + `</table></form>`
+		got, err := ResolveMateriaName(html, test.code)
+		if err != nil || got != test.want {
+			t.Fatalf("ResolveMateriaName(%s)=%q,%v want %q", test.code, got, err, test.want)
+		}
+	}
+}
+
 func TestReflectedSearchDifferentialFixtures(t *testing.T) {
 	filters := SearchFilters{MateriaCodigo: "3.1.050", Ofrecimiento: "curricular", Turno: "mañana", Dias: []string{"LU", "MI"}}
 	for _, name := range []string{"postback-found.html", "postback-empty.html"} {

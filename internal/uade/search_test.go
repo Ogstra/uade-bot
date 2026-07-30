@@ -87,6 +87,23 @@ func TestSearchPreservesMateriaNameOnVerifiedOutcomes(t *testing.T) {
 	}
 }
 
+func TestResolveMateriaCatalogStopsBeforeSearchPostback(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodGet {
+			t.Fatalf("unexpected catalog POST: %s", r.Method)
+		}
+		_, _ = w.Write([]byte(`<html><form><select id="turno"><option>Noche</option></select><table><tr><td>3.1.050</td><td>PROGRAMACIÓN 2</td><td><input id="x_chkSeleccionar_0" name="m" type="checkbox"></td></tr></table></form></html>`))
+	}))
+	defer server.Close()
+	client, _ := NewClient(server.URL)
+	name, err := client.ResolveMateria(context.Background(), server.URL, "u", "p", "3.1.050")
+	if err != nil || name != "PROGRAMACIÓN 2" || requests != 1 {
+		t.Fatalf("name=%q err=%v requests=%d", name, err, requests)
+	}
+}
+
 func TestSearchClassifiesAuthAndStaleStartURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth" {

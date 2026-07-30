@@ -123,6 +123,25 @@ func TestSQLStorePersistsMateriaNamesAndPreservesFallback(t *testing.T) {
 	}
 }
 
+func TestSQLStorePersistsMateriaCleanNameWithoutRemovingAcademicDigit(t *testing.T) {
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	seedNotificationJob(t, db)
+	repo := SQLStore{DB: db}
+	ctx := context.Background()
+	if err := repo.SaveOutcome(ctx, "1", Outcome{Code: "no_vacancies", MateriaCodigo: "1.1.010", MateriaNombre: "ELEMENTOS DE ÁLGEBRA Y GEOMETRÍA85EXAMEN FINAL OBLIGATORIO (85EXAMEN FINAL OBLIGATORIO)"}, time.UnixMilli(10)); err != nil {
+		t.Fatal(err)
+	}
+	assertMateriaCache(t, db, "1.1.010", "ELEMENTOS DE ÁLGEBRA Y GEOMETRÍA", 10)
+	if err := repo.SaveOutcome(ctx, "1", Outcome{Code: "no_vacancies", MateriaCodigo: "1.1.010", MateriaNombre: "PROGRAMACIÓN 2"}, time.UnixMilli(20)); err != nil {
+		t.Fatal(err)
+	}
+	assertMateriaCache(t, db, "1.1.010", "PROGRAMACIÓN 2", 20)
+}
+
 func assertMateriaCache(t *testing.T, db *sql.DB, codigo, wantNombre string, wantUpdatedAt int64) {
 	t.Helper()
 	var nombre string
