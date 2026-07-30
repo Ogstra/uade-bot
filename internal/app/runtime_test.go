@@ -149,6 +149,51 @@ func assertVacancyNotification(t *testing.T, send discordSend) {
 	}
 }
 
+func TestSplitNotificationContentExactSingleAndMultipartBoundaries(t *testing.T) {
+	channelPrefix := "<@owner>\n"
+	tests := []struct {
+		name        string
+		payload     string
+		prefix      string
+		wantParts   int
+		wantPayload string
+	}{
+		{name: "empty dm", payload: "", wantParts: 1, wantPayload: ""},
+		{name: "empty channel", payload: "", prefix: channelPrefix, wantParts: 1, wantPayload: ""},
+		{name: "short unicode", payload: "á界🙂", wantParts: 1, wantPayload: "á界🙂"},
+		{name: "exact limit", payload: strings.Repeat("á", discordContentLimit-utf8.RuneCountInString(channelPrefix)), prefix: channelPrefix, wantParts: 1},
+		{name: "one rune over", payload: strings.Repeat("界", discordContentLimit-utf8.RuneCountInString(channelPrefix)+1), prefix: channelPrefix, wantParts: 2},
+		{name: "marker width stabilizes", payload: strings.Repeat("🙂", discordContentLimit*11), prefix: channelPrefix, wantParts: 12},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			parts := splitNotificationContent(tc.payload, tc.prefix)
+			if len(parts) != tc.wantParts {
+				t.Fatalf("parts=%d, want %d", len(parts), tc.wantParts)
+			}
+			for i, part := range parts {
+				if got := utf8.RuneCountInString(part); got > discordContentLimit {
+					t.Fatalf("part %d has %d runes", i, got)
+				}
+			}
+			decoded, err := decodeNotificationContents(parts, tc.prefix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := tc.wantPayload
+			if want == "" {
+				want = tc.payload
+			}
+			if decoded != want {
+				t.Fatalf("decoded payload differs: got %d bytes, want %d", len(decoded), len(want))
+			}
+			if len(parts) == 1 && strings.Contains(parts[0], "⟦parte 1/1⟧") {
+				t.Fatalf("single part contains marker: %q", parts[0])
+			}
+		})
+	}
+}
+
 func TestNotificationMessagesLongMultibyteReconstructExactly(t *testing.T) {
 	event := vacancyNotificationEvent("channel")
 	event.Outcome.Vacancies = make([]scheduler.Vacancy, 12)
@@ -221,13 +266,27 @@ func TestNotificationMessagesLongMultibyteReconstructExactly(t *testing.T) {
 }
 
 func decodeNotificationMessages(messages []notificationMessage, owner string) (string, error) {
+	contents := make([]string, len(messages))
+	for i := range messages {
+		contents[i] = messages[i].Content
+	}
+	return decodeNotificationContents(contents, "<@"+owner+">\n")
+}
+
+func decodeNotificationContents(contents []string, firstPrefix string) (string, error) {
 	var decoded strings.Builder
-	for i, message := range messages {
-		content := message.Content
+	for i, content := range contents {
 		if i == 0 {
-			content = strings.TrimPrefix(content, "<@"+owner+">\n")
+			if !strings.HasPrefix(content, firstPrefix) {
+				return "", fmt.Errorf("fragment %d first prefix mismatch", i)
+			}
+			content = strings.TrimPrefix(content, firstPrefix)
 		}
-		marker := fmt.Sprintf("⟦parte %d/%d⟧\n", i+1, len(messages))
+		if len(contents) == 1 {
+			decoded.WriteString(content)
+			continue
+		}
+		marker := fmt.Sprintf("⟦parte %d/%d⟧\n", i+1, len(contents))
 		if !strings.HasPrefix(content, marker) {
 			return "", fmt.Errorf("fragment %d marker mismatch", i)
 		}
