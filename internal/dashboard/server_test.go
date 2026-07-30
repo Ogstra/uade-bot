@@ -154,6 +154,27 @@ func TestUnauthorizedTamperOriginAndSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestRootPathRedirectsToDashboard(t *testing.T) {
+	s := &Server{SessionSecret: []byte("0123456789abcdef0123456789abcdef")}
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/dashboard" {
+		t.Fatalf("GET / = %d Location=%q, want %d Location=/dashboard", w.Code, w.Header().Get("Location"), http.StatusFound)
+	}
+
+	post := httptest.NewRecorder()
+	s.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/", nil))
+	if post.Code != http.StatusNotFound {
+		t.Fatalf("POST / = %d, want %d", post.Code, http.StatusNotFound)
+	}
+
+	unknown := httptest.NewRecorder()
+	s.ServeHTTP(unknown, httptest.NewRequest(http.MethodGet, "/some-unknown-path", nil))
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("GET /some-unknown-path = %d, want %d", unknown.Code, http.StatusNotFound)
+	}
+}
+
 func TestHTMLContractSnapshotSharedWithNode(t *testing.T) {
 	var contract struct{ Login, Dashboard, Forbidden []string }
 	raw, err := os.ReadFile("testdata/html_contract.json")
