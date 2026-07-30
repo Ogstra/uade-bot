@@ -148,7 +148,11 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 }
 
 func message(content string) InteractionResponse {
-	return InteractionResponse{Type: 4, Data: map[string]any{"content": content, "flags": ephemeral}}
+	return InteractionResponse{Type: 4, Data: map[string]any{
+		"content":          content,
+		"flags":            ephemeral,
+		"allowed_mentions": map[string]any{"parse": []string{}},
+	}}
 }
 
 func credentialsModal() InteractionResponse {
@@ -237,7 +241,13 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 		if d.OnJobCreated != nil {
 			d.OnJobCreated(jobID)
 		}
-		return message("Credenciales guardadas de forma cifrada. Ya creé la búsqueda que habías pedido con /buscar."), nil
+		var label, rawFilters string
+		if err := d.DB.QueryRowContext(ctx, `SELECT COALESCE(label,''),filtros_json FROM jobs WHERE id=? AND discord_user_id=?`, jobID, userID).Scan(&label, &rawFilters); err != nil {
+			return InteractionResponse{}, err
+		}
+		filters := parseJobFilters(rawFilters)
+		summary := filterSummaryBlock(label, filters.MateriaCodigo, lookupMateriaNombre(ctx, d.DB, filters.MateriaCodigo), filters.Turno, filters.Ofrecimiento, filters.Dias, filters.SedesExcluidas)
+		return message("Credenciales guardadas de forma cifrada. Ya creé la búsqueda que habías pedido con /buscar.\n\n" + summary), nil
 	}
 	return message("Credenciales guardadas de forma cifrada. Todavía no creé ninguna búsqueda: volvé a usar /buscar para crearla."), nil
 }
@@ -364,7 +374,14 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 	if !materiaPattern.MatchString(code) {
 		return message("El código de materia no es válido (ejemplo: 3.1.050)."), nil
 	}
-	filters, _ := json.Marshal(map[string]any{"materiaCodigo": code, "turno": stringOption(options, "turno"), "ofrecimiento": stringOption(options, "ofrecimiento"), "dias": csvValues(stringOption(options, "dias"), true), "sedesExcluidas": csvValues(stringOption(options, "sedes_excluidas"), false)})
+	dias := filterValidDias(stringOption(options, "dias"))
+	if len(dias) == 0 {
+		return message("Los dias tienen que ser alguno de LU, MA, MI, JU, VI, SA."), nil
+	}
+	turno := stringOption(options, "turno")
+	ofrecimiento := stringOption(options, "ofrecimiento")
+	sedes := csvValues(stringOption(options, "sedes_excluidas"), false)
+	filters, _ := json.Marshal(map[string]any{"materiaCodigo": code, "turno": turno, "ofrecimiento": ofrecimiento, "dias": dias, "sedesExcluidas": sedes})
 	label := stringOption(options, "etiqueta")
 	if label == "" {
 		label = code
@@ -401,11 +418,98 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 			d.OnJobCreated(strconv.FormatInt(id, 10))
 		}
 	}
-	return message("Búsqueda creada. El scheduler hará el primer intento sin bloquear esta interacción."), nil
+	summary := filterSummaryBlock(label, code, lookupMateriaNombre(ctx, d.DB, code), turno, ofrecimiento, dias, sedes)
+	return message(summary + "\nEl scheduler hará el primer intento sin bloquear esta interacción."), nil
 }
 
 func (d CommandDispatcher) estado(ctx context.Context, userID string, admin bool, filter string) (InteractionResponse, error) {
-	query := `SELECT id,discord_user_id,COALESCE(label,''),status FROM jobs`
+	type jobRow struct {
+		id                 int64
+		owner, label       string
+		status, rawFilters string
+		channelID, guildID sql.NullString
+		lastPolled         sql.NullInt64
+		lastOutcome        string
+		accountPauseReason sql.NullString
+	}
+
+	query := `SELECT j.id,j.discord_user_id,COALESCE(j.label,''),j.status,j.filtros_json,j.channel_id,j.guild_id,j.last_polled_at,COALESCE(j.last_outcome,''),u.pause_reason FROM jobs j LEFT JOIN users u ON u.discord_user_id=j.discord_user_id`
+	args := []any{}
+	if !admin {
+		query += ` WHERE j.discord_user_id=?`
+		args = append(args, userID)
+	} else if filter != "" {
+		query += ` WHERE j.discord_user_id=?`
+		args = append(args, filter)
+	}
+	query += ` ORDER BY j.id LIMIT 25`
+	rows, err := d.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	jobs := make([]jobRow, 0, 25)
+	for rows.Next() {
+		var job jobRow
+		if err = rows.Scan(&job.id, &job.owner, &job.label, &job.status, &job.rawFilters, &job.channelID, &job.guildID, &job.lastPolled, &job.lastOutcome, &job.accountPauseReason); err != nil {
+			rows.Close()
+			return InteractionResponse{}, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return InteractionResponse{}, err
+	}
+	if err = rows.Close(); err != nil {
+		return InteractionResponse{}, err
+	}
+
+	lines := []string{}
+	for _, job := range jobs {
+		filters := parseJobFilters(job.rawFilters)
+		materia := filters.MateriaCodigo
+		if name := lookupMateriaNombre(ctx, d.DB, filters.MateriaCodigo); name != "" {
+			materia += " - " + name
+		}
+		lastOutcome := lastOutcomeLine(ctx, d.DB, job.id, job.lastOutcome)
+		label := job.label
+		if label == "" {
+			label = "sin etiqueta"
+		}
+		if admin {
+			identity := materia
+			if label != filters.MateriaCodigo {
+				identity = label + " - " + materia
+			}
+			status := formatJobStatusText(job.status, sql.NullString{})
+			lines = append(lines, fmt.Sprintf("**#%d** <@%s> · %s · %s %s · %s · %s · %s", job.id, job.owner, identity, filters.Turno, strings.Join(filters.Dias, "/"), status, formatJobLocation(job.guildID, job.channelID), lastOutcome))
+		} else {
+			block := fmt.Sprintf("**%s**\n**Materia:** %s\n**Turno:** %s\n**Dias:** %s\n", label, materia, filters.Turno, strings.Join(filters.Dias, ", "))
+			if len(filters.SedesExcluidas) > 0 {
+				block += fmt.Sprintf("**Sedes excluidas:** %s\n", strings.Join(filters.SedesExcluidas, ", "))
+			}
+			block += fmt.Sprintf("**Server/Canal:** %s\n**Estado:** %s\n**Ultimo sondeo:** %s\n**Ultimo resultado:** %s", formatJobLocation(job.guildID, job.channelID), formatJobStatusText(job.status, job.accountPauseReason), formatLastPoll(job.lastPolled), lastOutcome)
+			lines = append(lines, block)
+		}
+	}
+	pending, err := d.pendingSearchLine(ctx, admin, userID, filter)
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	if pending != "" {
+		lines = append(lines, pending)
+	}
+	if len(lines) == 0 {
+		return message("No hay búsquedas para mostrar."), nil
+	}
+	if admin {
+		return message(truncateAdminList(lines)), nil
+	}
+	return message(strings.Join(lines, "\n\n")), nil
+}
+
+func (d CommandDispatcher) pendingSearchLine(ctx context.Context, admin bool, userID, filter string) (string, error) {
+	query := `SELECT discord_user_id,COALESCE(label,'') FROM pending_searches`
 	args := []any{}
 	if !admin {
 		query += ` WHERE discord_user_id=?`
@@ -414,32 +518,39 @@ func (d CommandDispatcher) estado(ctx context.Context, userID string, admin bool
 		query += ` WHERE discord_user_id=?`
 		args = append(args, filter)
 	}
-	query += ` ORDER BY id LIMIT 25`
+	query += ` ORDER BY created_at`
 	rows, err := d.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return InteractionResponse{}, err
+		return "", err
 	}
-	defer rows.Close()
 	lines := []string{}
 	for rows.Next() {
-		var id int
-		var owner, label, status string
-		if err = rows.Scan(&id, &owner, &label, &status); err != nil {
-			return InteractionResponse{}, err
+		var owner, label string
+		if err = rows.Scan(&owner, &label); err != nil {
+			rows.Close()
+			return "", err
 		}
 		if label == "" {
 			label = "sin etiqueta"
 		}
 		if admin {
-			lines = append(lines, fmt.Sprintf("#%d · %s · %s · %s", id, owner, label, status))
+			lines = append(lines, fmt.Sprintf("⏳ <@%s> · %s · pendiente de credenciales", owner, label))
 		} else {
-			lines = append(lines, fmt.Sprintf("#%d · %s · %s", id, label, status))
+			lines = append(lines, fmt.Sprintf("⏳ **%s** — pendiente: todavía no completaste el modal de credenciales para esta búsqueda. Volvé a intentar con `/credenciales`.", label))
 		}
 	}
-	if len(lines) == 0 {
-		return message("No hay búsquedas para mostrar."), rows.Err()
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return "", err
 	}
-	return message(strings.Join(lines, "\n")), rows.Err()
+	if err = rows.Close(); err != nil {
+		return "", err
+	}
+	separator := "\n\n"
+	if admin {
+		separator = "\n"
+	}
+	return strings.Join(lines, separator), nil
 }
 
 func (d CommandDispatcher) mutateJob(ctx context.Context, userID, action, idText string, admin bool) (InteractionResponse, error) {
