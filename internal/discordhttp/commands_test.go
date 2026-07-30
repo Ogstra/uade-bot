@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
 	"github.com/ogs/uade-bot/internal/store"
@@ -540,6 +542,118 @@ func TestAdminEstadoUsesCompactLinesAndIgnoresAccountPauseReason(t *testing.T) {
 	}
 	if len(content) > 1900 {
 		t.Fatalf("respuesta admin demasiado larga: %d", len(content))
+	}
+}
+
+type mutableIdentityResolver struct {
+	mu    sync.Mutex
+	names map[string]string
+	calls [][2]string
+}
+
+func (r *mutableIdentityResolver) ResolveIdentity(guildID, userID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, [2]string{guildID, userID})
+	if name := r.names[guildID+"/"+userID]; name != "" {
+		return name
+	}
+	return userID
+}
+
+func TestAllCanonicalAdminCommandsHaveIdentityPolicyCoverage(t *testing.T) {
+	want := map[string]bool{"admin-estado": true, "admin-detener": true, "admin-pausar": true, "admin-reanudar": true, "admin-stats": true, "admin-user-stats": true}
+	got := map[string]bool{}
+	for _, command := range GlobalCommands() {
+		if strings.HasPrefix(command.Name, "admin-") {
+			got[command.Name] = true
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("canonical admin command inventory=%v, want %v", got, want)
+	}
+}
+
+func TestAdminIdentityResolverIsLiveGuildAwareAndEscaped(t *testing.T) {
+	d := testDispatcher(t)
+	resolver := &mutableIdentityResolver{names: map[string]string{
+		"g1/u1":        "Nick **uno** <@999>",
+		"g2/u2":        "Nick `dos`",
+		"any-guild/u1": "Global Uno",
+	}}
+	d.IdentityResolver = resolver
+	seedCredentials(t, d, "u1", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	seedCredentials(t, d, "u2", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	filters := `{"materiaCodigo":"3.1.050","turno":"Noche","ofrecimiento":"curricular","dias":["LU"],"sedesExcluidas":[]}`
+	if _, err := d.DB.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,guild_id,label,status,created_at) VALUES('u1',?,'g1','uno','active',1),('u2',?,'g2','dos','active',2)`, filters, filters); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.DB.Exec(`INSERT INTO pending_searches(discord_user_id,filtros_json,guild_id,label,created_at) VALUES('u2','{}','g2','pendiente',3)`); err != nil {
+		t.Fatal(err)
+	}
+
+	content := responseContent(dispatchJSON(t, d, command("admin", "admin-estado", "8", nil)))
+	for _, want := range []string{"Nick \\*\\*uno\\*\\* \\<@999\\> (u1)", "Nick \\`dos\\` (u2)", "pendiente"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("admin-estado missing %q: %s", want, content)
+		}
+	}
+
+	stats := responseContent(dispatchJSON(t, d, command("admin", "admin-user-stats", "8", []map[string]any{{"name": "usuario", "value": "u1"}})))
+	if !strings.Contains(stats, "Global Uno (u1)") || strings.Contains(stats, "Usuario: u1\n") {
+		t.Fatalf("admin-user-stats identity=%q", stats)
+	}
+	resolver.mu.Lock()
+	resolver.names["any-guild/u1"] = "Nombre tardío"
+	resolver.mu.Unlock()
+	stats = responseContent(dispatchJSON(t, d, command("admin", "admin-user-stats", "8", []map[string]any{{"name": "usuario", "value": "u1"}})))
+	if !strings.Contains(stats, "Nombre tardío (u1)") {
+		t.Fatalf("dispatcher captured stale identity: %q", stats)
+	}
+}
+
+func TestAdminAutocompleteUsesInteractionAndJobGuilds(t *testing.T) {
+	d := testDispatcher(t)
+	resolver := &mutableIdentityResolver{names: map[string]string{
+		"any-guild/u1": strings.Repeat("界", 120),
+		"job-guild/u1": "Apodo job",
+	}}
+	d.IdentityResolver = resolver
+	seedCredentials(t, d, "u1", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	filters := `{"materiaCodigo":"3.1.050","turno":"Noche","ofrecimiento":"curricular","dias":["LU"],"sedesExcluidas":[]}`
+	if _, err := d.DB.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,guild_id,label,status,created_at) VALUES('u1',?,'job-guild','job','active',1)`, filters); err != nil {
+		t.Fatal(err)
+	}
+	userOut := dispatchJSON(t, d, map[string]any{"type": 4, "guild_id": "any-guild", "member": map[string]any{"permissions": "8", "user": map[string]any{"id": "admin"}}, "data": map[string]any{"name": "admin-user-stats", "options": []map[string]any{{"name": "usuario", "value": "", "focused": true}}}})
+	jobOut := dispatchJSON(t, d, map[string]any{"type": 4, "guild_id": "any-guild", "member": map[string]any{"permissions": "8", "user": map[string]any{"id": "admin"}}, "data": map[string]any{"name": "admin-detener", "options": []map[string]any{{"name": "busqueda", "value": "", "focused": true}}}})
+	for label, out := range map[string]InteractionResponse{"user": userOut, "job": jobOut} {
+		choices := out.Data.(map[string]any)["choices"].([]any)
+		if len(choices) != 1 {
+			t.Fatalf("%s choices=%d", label, len(choices))
+		}
+		name := choices[0].(map[string]any)["name"].(string)
+		if utf8.RuneCountInString(name) > 100 {
+			t.Fatalf("%s choice has %d runes", label, utf8.RuneCountInString(name))
+		}
+	}
+	jobName := jobOut.Data.(map[string]any)["choices"].([]any)[0].(map[string]any)["name"].(string)
+	if !strings.Contains(jobName, "Apodo job (u1)") {
+		t.Fatalf("job autocomplete did not use job guild: %q", jobName)
+	}
+}
+
+func TestAdminAuthorizationPrecedesIdentityResolution(t *testing.T) {
+	d := testDispatcher(t)
+	resolver := &mutableIdentityResolver{names: map[string]string{"any-guild/victim": "secret"}}
+	d.IdentityResolver = resolver
+	content := responseContent(dispatchJSON(t, d, command("intruder", "admin-user-stats", "0", []map[string]any{{"name": "usuario", "value": "victim"}})))
+	if !strings.Contains(content, "Administrador") {
+		t.Fatalf("denial=%q", content)
+	}
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	if len(resolver.calls) != 0 {
+		t.Fatalf("resolver called before authorization: %v", resolver.calls)
 	}
 }
 

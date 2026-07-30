@@ -3,7 +3,10 @@ package main
 import (
 	"testing"
 
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/snowflake/v2"
 	"github.com/ogs/uade-bot/internal/discordgateway"
+	"github.com/ogs/uade-bot/internal/discordhttp"
 )
 
 // TestResolveSSOPortalURLDefaultsWhenUnset covers the "UADE_SSO_PORTAL_URL
@@ -54,5 +57,23 @@ func TestDashboardWiringUsesLiveGatewayProjection(t *testing.T) {
 	source := dashboardSnapshotSource(nil, projection)
 	if source.GuildProvider == nil || source.DisplayNameProvider == nil {
 		t.Fatalf("dashboard snapshot source is not wired to live gateway providers: %+v", source)
+	}
+}
+
+func TestDispatcherWiringUsesLiveGatewayProjection(t *testing.T) {
+	projection := discordgateway.NewProjection(nil)
+	dispatcher := wireGatewayIdentity(discordhttp.CommandDispatcher{}, projection)
+	if dispatcher.IdentityResolver == nil {
+		t.Fatal("dispatcher identity resolver is nil")
+	}
+	user := discord.User{ID: snowflake.ID(9), Username: "username"}
+	projection.Observe(snowflake.ID(7), nil, user)
+	if got := dispatcher.IdentityResolver.ResolveIdentity("7", "9"); got != "username" {
+		t.Fatalf("initial identity=%q", got)
+	}
+	late := "late nickname"
+	projection.Observe(snowflake.ID(7), &discord.ResolvedMember{Member: discord.Member{Nick: &late}}, user)
+	if got := dispatcher.IdentityResolver.ResolveIdentity("7", "9"); got != late {
+		t.Fatalf("resolver captured snapshot: %q", got)
 	}
 }
