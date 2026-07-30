@@ -2,12 +2,114 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
+
+func TestSearchIdentityMigrationDeduplicatesAndPreservesScopes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-searches.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`
+		PRAGMA foreign_keys=ON;
+		CREATE TABLE users (discord_user_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+		CREATE TABLE jobs (id INTEGER PRIMARY KEY, discord_user_id TEXT NOT NULL REFERENCES users(discord_user_id), filtros_json TEXT NOT NULL, channel_id TEXT, guild_id TEXT, label TEXT, status TEXT, created_at INTEGER);
+		CREATE TABLE poll_outcome_history (id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, recorded_at INTEGER NOT NULL, outcome_code TEXT NOT NULL);
+		INSERT INTO users VALUES ('u1',1,1),('u2',1,1);
+		INSERT INTO jobs VALUES
+		 (1,'u1','{"materiaCodigo":" 3.1.050 "}',NULL,NULL,'first','active',1),
+		 (2,'u1','{"materiaCodigo":"3.1.050"}',NULL,NULL,'duplicate','active',2),
+		 (3,'u1','{"materiaCodigo":"3.1.050"}',NULL,'g1','guild','active',3),
+		 (4,'u2','{"materiaCodigo":"3.1.050"}',NULL,NULL,'other-user','active',4),
+		 (5,'u1','not-json',NULL,NULL,'corrupt','active',5);
+		INSERT INTO poll_outcome_history VALUES (1,2,1,'found');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.Close()
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var kept, duplicate, scoped, invalid int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE id=1 AND materia_code='3.1.050'`).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE id=2`).Scan(&duplicate); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE id IN (3,4) AND materia_code='3.1.050'`).Scan(&scoped); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE id=5 AND materia_code IS NULL`).Scan(&invalid); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 1 || duplicate != 0 || scoped != 2 || invalid != 1 {
+		t.Fatalf("kept=%d duplicate=%d scoped=%d invalid=%d", kept, duplicate, scoped, invalid)
+	}
+	var history int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM poll_outcome_history`).Scan(&history); err != nil {
+		t.Fatal(err)
+	}
+	if history != 0 {
+		t.Fatalf("duplicate history survived cascade: %d", history)
+	}
+	if _, err = db.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,materia_code,guild_id,status,created_at) VALUES('u1','{}','3.1.050',NULL,'active',9)`); err == nil {
+		t.Fatal("duplicate search identity insert unexpectedly succeeded")
+	}
+}
+
+func TestSearchIdentityUniqueUnderConcurrentInsert(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.Exec(`INSERT INTO users(discord_user_id,created_at,updated_at) VALUES('u',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, e := db.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,materia_code,guild_id,status,created_at) VALUES('u',?,'3.1.050',NULL,'active',?)`, fmt.Sprintf(`{"n":%d}`, i), i)
+			errs <- e
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	successes := 0
+	for e := range errs {
+		if e == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful inserts=%d, want 1", successes)
+	}
+	var count int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE discord_user_id='u' AND materia_code='3.1.050'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("durable rows=%d, want 1", count)
+	}
+}
 
 func TestOpenInitializesCompatibleSchema(t *testing.T) {
 	db, err := Open(":memory:")
