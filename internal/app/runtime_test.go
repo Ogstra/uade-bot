@@ -763,6 +763,9 @@ func TestPollPreservesMateriaAfterHealingStaleStartURL(t *testing.T) {
 	const account = "user-heal"
 	seedRuntimeAccount(t, db, account, "old-user", "old-pass", "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx")
 	jobID := seedRuntimeJob(t, db, account, `{"materiaCodigo":"3.1.050","ofrecimiento":"curricular","turno":"mañana","dias":["LU","MI"]}`)
+	if _, err := db.Exec(`UPDATE jobs SET label='Mi etiqueta personalizada' WHERE id=?`, jobID); err != nil {
+		t.Fatal(err)
+	}
 
 	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
 	if err != nil {
@@ -773,7 +776,14 @@ func TestPollPreservesMateriaAfterHealingStaleStartURL(t *testing.T) {
 		return sso.Result{StartURL: testHealedStartURL}, nil
 	}
 
-	outcome, err := runtime.poll(context.Background(), jobID, account)
+	job, err := runtime.job(scheduler.PersistedJob{ID: jobID, Account: account})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.MateriaCodigo != "3.1.050" || job.Label != "Mi etiqueta personalizada" {
+		t.Fatalf("job identity=%q/%q, want code and custom label kept separate", job.MateriaCodigo, job.Label)
+	}
+	outcome, err := job.Run(context.Background())
 	if err != nil {
 		t.Fatalf("poll returned unexpected error: %v", err)
 	}
@@ -785,6 +795,9 @@ func TestPollPreservesMateriaAfterHealingStaleStartURL(t *testing.T) {
 	}
 	if len(outcome.Vacancies) != 1 || !strings.Contains(outcome.Vacancies[0].Materia, "Física") {
 		t.Fatalf("poll did not preserve UADE materia name: %+v", outcome.Vacancies)
+	}
+	if outcome.MateriaCodigo != "3.1.050" || outcome.MateriaNombre != "Física II" {
+		t.Fatalf("outcome identity=%q/%q, want code and academic name kept separate", outcome.MateriaCodigo, outcome.MateriaNombre)
 	}
 
 	if got := decryptRuntimeCredentials(t, db, account).UADEStartURL; got != testHealedStartURL {

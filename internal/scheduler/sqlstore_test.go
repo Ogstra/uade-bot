@@ -59,6 +59,82 @@ func TestSQLStoreReconstructsAndPersistsNodeCompatibleState(t *testing.T) {
 	}
 }
 
+func TestSQLStorePersistsMateriaNamesAndPreservesFallback(t *testing.T) {
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	seedNotificationJob(t, db)
+	repo := SQLStore{DB: db}
+	ctx := context.Background()
+
+	first := time.UnixMilli(100)
+	if err = repo.SaveOutcome(ctx, "1", Outcome{
+		Code:          "no_vacancies",
+		MateriaCodigo: "3.1.050",
+		MateriaNombre: "Física II",
+	}, first); err != nil {
+		t.Fatal(err)
+	}
+	assertMateriaCache(t, db, "3.1.050", "Física II", first.UnixMilli())
+
+	corrected := time.UnixMilli(200)
+	if err = repo.SaveOutcome(ctx, "1", Outcome{
+		Code:          "found",
+		MateriaCodigo: "3.1.050",
+		MateriaNombre: "Física II (corregida)",
+		Vacancies:     []Vacancy{{Cupos: 1}},
+	}, corrected); err != nil {
+		t.Fatal(err)
+	}
+	assertMateriaCache(t, db, "3.1.050", "Física II (corregida)", corrected.UnixMilli())
+
+	withoutName := time.UnixMilli(300)
+	if err = repo.SaveOutcome(ctx, "1", Outcome{
+		Code:          "no_vacancies",
+		MateriaCodigo: "9.9.999",
+		MateriaNombre: "   ",
+	}, withoutName); err != nil {
+		t.Fatal(err)
+	}
+	assertMateriaCache(t, db, "3.1.050", "Física II (corregida)", corrected.UnixMilli())
+	var materias int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM materias`).Scan(&materias); err != nil {
+		t.Fatal(err)
+	}
+	if materias != 1 {
+		t.Fatalf("materia rows=%d, want 1 after empty-name outcome", materias)
+	}
+	var lastOutcome string
+	var lastPolled int64
+	if err = db.QueryRow(`SELECT last_outcome, last_polled_at FROM jobs WHERE id=1`).Scan(&lastOutcome, &lastPolled); err != nil {
+		t.Fatal(err)
+	}
+	if lastOutcome != "no_vacancies" || lastPolled != withoutName.UnixMilli() {
+		t.Fatalf("job state=%q/%d, want no_vacancies/%d", lastOutcome, lastPolled, withoutName.UnixMilli())
+	}
+	var history int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM poll_outcome_history WHERE job_id=1`).Scan(&history); err != nil {
+		t.Fatal(err)
+	}
+	if history != 3 {
+		t.Fatalf("history rows=%d, want 3", history)
+	}
+}
+
+func assertMateriaCache(t *testing.T, db *sql.DB, codigo, wantNombre string, wantUpdatedAt int64) {
+	t.Helper()
+	var nombre string
+	var updatedAt int64
+	if err := db.QueryRow(`SELECT nombre, updated_at FROM materias WHERE codigo=?`, codigo).Scan(&nombre, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if nombre != wantNombre || updatedAt != wantUpdatedAt {
+		t.Fatalf("materia %q=%q/%d, want %q/%d", codigo, nombre, updatedAt, wantNombre, wantUpdatedAt)
+	}
+}
+
 func TestSQLStoreNotificationDeliveryProgressIsIdempotentAndFailsClosed(t *testing.T) {
 	db, err := store.Open(":memory:")
 	if err != nil {
