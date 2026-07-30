@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -620,6 +621,9 @@ func TestAdminAutocompleteUsesInteractionAndJobGuilds(t *testing.T) {
 	}}
 	d.IdentityResolver = resolver
 	seedCredentials(t, d, "u1", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	if _, err := d.DB.Exec(`INSERT INTO materias(codigo,nombre,updated_at) VALUES('3.1.050','Algoritmos',1)`); err != nil {
+		t.Fatal(err)
+	}
 	filters := `{"materiaCodigo":"3.1.050","turno":"Noche","ofrecimiento":"curricular","dias":["LU"],"sedesExcluidas":[]}`
 	if _, err := d.DB.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,guild_id,label,status,created_at) VALUES('u1',?,'job-guild','job','active',1)`, filters); err != nil {
 		t.Fatal(err)
@@ -636,9 +640,85 @@ func TestAdminAutocompleteUsesInteractionAndJobGuilds(t *testing.T) {
 			t.Fatalf("%s choice has %d runes", label, utf8.RuneCountInString(name))
 		}
 	}
-	jobName := jobOut.Data.(map[string]any)["choices"].([]any)[0].(map[string]any)["name"].(string)
+	jobChoice := jobOut.Data.(map[string]any)["choices"].([]any)[0].(map[string]any)
+	jobName := jobChoice["name"].(string)
 	if !strings.Contains(jobName, "Apodo job (u1)") {
 		t.Fatalf("job autocomplete did not use job guild: %q", jobName)
+	}
+	if !strings.Contains(jobName, "#1") {
+		t.Fatalf("admin autocomplete must still expose the internal id: %q", jobName)
+	}
+	if !strings.Contains(jobName, "3.1.050") {
+		t.Fatalf("admin autocomplete must also show the materia: %q", jobName)
+	}
+	if jobChoice["value"].(string) != "1" {
+		t.Fatalf("value=%v, want the job id unchanged", jobChoice["value"])
+	}
+}
+
+func TestAutocompleteNonAdminHidesInternalIDButShowsMateriaAndTurno(t *testing.T) {
+	d := testDispatcher(t)
+	seedCredentials(t, d, "u1", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	if _, err := d.DB.Exec(`INSERT INTO materias(codigo,nombre,updated_at) VALUES('3.1.050','Algoritmos',1)`); err != nil {
+		t.Fatal(err)
+	}
+	filters := `{"materiaCodigo":"3.1.050","turno":"Noche","ofrecimiento":"curricular","dias":["LU","MI"],"sedesExcluidas":[]}`
+	result, err := d.DB.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,guild_id,label,status,created_at) VALUES('u1',?,'g1','Mi etiqueta','active',1)`, filters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := dispatchJSON(t, d, map[string]any{"type": 4, "guild_id": "g1", "member": map[string]any{"permissions": "0", "user": map[string]any{"id": "u1"}}, "data": map[string]any{"name": "detener", "options": []map[string]any{{"name": "busqueda", "value": "", "focused": true}}}})
+	choices := out.Data.(map[string]any)["choices"].([]any)
+	if len(choices) != 1 {
+		t.Fatalf("choices=%d", len(choices))
+	}
+	choice := choices[0].(map[string]any)
+	name := choice["name"].(string)
+	if strings.Contains(name, "#") {
+		t.Fatalf("non-admin autocomplete must never expose the internal job id: %q", name)
+	}
+	if !strings.Contains(name, "3.1.050") || !strings.Contains(name, "Noche") {
+		t.Fatalf("non-admin autocomplete missing materia/turno: %q", name)
+	}
+	if choice["value"].(string) != strconv.FormatInt(jobID, 10) {
+		t.Fatalf("value=%v, want %d", choice["value"], jobID)
+	}
+}
+
+// TestAutocompleteDrainsRowsBeforeNestedMateriaQuery seeds enough jobs to
+// exercise the single-connection pattern (store.Open's SetMaxOpenConns(1))
+// under an explicit deadline: a regression to querying materias while the
+// original *sql.Rows is still open hangs forever instead of failing fast.
+func TestAutocompleteDrainsRowsBeforeNestedMateriaQuery(t *testing.T) {
+	d := testDispatcher(t)
+	seedCredentials(t, d, "u1", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	if _, err := d.DB.Exec(`INSERT INTO materias(codigo,nombre,updated_at) VALUES('3.1.050','Algoritmos',1)`); err != nil {
+		t.Fatal(err)
+	}
+	filters := `{"materiaCodigo":"3.1.050","turno":"Noche","ofrecimiento":"curricular","dias":["LU"],"sedesExcluidas":[]}`
+	for i := 0; i < 30; i++ {
+		if _, err := d.DB.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,guild_id,label,status,created_at) VALUES('u1',?,'g1','job','active',?)`, filters, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	done := make(chan InteractionResponse, 1)
+	go func() {
+		done <- dispatchJSON(t, d, map[string]any{"type": 4, "guild_id": "g1", "member": map[string]any{"permissions": "0", "user": map[string]any{"id": "u1"}}, "data": map[string]any{"name": "detener", "options": []map[string]any{{"name": "busqueda", "value": "", "focused": true}}}})
+	}()
+	select {
+	case out := <-done:
+		choices := out.Data.(map[string]any)["choices"].([]any)
+		if len(choices) != 25 {
+			t.Fatalf("choices=%d, want 25 (LIMIT 25)", len(choices))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("autocomplete hung -- nested materias query likely ran while rows was still open")
 	}
 }
 

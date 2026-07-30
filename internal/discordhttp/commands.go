@@ -818,7 +818,14 @@ func (d CommandDispatcher) autocomplete(ctx context.Context, userID string, in I
 			return InteractionResponse{Type: 8, Data: map[string]any{"choices": choices}}, rows.Err()
 		}
 	}
-	query := `SELECT id,discord_user_id,COALESCE(label,''),guild_id FROM jobs`
+	type jobChoiceRow struct {
+		id           int
+		owner, label string
+		guildID      sql.NullString
+		rawFilters   string
+	}
+
+	query := `SELECT id,discord_user_id,COALESCE(label,''),guild_id,filtros_json FROM jobs`
 	args := []any{}
 	if !admin {
 		query += ` WHERE discord_user_id=?`
@@ -829,21 +836,40 @@ func (d CommandDispatcher) autocomplete(ctx context.Context, userID string, in I
 	if err != nil {
 		return InteractionResponse{}, err
 	}
-	defer rows.Close()
+	jobs := make([]jobChoiceRow, 0, 25)
 	for rows.Next() {
-		var id int
-		var owner, label string
-		var guildID sql.NullString
-		if err = rows.Scan(&id, &owner, &label, &guildID); err != nil {
+		var job jobChoiceRow
+		if err = rows.Scan(&job.id, &job.owner, &job.label, &job.guildID, &job.rawFilters); err != nil {
+			rows.Close()
 			return InteractionResponse{}, err
 		}
-		name := fmt.Sprintf("#%d %s", id, label)
-		if admin {
-			name += ` · ` + d.adminIdentity(guildID.String, owner)
-		}
-		choices = append(choices, map[string]any{"name": truncateChoiceName(name), "value": strconv.Itoa(id)})
+		jobs = append(jobs, job)
 	}
-	return InteractionResponse{Type: 8, Data: map[string]any{"choices": choices}}, rows.Err()
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return InteractionResponse{}, err
+	}
+	if err = rows.Close(); err != nil {
+		return InteractionResponse{}, err
+	}
+
+	// rows is drained to memory and closed above, BEFORE this loop's nested
+	// lookupMateriaNombre query -- same single-connection pattern estado()
+	// already resolved (store.Open's SetMaxOpenConns(1) hangs forever on a
+	// nested query while the outer *sql.Rows is still open).
+	for _, job := range jobs {
+		filters := parseJobFilters(job.rawFilters)
+		materiaNombre := lookupMateriaNombre(ctx, d.DB, filters.MateriaCodigo)
+		detail := formatJobChoiceLabel(job.label, filters, materiaNombre)
+		var name string
+		if admin {
+			name = fmt.Sprintf("#%d %s · %s", job.id, detail, d.adminIdentity(job.guildID.String, job.owner))
+		} else {
+			name = detail
+		}
+		choices = append(choices, map[string]any{"name": truncateChoiceName(name), "value": strconv.Itoa(job.id)})
+	}
+	return InteractionResponse{Type: 8, Data: map[string]any{"choices": choices}}, nil
 }
 
 func (d CommandDispatcher) adminIdentity(guildID, userID string) string {
