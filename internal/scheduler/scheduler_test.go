@@ -32,11 +32,13 @@ type memoryStore struct {
 	active        []PersistedJob
 	accounts      map[string]AccountState
 	notifications map[string]NotificationState
+	progress      map[string][]NotificationFragment
+	commits       int
 	writes        int
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{accounts: map[string]AccountState{}, notifications: map[string]NotificationState{}}
+	return &memoryStore{accounts: map[string]AccountState{}, notifications: map[string]NotificationState{}, progress: map[string][]NotificationFragment{}}
 }
 func (s *memoryStore) ActiveJobs(context.Context) ([]PersistedJob, error) {
 	s.mu.Lock()
@@ -68,6 +70,27 @@ func (s *memoryStore) SaveNotificationState(_ context.Context, id string, state 
 	s.writes++
 	return nil
 }
+func (s *memoryStore) DeliveredNotificationFragments(_ context.Context, id, delivery string) ([]NotificationFragment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]NotificationFragment(nil), s.progress[id+"|"+delivery]...), nil
+}
+func (s *memoryStore) MarkNotificationFragmentDelivered(_ context.Context, id, delivery string, fragment NotificationFragment) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := id + "|" + delivery
+	s.progress[key] = append(s.progress[key], fragment)
+	return nil
+}
+func (s *memoryStore) CommitNotificationDelivery(_ context.Context, id, delivery string, state NotificationState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notifications[id] = state
+	delete(s.progress, id+"|"+delivery)
+	s.commits++
+	s.writes++
+	return nil
+}
 func (s *memoryStore) SaveOutcome(context.Context, string, Outcome, time.Time) error {
 	s.mu.Lock()
 	s.writes++
@@ -85,21 +108,33 @@ func (s *memoryStore) MarkPauseNotification(_ context.Context, account, reason s
 }
 
 type recordingNotifier struct {
-	mu     sync.Mutex
-	events []Event
-	fail   bool
+	mu       sync.Mutex
+	events   []Event
+	fail     bool
+	onNotify func(Event) error
 }
 
 func (n *recordingNotifier) Notify(_ context.Context, event Event) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.events = append(n.events, event)
+	if n.onNotify != nil {
+		if err := n.onNotify(event); err != nil {
+			return err
+		}
+	}
 	if n.fail {
 		return errors.New("send failed")
 	}
 	return nil
 }
 func (n *recordingNotifier) count() int { n.mu.Lock(); defer n.mu.Unlock(); return len(n.events) }
+
+func (n *recordingNotifier) last() Event {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.events[len(n.events)-1]
+}
 
 const schedulerPanicSentinel = "scheduler-secret-sentinel password=UadePass!123 param=eyJhbHVtSWQiOiIxIn0="
 
@@ -513,6 +548,96 @@ func TestNotificationDedupPersistsAcrossRestartAndRetriesFailures(t *testing.T) 
 	}
 	if store.notifications["1"].VacancyKey != "" {
 		t.Fatal("failed send must not persist dedup state")
+	}
+}
+
+func TestDeliveryKeyIsStableAndChangesWithDeliveryInputs(t *testing.T) {
+	baseJob := Job{ID: "17", Account: "account", Channel: "channel", MateriaCodigo: "31.202", Label: "Redes"}
+	baseOutcome := Outcome{Code: "found", Vacancies: []Vacancy{
+		{Materia: "31.202", Turno: "Noche", Sede: "Lima", Horario: "18:30", Dias: []string{"Lunes", "Miércoles"}, Cupos: 2},
+		{Materia: "31.202", Turno: "Mañana", Sede: "Monserrat", Horario: "08:00", Dias: []string{"Martes"}, Cupos: 1},
+	}}
+	base := notificationDeliveryKey(baseJob, baseOutcome)
+	if base == "" || base != notificationDeliveryKey(baseJob, baseOutcome) {
+		t.Fatalf("delivery key is empty or unstable: %q", base)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*Job, *Outcome)
+	}{
+		{"job", func(job *Job, _ *Outcome) { job.ID = "18" }},
+		{"account", func(job *Job, _ *Outcome) { job.Account = "other" }},
+		{"route target", func(job *Job, _ *Outcome) { job.Channel = "other-channel" }},
+		{"materia", func(job *Job, _ *Outcome) { job.MateriaCodigo = "31.203" }},
+		{"label", func(job *Job, _ *Outcome) { job.Label = "Otra" }},
+		{"ordered vacancy", func(_ *Job, outcome *Outcome) {
+			outcome.Vacancies[0], outcome.Vacancies[1] = outcome.Vacancies[1], outcome.Vacancies[0]
+		}},
+		{"vacancy content", func(_ *Job, outcome *Outcome) { outcome.Vacancies[0].Cupos++ }},
+		{"ordered days", func(_ *Job, outcome *Outcome) {
+			outcome.Vacancies[0].Dias[0], outcome.Vacancies[0].Dias[1] = outcome.Vacancies[0].Dias[1], outcome.Vacancies[0].Dias[0]
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			job := baseJob
+			outcome := baseOutcome
+			outcome.Vacancies = append([]Vacancy(nil), baseOutcome.Vacancies...)
+			for i := range outcome.Vacancies {
+				outcome.Vacancies[i].Dias = append([]string(nil), baseOutcome.Vacancies[i].Dias...)
+			}
+			tc.mutate(&job, &outcome)
+			if got := notificationDeliveryKey(job, outcome); got == base {
+				t.Fatalf("key did not change for %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestNotificationDedupPendingProgressSurvivesNotifierError(t *testing.T) {
+	store := newMemoryStore()
+	notifier := &recordingNotifier{fail: true}
+	notifier.onNotify = func(event Event) error {
+		return store.MarkNotificationFragmentDelivered(context.Background(), event.Job.ID, event.DeliveryKey, NotificationFragment{
+			Route: "channel:" + event.Job.Channel, FragmentIndex: 0, FragmentCount: 2, FragmentFingerprint: "first",
+		})
+	}
+	s := New(1, WithStore(store), WithNotifier(notifier))
+	s.Add(Job{Account: "a", ID: "1", Channel: "123", MateriaCodigo: "31.202", Label: "Redes", Run: func(context.Context) (Outcome, error) {
+		return Outcome{Code: "found", Vacancies: []Vacancy{{Materia: "31.202", Cupos: 1}}}, nil
+	}})
+	if err := s.RunOnce(context.Background()); err == nil {
+		t.Fatal("notifier failure must surface")
+	}
+	event := notifier.last()
+	fragments, err := store.DeliveredNotificationFragments(context.Background(), "1", event.DeliveryKey)
+	if err != nil || len(fragments) != 1 {
+		t.Fatalf("durable progress=%+v err=%v", fragments, err)
+	}
+	if store.notifications["1"] != (NotificationState{}) || store.commits != 0 {
+		t.Fatalf("failed delivery advanced state=%+v commits=%d", store.notifications["1"], store.commits)
+	}
+}
+
+func TestNotificationSuccessfulDeliveryCommitsOnce(t *testing.T) {
+	store := newMemoryStore()
+	notifier := &recordingNotifier{}
+	s := New(1, WithStore(store), WithNotifier(notifier))
+	s.Add(Job{Account: "a", ID: "1", Channel: "123", MateriaCodigo: "31.202", Label: "Redes", Run: func(context.Context) (Outcome, error) {
+		return Outcome{Code: "found", Vacancies: []Vacancy{{Materia: "31.202", Turno: "Noche", Cupos: 2}}}, nil
+	}})
+	if err := s.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first := notifier.last()
+	if first.DeliveryKey == "" || store.commits != 1 || store.notifications["1"].VacancyKey == "" {
+		t.Fatalf("event=%+v commits=%d state=%+v", first, store.commits, store.notifications["1"])
+	}
+	if err := s.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if notifier.count() != 1 || store.commits != 1 {
+		t.Fatalf("notify=%d commits=%d, want one each", notifier.count(), store.commits)
 	}
 }
 
