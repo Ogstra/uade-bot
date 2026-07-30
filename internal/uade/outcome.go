@@ -16,9 +16,10 @@ type Vacancy struct {
 	Cupos                                       int
 }
 type Outcome struct {
-	Code      OutcomeCode
-	Vacancies []Vacancy
-	Reason    string
+	Code          OutcomeCode
+	Vacancies     []Vacancy
+	MateriaNombre string
+	Reason        string
 }
 
 func Classify(searchVerified bool, authFailed bool, transportFailed bool, vacancies []Vacancy) Outcome {

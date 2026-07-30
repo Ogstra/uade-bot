@@ -72,7 +72,9 @@ func (c *Client) Search(ctx context.Context, startURL, username, password string
 		rows[i].Codigo = filters.MateriaCodigo
 		rows[i].Materia = searchForm.MateriaNombre
 	}
-	return Classify(true, false, false, rows)
+	outcome := Classify(true, false, false, rows)
+	outcome.MateriaNombre = searchForm.MateriaNombre
+	return outcome
 }
 
 func transportOutcome(err error) Outcome {
