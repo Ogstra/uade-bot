@@ -8,11 +8,87 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
 	"github.com/ogs/uade-bot/internal/store"
 )
+
+func TestBuscarDuplicateReturnsExistingAndNotifiesExactlyOnce(t *testing.T) {
+	d := testDispatcher(t)
+	seedCredentials(t, d, "dupe-owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	var callbacks atomic.Int32
+	d.OnJobCreated = func(string) { callbacks.Add(1) }
+	d.ResolveMateria = func(context.Context, string, string) (string, error) { return "ÁLGEBRA", nil }
+	options := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
+	first := dispatchJSON(t, d, command("dupe-owner", "buscar", "0", options))
+	if !strings.Contains(responseContent(first), "Monitoreo") {
+		t.Fatalf("first response: %s", responseContent(first))
+	}
+	body, _ := json.Marshal(command("dupe-owner", "buscar", "0", options))
+	second, err := d.Dispatch(context.Background(), body)
+	if err != nil {
+		t.Fatalf("duplicate returned error: %v", err)
+	}
+	if content := responseContent(second); !strings.Contains(content, "ya está siendo monitoreada") {
+		t.Fatalf("duplicate response=%q", content)
+	}
+	var count int
+	if err = d.DB.QueryRow(`SELECT COUNT(*) FROM jobs WHERE discord_user_id='dupe-owner' AND materia_code='3.1.050'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || callbacks.Load() != 1 {
+		t.Fatalf("jobs=%d callbacks=%d", count, callbacks.Load())
+	}
+}
+
+func TestPendingReplacementDuringResolutionRetriesCurrentVersion(t *testing.T) {
+	d := testDispatcher(t)
+	if _, err := d.DB.Exec(`INSERT INTO users(discord_user_id,created_at,updated_at) VALUES('pending-cas',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	firstJSON := `{"materiaCodigo":"3.1.050","turno":"Noche","ofrecimiento":"curricular","dias":["LU"]}`
+	secondJSON := `{"materiaCodigo":"3.1.051","turno":"Noche","ofrecimiento":"curricular","dias":["MA"]}`
+	if err := d.savePendingSearch(context.Background(), "pending-cas", "c", "g", "first", firstJSON); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	d.ResolveMateria = func(_ context.Context, _ string, code string) (string, error) {
+		if code == "3.1.050" {
+			once.Do(func() { close(started) })
+			<-release
+		}
+		return code, nil
+	}
+	done := make(chan error, 1)
+	go func() { _, err := d.materializePendingSearch(context.Background(), "pending-cas"); done <- err }()
+	<-started
+	if err := d.savePendingSearch(context.Background(), "pending-cas", "c", "g", "second", secondJSON); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var code string
+	if err := d.DB.QueryRow(`SELECT materia_code FROM jobs WHERE discord_user_id='pending-cas'`).Scan(&code); err != nil {
+		t.Fatal(err)
+	}
+	if code != "3.1.051" {
+		t.Fatalf("materialized stale code %q", code)
+	}
+	var pending int
+	if err := d.DB.QueryRow(`SELECT COUNT(*) FROM pending_searches WHERE discord_user_id='pending-cas'`).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("pending rows=%d", pending)
+	}
+}
 
 const testMaster = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 
