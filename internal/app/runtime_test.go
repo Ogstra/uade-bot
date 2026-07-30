@@ -16,10 +16,81 @@ import (
 	"testing"
 	"time"
 
+	"github.com/disgoorg/disgo/discord"
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
+	"github.com/ogs/uade-bot/internal/scheduler"
 	"github.com/ogs/uade-bot/internal/sso"
 	"github.com/ogs/uade-bot/internal/store"
 )
+
+type fakeDiscordSender struct {
+	dmCalls      []discordSend
+	channelCalls []discordSend
+}
+
+type discordSend struct {
+	target     string
+	content    string
+	components []discord.ContainerComponent
+}
+
+func (f *fakeDiscordSender) SendDM(user, content string, components ...discord.ContainerComponent) error {
+	f.dmCalls = append(f.dmCalls, discordSend{target: user, content: content, components: components})
+	return nil
+}
+
+func (f *fakeDiscordSender) Send(channel, content string, components ...discord.ContainerComponent) error {
+	f.channelCalls = append(f.channelCalls, discordSend{target: channel, content: content, components: components})
+	return nil
+}
+
+func TestOutboundNotifierVacancyToChannelIncludesActionRow(t *testing.T) {
+	fake := &fakeDiscordSender{}
+	n := outboundNotifier{discord: fake}
+	event := scheduler.Event{Kind: "vacancy", Job: scheduler.Job{ID: "42", Account: "user", Channel: "channel"}}
+
+	if err := n.Notify(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.channelCalls) != 1 || len(fake.dmCalls) != 0 {
+		t.Fatalf("channel calls = %d, dm calls = %d", len(fake.channelCalls), len(fake.dmCalls))
+	}
+	if got := len(fake.channelCalls[0].components); got != 1 {
+		t.Fatalf("components = %d, want 1", got)
+	}
+}
+
+func TestOutboundNotifierVacancyToDMIncludesActionRow(t *testing.T) {
+	fake := &fakeDiscordSender{}
+	n := outboundNotifier{discord: fake}
+	event := scheduler.Event{Kind: "vacancy", Job: scheduler.Job{ID: "42", Account: "user"}}
+
+	if err := n.Notify(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.dmCalls) != 1 || len(fake.channelCalls) != 0 {
+		t.Fatalf("dm calls = %d, channel calls = %d", len(fake.dmCalls), len(fake.channelCalls))
+	}
+	if got := len(fake.dmCalls[0].components); got != 1 {
+		t.Fatalf("components = %d, want 1", got)
+	}
+}
+
+func TestOutboundNotifierAccountPauseHasNoComponents(t *testing.T) {
+	fake := &fakeDiscordSender{}
+	n := outboundNotifier{discord: fake}
+	event := scheduler.Event{Kind: "account_pause", Job: scheduler.Job{ID: "42", Account: "user"}, Reason: "needs_credentials"}
+
+	if err := n.Notify(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.dmCalls) != 1 || len(fake.channelCalls) != 0 {
+		t.Fatalf("dm calls = %d, channel calls = %d", len(fake.dmCalls), len(fake.channelCalls))
+	}
+	if got := len(fake.dmCalls[0].components); got != 0 {
+		t.Fatalf("components = %d, want 0", got)
+	}
+}
 
 // TestRecoverGoroutineConvertsPanicToLogInsteadOfCrashing proves recoverGoroutine
 // contains a panic to the goroutine it runs in instead of crashing the process
