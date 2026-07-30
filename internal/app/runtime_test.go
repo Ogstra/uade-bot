@@ -347,6 +347,56 @@ func TestOutboundNotifierNonceIdentityIsStableAndScoped(t *testing.T) {
 	}
 }
 
+func TestOutboundNotifierNonceSeparatesDeliveriesAndRetries(t *testing.T) {
+	first := vacancyNotificationEvent("channel")
+	first.DeliveryKey = strings.Repeat("a", 64)
+	second := first
+	second.Job.ID = "84"
+	second.DeliveryKey = strings.Repeat("b", 64)
+
+	firstMessages := notificationMessages(first, notificationRouteDM)
+	secondMessages := notificationMessages(second, notificationRouteDM)
+	retryMessages := notificationMessages(first, notificationRouteDM)
+	if len(firstMessages) != len(secondMessages) || len(firstMessages) != len(retryMessages) {
+		t.Fatalf("message counts = %d/%d/%d", len(firstMessages), len(secondMessages), len(retryMessages))
+	}
+	for i := range firstMessages {
+		if firstMessages[i].Content != secondMessages[i].Content || firstMessages[i].FragmentIndex != secondMessages[i].FragmentIndex || firstMessages[i].FragmentCount != secondMessages[i].FragmentCount {
+			t.Fatalf("fragment %d did not preserve the adversarial visible identity", i)
+		}
+		if reflect.DeepEqual(firstMessages[i].Components, secondMessages[i].Components) {
+			t.Fatalf("fragment %d components unexpectedly equal for different action rows", i)
+		}
+		if firstMessages[i].Nonce == secondMessages[i].Nonce {
+			t.Fatalf("fragment %d reused nonce %q across jobs/deliveries/action rows", i, firstMessages[i].Nonce)
+		}
+		if firstMessages[i].Nonce != retryMessages[i].Nonce {
+			t.Fatalf("fragment %d retry nonce = %q, want %q", i, retryMessages[i].Nonce, firstMessages[i].Nonce)
+		}
+		if len(firstMessages[i].Nonce) > 25 || !strings.HasPrefix(firstMessages[i].Nonce, "uade-") {
+			t.Fatalf("fragment %d nonce = %q, want at most 25 chars with uade- prefix", i, firstMessages[i].Nonce)
+		}
+	}
+}
+
+func TestOutboundNotifierAccountPauseWithoutDurableIdentityDoesNotUseNonce(t *testing.T) {
+	fake := &fakeDiscordSender{}
+	event := scheduler.Event{
+		Kind:   "account_pause",
+		Job:    scheduler.Job{ID: "42", Account: "user"},
+		Reason: "needs_credentials",
+	}
+	if err := (outboundNotifier{discord: fake}).Notify(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.dmCalls) != 1 {
+		t.Fatalf("DM calls = %d, want 1", len(fake.dmCalls))
+	}
+	if fake.dmCalls[0].nonce != "" {
+		t.Fatalf("account-pause nonce = %q, want empty without durable episode identity", fake.dmCalls[0].nonce)
+	}
+}
+
 func TestOutboundNotifierCrashWindowIsAtLeastOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

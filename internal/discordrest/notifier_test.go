@@ -21,6 +21,16 @@ func TestMessageCreateDeniesMentionsByDefault(t *testing.T) {
 	}
 }
 
+func TestMessageCreateEmptyNonceDisablesEnforcementAndDeniesMentions(t *testing.T) {
+	message := dmMessageCreate("hostile @everyone <@123456789>", "", nil)
+	if message.Nonce != "" || message.EnforceNonce {
+		t.Fatalf("empty nonce/enforce = %q/%v, want empty/false", message.Nonce, message.EnforceNonce)
+	}
+	if message.AllowedMentions == nil || len(message.AllowedMentions.Parse) != 0 || len(message.AllowedMentions.Roles) != 0 || len(message.AllowedMentions.Users) != 0 {
+		t.Fatalf("DM allowed mentions = %#v, want deny all", message.AllowedMentions)
+	}
+}
+
 func TestMessageCreateGenericDeniesMentionsByDefault(t *testing.T) {
 	message := genericMessageCreate("hostile @everyone <@123456789>", nil)
 	if message.EnforceNonce || message.Nonce != "" {
