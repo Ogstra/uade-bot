@@ -1,7 +1,11 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -77,15 +81,19 @@ type Store interface {
 	SaveAccountState(context.Context, string, AccountState) error
 	NotificationState(context.Context, string) (NotificationState, error)
 	SaveNotificationState(context.Context, string, NotificationState) error
+	DeliveredNotificationFragments(context.Context, string, string) ([]NotificationFragment, error)
+	MarkNotificationFragmentDelivered(context.Context, string, string, NotificationFragment) error
+	CommitNotificationDelivery(context.Context, string, string, NotificationState) error
 	SaveOutcome(context.Context, string, Outcome, time.Time) error
 	MarkPauseNotification(context.Context, string, string) error
 }
 
 type Event struct {
-	Kind    string
-	Job     Job
-	Outcome Outcome
-	Reason  string
+	Kind        string
+	Job         Job
+	Outcome     Outcome
+	Reason      string
+	DeliveryKey string
 }
 
 type Notifier interface {
@@ -536,6 +544,41 @@ func vacancyFingerprint(vacancies []Vacancy) (string, int) {
 	return strings.Join(keys, "\n"), max
 }
 
+func notificationDeliveryKey(job Job, outcome Outcome) string {
+	var payload bytes.Buffer
+	payload.WriteString("uade-notification-delivery-v1")
+	writeDeliveryString(&payload, job.ID)
+	writeDeliveryString(&payload, job.Account)
+	writeDeliveryString(&payload, job.Channel)
+	writeDeliveryString(&payload, job.MateriaCodigo)
+	writeDeliveryString(&payload, job.Label)
+	writeDeliveryUint64(&payload, uint64(len(outcome.Vacancies)))
+	for _, vacancy := range outcome.Vacancies {
+		writeDeliveryString(&payload, vacancy.Materia)
+		writeDeliveryString(&payload, vacancy.Turno)
+		writeDeliveryString(&payload, vacancy.Sede)
+		writeDeliveryString(&payload, vacancy.Horario)
+		writeDeliveryUint64(&payload, uint64(len(vacancy.Dias)))
+		for _, day := range vacancy.Dias {
+			writeDeliveryString(&payload, day)
+		}
+		writeDeliveryUint64(&payload, uint64(int64(vacancy.Cupos)))
+	}
+	sum := sha256.Sum256(payload.Bytes())
+	return hex.EncodeToString(sum[:])
+}
+
+func writeDeliveryString(payload *bytes.Buffer, value string) {
+	writeDeliveryUint64(payload, uint64(len(value)))
+	payload.WriteString(value)
+}
+
+func writeDeliveryUint64(payload *bytes.Buffer, value uint64) {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], value)
+	payload.Write(encoded[:])
+}
+
 func (s *Scheduler) notificationState(ctx context.Context, id string) (NotificationState, error) {
 	if s.store != nil {
 		return s.store.NotificationState(ctx, id)
@@ -576,10 +619,18 @@ func (s *Scheduler) dispatchVacancy(ctx context.Context, job Job, outcome Outcom
 	if s.notifier == nil {
 		return nil
 	}
-	if err = s.notifier.Notify(ctx, Event{Kind: "vacancy", Job: job, Outcome: outcome}); err != nil {
+	deliveryKey := notificationDeliveryKey(job, outcome)
+	if err = s.notifier.Notify(ctx, Event{Kind: "vacancy", Job: job, Outcome: outcome, DeliveryKey: deliveryKey}); err != nil {
 		return err
 	}
-	return s.saveNotificationState(ctx, job.ID, NotificationState{VacancyKey: key, MaxCupos: max})
+	state := NotificationState{VacancyKey: key, MaxCupos: max}
+	if s.store != nil {
+		// This commit records only locally durable confirmations. A process crash
+		// after a successful REST call but before its fragment mark remains an
+		// honest at-least-once window and may cause a later duplicate.
+		return s.store.CommitNotificationDelivery(ctx, job.ID, deliveryKey, state)
+	}
+	return s.saveNotificationState(ctx, job.ID, state)
 }
 
 // ThrottledNotifier serializes outbound REST calls and applies the delay even
