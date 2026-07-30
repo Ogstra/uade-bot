@@ -55,7 +55,7 @@ func TestResolveSSOPortalURLRejectsUnparsableURL(t *testing.T) {
 func TestDashboardWiringUsesLiveGatewayProjection(t *testing.T) {
 	projection := discordgateway.NewProjection(nil)
 	source := dashboardSnapshotSource(nil, projection)
-	if source.GuildProvider == nil || source.DisplayNameProvider == nil {
+	if source.GuildProvider == nil || source.DisplayNameProvider == nil || source.AvatarURLProvider == nil {
 		t.Fatalf("dashboard snapshot source is not wired to live gateway providers: %+v", source)
 	}
 }

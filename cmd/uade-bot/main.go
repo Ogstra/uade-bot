@@ -183,6 +183,7 @@ func dashboardSnapshotSource(db *sql.DB, projection *discordgateway.Projection) 
 	if projection != nil {
 		source.GuildProvider = projection.Guilds
 		source.DisplayNameProvider = projection.DisplayNames
+		source.AvatarURLProvider = projection.AvatarURLs
 	}
 	return source
 }

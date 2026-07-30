@@ -16,6 +16,7 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
+	"github.com/ogs/uade-bot/internal/dashboard"
 	"github.com/ogs/uade-bot/internal/discordhttp"
 )
 
@@ -344,6 +345,39 @@ func TestGatewayProjectionGuildAndIdentityPrecedence(t *testing.T) {
 	}
 }
 
+func TestGatewayProjectionCapturesIconAndAvatarURLsCacheOnly(t *testing.T) {
+	iconHash := "abc123"
+	avatarHash := "def456"
+	guildWithIcon := discord.Guild{ID: snowflake.ID(101), Name: "Con Icono", Icon: &iconHash}
+	guildWithoutIcon := discord.Guild{ID: snowflake.ID(102), Name: "Sin Icono"}
+	userWithAvatar := discord.User{ID: snowflake.ID(201), Username: "conAvatar", Avatar: &avatarHash}
+	userWithoutAvatar := discord.User{ID: snowflake.ID(202), Username: "sinAvatar", Discriminator: "0"}
+
+	projection := NewProjection(&fakeGuildCache{guilds: []discord.Guild{guildWithIcon, guildWithoutIcon}})
+	projection.Observe(guildWithIcon.ID, nil, userWithAvatar)
+	projection.Observe(guildWithIcon.ID, nil, userWithoutAvatar)
+
+	avatarURLs := projection.AvatarURLs()
+	if got, want := avatarURLs[userWithAvatar.ID.String()], userWithAvatar.EffectiveAvatarURL(); got != want || got == "" {
+		t.Fatalf("AvatarURLs()[with avatar] = %q, want %q", got, want)
+	}
+	if got, want := avatarURLs[userWithoutAvatar.ID.String()], userWithoutAvatar.EffectiveAvatarURL(); got != want || got == "" {
+		t.Fatalf("AvatarURLs()[without custom avatar] = %q, want non-empty default %q", got, want)
+	}
+
+	byID := map[string]dashboard.Guild{}
+	for _, guild := range projection.Guilds() {
+		byID[guild.ID] = guild
+	}
+	wantIcon := guildWithIcon.IconURL()
+	if wantIcon == nil || byID[guildWithIcon.ID.String()].IconURL != *wantIcon {
+		t.Fatalf("Guilds()[with icon].IconURL = %q, want %v", byID[guildWithIcon.ID.String()].IconURL, wantIcon)
+	}
+	if byID[guildWithoutIcon.ID.String()].IconURL != "" {
+		t.Fatalf("Guilds()[without icon].IconURL = %q, want empty", byID[guildWithoutIcon.ID.String()].IconURL)
+	}
+}
+
 func TestGatewayProjectionGuildLifecycleUnavailableLeaveAndRejoin(t *testing.T) {
 	projection := NewProjection(nil)
 	guild := discord.Guild{ID: snowflake.ID(77), Name: "Zulu"}
@@ -400,6 +434,7 @@ func TestGatewayProjectionConcurrentLiveIdentityUpdates(t *testing.T) {
 			_ = consumer.ResolveIdentity("4", "5")
 			_ = consumer.DisplayNames()
 			_ = consumer.Guilds()
+			_ = consumer.AvatarURLs()
 		}()
 	}
 	wg.Wait()

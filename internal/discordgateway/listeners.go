@@ -46,6 +46,7 @@ type guildSource interface {
 type projectedIdentity struct {
 	globalName string
 	username   string
+	avatarURL  string
 	nicknames  map[string]string
 }
 
@@ -97,6 +98,9 @@ func (p *Projection) Observe(guildID snowflake.ID, member *discord.ResolvedMembe
 	if username := strings.TrimSpace(user.Username); username != "" {
 		identity.username = username
 	}
+	if avatarURL := strings.TrimSpace(user.EffectiveAvatarURL()); avatarURL != "" {
+		identity.avatarURL = avatarURL
+	}
 	p.mu.Unlock()
 }
 
@@ -145,6 +149,23 @@ func (p *Projection) DisplayNames() map[string]string {
 	defer p.mu.RUnlock()
 	for id := range p.identities {
 		out[id] = p.resolveIdentityLocked("", id)
+	}
+	return out
+}
+
+// AvatarURLs returns a copy of every observed identity's cached avatar URL,
+// keyed by user ID. Unlike DisplayNames, it exposes the raw cached field with
+// no precedence/fallback logic -- a user never observed by Observe simply has
+// no entry, leaving the empty-string fallback to snapshot.go's SnapshotSource.
+func (p *Projection) AvatarURLs() map[string]string {
+	out := map[string]string{}
+	if p == nil {
+		return out
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for id, identity := range p.identities {
+		out[id] = identity.avatarURL
 	}
 	return out
 }
@@ -199,8 +220,12 @@ func (p *Projection) upsertGuild(guild discord.Guild) {
 	if p == nil || guild.ID == 0 {
 		return
 	}
+	iconURL := ""
+	if icon := guild.IconURL(); icon != nil {
+		iconURL = *icon
+	}
 	p.mu.Lock()
-	p.guilds[guild.ID.String()] = dashboard.Guild{ID: guild.ID.String(), Name: guild.Name}
+	p.guilds[guild.ID.String()] = dashboard.Guild{ID: guild.ID.String(), Name: guild.Name, IconURL: iconURL}
 	p.mu.Unlock()
 }
 
