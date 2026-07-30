@@ -78,6 +78,7 @@ type CommandDispatcher struct {
 	OnJobCreated   func(string)
 	OnAccountReady func(string)
 	OnJobsChanged  func()
+	SendChannel    func(channelID, content string) error
 }
 
 // Dispatch is a thin JSON-unmarshal wrapper around DispatchInteraction, kept
@@ -110,6 +111,9 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 	}
 	if in.Type == 4 {
 		return d.autocomplete(ctx, userID, in)
+	}
+	if in.Type == 3 {
+		return d.component(ctx, userID, in)
 	}
 	if in.Type != 2 {
 		return InteractionResponse{}, errors.New("unsupported interaction type")

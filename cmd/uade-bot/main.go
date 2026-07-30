@@ -9,6 +9,7 @@ import (
 	"github.com/ogs/uade-bot/internal/dashboard"
 	"github.com/ogs/uade-bot/internal/discordgateway"
 	"github.com/ogs/uade-bot/internal/discordhttp"
+	"github.com/ogs/uade-bot/internal/discordrest"
 	"github.com/ogs/uade-bot/internal/shadow"
 	"github.com/ogs/uade-bot/internal/store"
 	"log"
@@ -123,6 +124,8 @@ func main() {
 
 	if token != "" && mode != "shadow" {
 		dispatcher := discordhttp.CommandDispatcher{DB: db, MasterKey: os.Getenv("CREDENTIALS_MASTER_KEY"), OnJobCreated: runtime.JobCreated, OnAccountReady: runtime.AccountReady, OnJobsChanged: runtime.JobsChanged}
+		notifier := discordrest.New(token)
+		dispatcher.SendChannel = func(channel, content string) error { return notifier.Send(channel, content) }
 		client, clientErr := discordgateway.New(token, dispatcher)
 		if clientErr != nil {
 			log.Fatal(clientErr)

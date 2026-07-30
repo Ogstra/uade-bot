@@ -25,5 +25,6 @@ func New(token string, dispatcher discordhttp.CommandDispatcher) (bot.Client, er
 		bot.WithEventListenerFunc(OnSlashCommand(dispatcher)),
 		bot.WithEventListenerFunc(OnModalSubmit(dispatcher)),
 		bot.WithEventListenerFunc(OnAutocomplete(dispatcher)),
+		bot.WithEventListenerFunc(OnComponentInteraction(dispatcher)),
 	)
 }

@@ -96,6 +96,17 @@ func OnAutocomplete(dispatcher Dispatcher) func(*events.AutocompleteInteractionC
 	}
 }
 
+// OnComponentInteraction adapts a Gateway message-component interaction into
+// the transport-agnostic shape handled by discordhttp.CommandDispatcher.
+func OnComponentInteraction(dispatcher Dispatcher) func(*events.ComponentInteractionCreate) {
+	return func(e *events.ComponentInteractionCreate) {
+		in := base(e.GuildID(), e.ChannelID(), e.Member(), e.User())
+		in.Type = 3
+		in.Data = discordhttp.InteractionData{CustomID: e.Data.CustomID()}
+		dispatchAndRespond(dispatcher, e.ID().String(), e.Token(), in, defaultRespond)
+	}
+}
+
 // base builds the transport-agnostic fields shared by every interaction type:
 // guild/channel identifiers and the member/user identity DispatchInteraction
 // uses for ownership/admin checks.
