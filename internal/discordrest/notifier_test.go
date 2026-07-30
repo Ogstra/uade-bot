@@ -21,6 +21,16 @@ func TestMessageCreateDeniesMentionsByDefault(t *testing.T) {
 	}
 }
 
+func TestMessageCreateGenericDeniesMentionsByDefault(t *testing.T) {
+	message := genericMessageCreate("hostile @everyone <@123456789>", nil)
+	if message.EnforceNonce || message.Nonce != "" {
+		t.Fatalf("generic nonce/enforce = %q/%v, want empty/false", message.Nonce, message.EnforceNonce)
+	}
+	if message.AllowedMentions == nil || len(message.AllowedMentions.Parse) != 0 || len(message.AllowedMentions.Roles) != 0 || len(message.AllowedMentions.Users) != 0 {
+		t.Fatalf("generic allowed mentions = %#v, want deny all", message.AllowedMentions)
+	}
+}
+
 func TestMessageCreateMentionAllowsOnlyOwner(t *testing.T) {
 	message, err := mentionMessageCreate("123456789", "<@123456789> hostile @everyone <@987654321>", "uade-abcdef0123456789abcd", nil)
 	if err != nil {

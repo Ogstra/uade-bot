@@ -20,18 +20,23 @@ func VacancyActionRow(jobID string) discord.ActionRowComponent {
 	return discord.NewActionRow(discord.NewDangerButton("Detener busqueda", "detener_job:"+jobID))
 }
 
-func dmMessageCreate(content, nonce string, components []discord.ContainerComponent) discord.MessageCreate {
+func genericMessageCreate(content string, components []discord.ContainerComponent) discord.MessageCreate {
 	return discord.MessageCreate{
-		Content:      content,
-		Nonce:        nonce,
-		EnforceNonce: true,
-		Components:   components,
+		Content:    content,
+		Components: components,
 		AllowedMentions: &discord.AllowedMentions{
 			Parse: []discord.AllowedMentionType{},
 			Roles: []snowflake.ID{},
 			Users: []snowflake.ID{},
 		},
 	}
+}
+
+func dmMessageCreate(content, nonce string, components []discord.ContainerComponent) discord.MessageCreate {
+	message := genericMessageCreate(content, components)
+	message.Nonce = nonce
+	message.EnforceNonce = true
+	return message
 }
 
 func mentionMessageCreate(owner, content, nonce string, components []discord.ContainerComponent) (discord.MessageCreate, error) {
@@ -67,5 +72,17 @@ func (n Notifier) SendMention(channel, owner, content, nonce string, components 
 		return err
 	}
 	_, err = n.Rest.CreateMessage(id, message)
+	return err
+}
+
+// Send preserves the generic channel-message API used by command responses.
+// Notification fan-out uses SendMention so only its structural owner mention
+// is allowlisted; generic content denies every mention type.
+func (n Notifier) Send(channel, content string, components ...discord.ContainerComponent) error {
+	id, err := snowflake.Parse(channel)
+	if err != nil {
+		return err
+	}
+	_, err = n.Rest.CreateMessage(id, genericMessageCreate(content, components))
 	return err
 }
