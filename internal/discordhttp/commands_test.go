@@ -246,6 +246,9 @@ func TestSubmitCredentialsMaterializesPendingSearch(t *testing.T) {
 	if content := responseContent(submit); !strings.Contains(content, "Ya creé la búsqueda") {
 		t.Fatalf("respuesta no menciona la búsqueda ya creada: %s", content)
 	}
+	if content := responseContent(submit); !strings.Contains(content, "**Materia:**") {
+		t.Fatalf("respuesta no incluye el resumen de filtros: %s", content)
+	}
 	if created == "" {
 		t.Fatal("OnJobCreated no se disparó")
 	}
@@ -270,6 +273,153 @@ func TestSubmitCredentialsMaterializesPendingSearch(t *testing.T) {
 	}
 	if pendingCount != 0 {
 		t.Fatalf("pending_searches=%d, want 0", pendingCount)
+	}
+}
+
+func TestEstadoShowsDetailedJobStatusAndSuppressesMentions(t *testing.T) {
+	d := testDispatcher(t)
+	seedCredentials(t, d, "owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	if _, err := d.DB.Exec(`INSERT INTO materias(codigo,nombre,updated_at) VALUES('3.1.050','Algoritmos',1)`); err != nil {
+		t.Fatal(err)
+	}
+	options := []map[string]any{
+		{"name": "cod_materia", "value": "3.1.050"},
+		{"name": "turno", "value": "Noche"},
+		{"name": "ofrecimiento", "value": "curricular"},
+		{"name": "dias", "value": "LU,MI"},
+		{"name": "sedes_excluidas", "value": "Lima,Monserrat"},
+		{"name": "etiqueta", "value": "Algoritmos nocturna"},
+	}
+	dispatchJSON(t, d, command("owner", "buscar", "0", options))
+	if _, err := d.DB.Exec(`UPDATE jobs SET last_polled_at=?,last_outcome='found' WHERE id=1`, int64(1785434645000)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.DB.Exec(`INSERT INTO poll_outcome_history(job_id,recorded_at,outcome_code,vacancy_count,total_cupos) VALUES(1,2,'found',1,7)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.DB.Exec(`UPDATE users SET pause_reason='rate_limited' WHERE discord_user_id='owner'`); err != nil {
+		t.Fatal(err)
+	}
+
+	out := dispatchJSON(t, d, command("owner", "estado", "0", nil))
+	content := responseContent(out)
+	for _, want := range []string{
+		"**Materia:**", "3.1.050 - Algoritmos", "**Turno:** Noche", "**Dias:** LU, MI",
+		"**Sedes excluidas:** Lima, Monserrat", "**Server/Canal:** <#any-channel>",
+		"**Estado:** pausada (rate_limited)", "**Ultimo sondeo:**", "**Ultimo resultado:** vacante encontrada (7 cupos)",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("/estado no contiene %q: %s", want, content)
+		}
+	}
+	data := out.Data.(map[string]any)
+	mentions, ok := data["allowed_mentions"].(map[string]any)
+	if !ok {
+		t.Fatalf("allowed_mentions ausente: %#v", data)
+	}
+	parse, ok := mentions["parse"].([]string)
+	if !ok || len(parse) != 0 {
+		t.Fatalf("allowed_mentions.parse = %#v, want []", mentions["parse"])
+	}
+}
+
+func TestAdminEstadoUsesCompactLinesAndIgnoresAccountPauseReason(t *testing.T) {
+	d := testDispatcher(t)
+	seedCredentials(t, d, "u1", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	seedCredentials(t, d, "u2", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	if _, err := d.DB.Exec(`INSERT INTO materias(codigo,nombre,updated_at) VALUES('3.1.050','Algoritmos',1)`); err != nil {
+		t.Fatal(err)
+	}
+	filters := `{"materiaCodigo":"3.1.050","turno":"Noche","ofrecimiento":"curricular","dias":["LU","MI"],"sedesExcluidas":[]}`
+	if _, err := d.DB.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,channel_id,guild_id,label,status,last_outcome,created_at) VALUES('u1',?,'c1','g1','Mi etiqueta','active','no_vacancies',1),('u2',?,'c2','g2','3.1.050','paused_by_user','search_failed',2)`, filters, filters); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.DB.Exec(`UPDATE users SET pause_reason='needs_credentials' WHERE discord_user_id='u1'`); err != nil {
+		t.Fatal(err)
+	}
+
+	content := responseContent(dispatchJSON(t, d, command("admin", "admin-estado", "8", nil)))
+	for _, want := range []string{
+		"**#1** <@u1> · Mi etiqueta - 3.1.050 - Algoritmos · Noche LU/MI · activa · <#c1> · sin vacantes",
+		"**#2** <@u2> · 3.1.050 - Algoritmos · Noche LU/MI · pausada · <#c2> · fallo la busqueda",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("/admin-estado no contiene %q: %s", want, content)
+		}
+	}
+	if strings.Contains(content, "needs_credentials") {
+		t.Fatalf("la linea admin no debe reflejar pause_reason de cuenta: %s", content)
+	}
+	if len(content) > 1900 {
+		t.Fatalf("respuesta admin demasiado larga: %d", len(content))
+	}
+}
+
+func TestPendingSearchAppearsInEstado(t *testing.T) {
+	d := testDispatcher(t)
+	options := []map[string]any{
+		{"name": "cod_materia", "value": "3.1.050"},
+		{"name": "turno", "value": "Noche"},
+		{"name": "ofrecimiento", "value": "curricular"},
+		{"name": "dias", "value": "LU"},
+		{"name": "etiqueta", "value": "Pendiente especial"},
+	}
+	if out := dispatchJSON(t, d, command("u-pending", "buscar", "0", options)); out.Type != 9 {
+		t.Fatalf("buscar sin credenciales type=%d, want modal", out.Type)
+	}
+	content := responseContent(dispatchJSON(t, d, command("u-pending", "estado", "0", nil)))
+	if !strings.Contains(content, "Pendiente especial") || !strings.Contains(content, "pendiente") {
+		t.Fatalf("búsqueda pendiente no visible: %s", content)
+	}
+}
+
+func TestBuscarRejectsWhenNoValidDaysWithoutWriting(t *testing.T) {
+	d := testDispatcher(t)
+	options := []map[string]any{
+		{"name": "cod_materia", "value": "3.1.050"},
+		{"name": "turno", "value": "Noche"},
+		{"name": "ofrecimiento", "value": "curricular"},
+		{"name": "dias", "value": "XX,YY"},
+	}
+	content := responseContent(dispatchJSON(t, d, command("u-invalid", "buscar", "0", options)))
+	for _, day := range []string{"LU", "MA", "MI", "JU", "VI", "SA"} {
+		if !strings.Contains(content, day) {
+			t.Fatalf("respuesta no menciona %s: %s", day, content)
+		}
+	}
+	for _, table := range []string{"jobs", "pending_searches"} {
+		var count int
+		if err := d.DB.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("%s count=%d err=%v, want 0", table, count, err)
+		}
+	}
+}
+
+func TestBuscarFiltersInvalidDaysAndShowsSummary(t *testing.T) {
+	d := testDispatcher(t)
+	seedCredentials(t, d, "owner", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	if _, err := d.DB.Exec(`INSERT INTO materias(codigo,nombre,updated_at) VALUES('3.1.050','Algoritmos',1)`); err != nil {
+		t.Fatal(err)
+	}
+	options := []map[string]any{
+		{"name": "cod_materia", "value": "3.1.050"},
+		{"name": "turno", "value": "Noche"},
+		{"name": "ofrecimiento", "value": "curricular"},
+		{"name": "dias", "value": "lu,xx,MI"},
+	}
+	out := dispatchJSON(t, d, command("owner", "buscar", "0", options))
+	for _, want := range []string{"**Materia:**", "**Turno:**", "**Ofrecimiento:**", "**Dias:**"} {
+		if !strings.Contains(responseContent(out), want) {
+			t.Fatalf("respuesta no contiene %q: %s", want, responseContent(out))
+		}
+	}
+	var raw string
+	if err := d.DB.QueryRow(`SELECT filtros_json FROM jobs WHERE discord_user_id='owner'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	filters := parseJobFilters(raw)
+	if got := strings.Join(filters.Dias, ","); got != "LU,MI" {
+		t.Fatalf("dias persistidos=%q, want LU,MI", got)
 	}
 }
 
