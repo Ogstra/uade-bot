@@ -258,6 +258,37 @@ func TestDashboardSSRUsesReadableBuenosAiresTimestampsAndFallbacks(t *testing.T)
 	}
 }
 
+func TestDashboardSSRHidesZeroCountDetailForNonFoundOutcomes(t *testing.T) {
+	fixed := time.Date(2026, 7, 30, 15, 4, 0, 0, time.UTC).UnixMilli()
+	zero := 0
+	one, cupos := 1, 4
+	snapshot := Snapshot{
+		GeneratedAt: fixed,
+		Health:      Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}, Jobs: JobsHealth{}},
+		BotGuilds:   []Guild{},
+		Accounts: []Account{{DiscordUserID: "123", DisplayName: "Ana", Jobs: []Job{{
+			JobID: 7, Filters: Filters{}, History: []HistoryItem{
+				{ID: 9, RecordedAt: fixed, Outcome: outcomeCode("no_vacancies", &zero, &zero)},
+				{ID: 8, RecordedAt: fixed, Outcome: outcomeCode("found", &one, &cupos)},
+			},
+		}}}},
+	}
+	var rendered bytes.Buffer
+	if err := dashboardTemplate.Execute(&rendered, dashboardView{Snapshot: snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	html := rendered.String()
+	if !strings.Contains(html, "—") {
+		t.Fatalf("expected dash placeholder for non-found outcome: %s", html)
+	}
+	if strings.Contains(html, "0 comisión(es)") {
+		t.Fatalf("no_vacancies row must not render zero-count detail: %s", html)
+	}
+	if !strings.Contains(html, "1 comisión(es), 4 cupo(s)") {
+		t.Fatalf("found row must still render vacancy count detail: %s", html)
+	}
+}
+
 func TestDashboardRefreshFormatsAndPatchesEveryTimestampInPlace(t *testing.T) {
 	var rendered bytes.Buffer
 	if err := dashboardTemplate.Execute(&rendered, dashboardView{Snapshot: Snapshot{BotGuilds: []Guild{}, Accounts: []Account{}, Health: Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}}}}); err != nil {
