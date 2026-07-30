@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/disgoorg/disgo/discord"
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
 	"github.com/ogs/uade-bot/internal/discordrest"
 	"github.com/ogs/uade-bot/internal/scheduler"
@@ -40,12 +41,21 @@ type filters struct {
 	SedesExcluidas []string `json:"sedesExcluidas"`
 }
 
-type outboundNotifier struct{ discord discordrest.Notifier }
+type discordSender interface {
+	SendDM(user, content string, components ...discord.ContainerComponent) error
+	Send(channel, content string, components ...discord.ContainerComponent) error
+}
+
+type outboundNotifier struct{ discord discordSender }
 
 func (n outboundNotifier) Notify(_ context.Context, event scheduler.Event) error {
 	content := notificationText(event)
-	if event.Kind == "vacancy" && event.Job.Channel != "" {
-		return n.discord.Send(event.Job.Channel, content)
+	if event.Kind == "vacancy" {
+		row := discordrest.VacancyActionRow(event.Job.ID)
+		if event.Job.Channel != "" {
+			return n.discord.Send(event.Job.Channel, content, row)
+		}
+		return n.discord.SendDM(event.Job.Account, content, row)
 	}
 	return n.discord.SendDM(event.Job.Account, content)
 }

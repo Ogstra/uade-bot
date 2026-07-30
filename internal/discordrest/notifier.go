@@ -16,7 +16,11 @@ func New(token string) Notifier {
 	return Notifier{Rest: rest.NewChannels(client), Users: rest.NewUsers(client)}
 }
 
-func (n Notifier) SendDM(user, content string) error {
+func VacancyActionRow(jobID string) discord.ActionRowComponent {
+	return discord.NewActionRow(discord.NewDangerButton("Detener busqueda", "detener_job:"+jobID))
+}
+
+func (n Notifier) SendDM(user, content string, components ...discord.ContainerComponent) error {
 	id, err := snowflake.Parse(user)
 	if err != nil {
 		return err
@@ -25,14 +29,14 @@ func (n Notifier) SendDM(user, content string) error {
 	if err != nil {
 		return err
 	}
-	_, err = n.Rest.CreateMessage(channel.ID(), discord.MessageCreate{Content: content})
+	_, err = n.Rest.CreateMessage(channel.ID(), discord.MessageCreate{Content: content, Components: components})
 	return err
 }
-func (n Notifier) Send(channel string, content string) error {
+func (n Notifier) Send(channel string, content string, components ...discord.ContainerComponent) error {
 	id, e := snowflake.Parse(channel)
 	if e != nil {
 		return e
 	}
-	_, e = n.Rest.CreateMessage(id, discord.MessageCreate{Content: content})
+	_, e = n.Rest.CreateMessage(id, discord.MessageCreate{Content: content, Components: components})
 	return e
 }
