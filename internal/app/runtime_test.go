@@ -13,10 +13,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/disgoorg/disgo/discord"
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
@@ -89,6 +91,119 @@ func assertVacancyNotification(t *testing.T, send discordSend) {
 	if button.CustomID != "detener_job:42" || button.Label != "Detener busqueda" || button.Style != discord.ButtonStyleDanger {
 		t.Fatalf("button = %+v, want detener_job:42 / Detener busqueda / Danger", button)
 	}
+}
+
+func TestNotificationMessagesLongMultibyteReconstructExactly(t *testing.T) {
+	event := vacancyNotificationEvent("channel")
+	event.Outcome.Vacancies = make([]scheduler.Vacancy, 12)
+	for i := range event.Outcome.Vacancies {
+		repeated := strings.Repeat(fmt.Sprintf("á界-%02d-", i), 42)
+		event.Outcome.Vacancies[i] = scheduler.Vacancy{
+			Materia: fmt.Sprintf("Materia única %02d %s", i, repeated),
+			Turno:   fmt.Sprintf("Turno único %02d", i),
+			Sede:    fmt.Sprintf("Sede única %02d %s", i, repeated),
+			Horario: fmt.Sprintf("Horario único %02d %s", i, repeated),
+			Dias:    []string{fmt.Sprintf("Día único %02d A", i), fmt.Sprintf("Día único %02d B", i)},
+			Cupos:   i + 1,
+		}
+	}
+
+	dm := notificationMessages(event, notificationRouteDM)
+	channel := notificationMessages(event, notificationRouteChannel)
+	if len(dm) < 3 || len(channel) < 3 {
+		t.Fatalf("fragment counts dm/channel = %d/%d, want at least 3 each", len(dm), len(channel))
+	}
+	for route, messages := range map[notificationRoute][]notificationMessage{notificationRouteDM: dm, notificationRouteChannel: channel} {
+		for i, message := range messages {
+			if got := utf8.RuneCountInString(message.Content); got > discordContentLimit {
+				t.Fatalf("route %s fragment %d has %d runes, limit %d", route, i, got, discordContentLimit)
+			}
+			wantComponents := 0
+			if i == len(messages)-1 {
+				wantComponents = 1
+			}
+			if len(message.Components) != wantComponents {
+				t.Fatalf("route %s fragment %d components = %d, want %d", route, i, len(message.Components), wantComponents)
+			}
+		}
+		decoded, err := decodeNotificationMessages(messages, event.Job.Account)
+		if err != nil {
+			t.Fatalf("decode route %s: %v", route, err)
+		}
+		if decoded != notificationText(event) {
+			t.Fatalf("route %s did not reconstruct canonical payload", route)
+		}
+		if got := parseNotificationVacancies(t, decoded); !reflect.DeepEqual(got, event.Outcome.Vacancies) {
+			t.Fatalf("route %s vacancies mismatch\ngot:  %#v\nwant: %#v", route, got, event.Outcome.Vacancies)
+		}
+	}
+
+	mention := "<@" + event.Job.Account + ">\n"
+	if !strings.HasPrefix(channel[0].Content, mention) {
+		t.Fatalf("first channel fragment lacks owner mention prefix: %q", channel[0].Content)
+	}
+	for i, message := range channel[1:] {
+		if strings.Contains(message.Content, mention) {
+			t.Fatalf("channel fragment %d repeats owner mention", i+1)
+		}
+	}
+	for i, message := range dm {
+		if strings.Contains(message.Content, "<@"+event.Job.Account+">") {
+			t.Fatalf("dm fragment %d contains owner mention", i)
+		}
+	}
+	longField := escapeDiscordText(event.Outcome.Vacancies[0].Materia)
+	for i, message := range dm {
+		if strings.Contains(message.Content, longField) {
+			t.Fatalf("fixture did not split the first long field; it is whole in fragment %d", i)
+		}
+	}
+}
+
+func decodeNotificationMessages(messages []notificationMessage, owner string) (string, error) {
+	var decoded strings.Builder
+	for i, message := range messages {
+		content := message.Content
+		if i == 0 {
+			content = strings.TrimPrefix(content, "<@"+owner+">\n")
+		}
+		marker := fmt.Sprintf("⟦parte %d/%d⟧\n", i+1, len(messages))
+		if !strings.HasPrefix(content, marker) {
+			return "", fmt.Errorf("fragment %d marker mismatch", i)
+		}
+		decoded.WriteString(strings.TrimPrefix(content, marker))
+	}
+	return decoded.String(), nil
+}
+
+func parseNotificationVacancies(t *testing.T, payload string) []scheduler.Vacancy {
+	t.Helper()
+	const firstField = "**Materia:** "
+	start := strings.Index(payload, firstField)
+	if start < 0 {
+		t.Fatal("canonical payload has no vacancy blocks")
+	}
+	blocks := strings.Split(payload[start:], "\n\n")
+	vacancies := make([]scheduler.Vacancy, 0, len(blocks))
+	for _, block := range blocks {
+		lines := strings.Split(block, "\n")
+		if len(lines) != 6 {
+			t.Fatalf("vacancy block has %d lines: %q", len(lines), block)
+		}
+		cupos, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(lines[5], "**"), " cupos**"))
+		if err != nil {
+			t.Fatalf("parse cupos: %v", err)
+		}
+		vacancies = append(vacancies, scheduler.Vacancy{
+			Materia: strings.TrimPrefix(lines[0], "**Materia:** "),
+			Turno: strings.TrimPrefix(lines[1], "**Turno:** "),
+			Sede: strings.TrimPrefix(lines[2], "**Sede:** "),
+			Horario: strings.TrimPrefix(lines[3], "**Horario:** "),
+			Dias: strings.Split(strings.TrimPrefix(lines[4], "**Dias:** "), ", "),
+			Cupos: cupos,
+		})
+	}
+	return vacancies
 }
 
 func TestOutboundNotifierVacancyToChannelIncludesActionRow(t *testing.T) {
