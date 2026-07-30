@@ -16,6 +16,19 @@ type Snapshot struct {
 	BotGuilds   []Guild   `json:"botGuilds"`
 	Health      Health    `json:"health"`
 	Accounts    []Account `json:"accounts"`
+	Admins      []Admin   `json:"admins"`
+}
+
+// Admin projects one row of the admins table (internal/store's
+// authorization source, see internal/discordhttp.isAdmin) with identities
+// resolved the same way Account.DisplayName is: via the shared
+// displayNames map, falling back to the raw Discord ID when unresolved.
+type Admin struct {
+	DiscordUserID      string `json:"discordUserId"`
+	DisplayName        string `json:"displayName"`
+	AddedBy            string `json:"addedBy"`
+	AddedByDisplayName string `json:"addedByDisplayName"`
+	CreatedAt          int64  `json:"createdAt"`
 }
 type Guild struct {
 	ID      string `json:"id"`
@@ -126,9 +139,32 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 	if s.AvatarURLProvider != nil {
 		avatarURLs = s.AvatarURLProvider()
 	}
-	out := Snapshot{GeneratedAt: now.UnixMilli(), BotGuilds: guilds, Accounts: []Account{}, Health: Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}, Jobs: JobsHealth{}}}
+	out := Snapshot{GeneratedAt: now.UnixMilli(), BotGuilds: guilds, Accounts: []Account{}, Admins: []Admin{}, Health: Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}, Jobs: JobsHealth{}}}
 	if s.DB == nil {
 		return out, nil
+	}
+	adminRows, err := s.DB.Query(`SELECT discord_user_id, added_by, created_at FROM admins ORDER BY created_at`)
+	if err != nil {
+		return out, fmt.Errorf("dashboard admins: %w", err)
+	}
+	for adminRows.Next() {
+		var a Admin
+		if err = adminRows.Scan(&a.DiscordUserID, &a.AddedBy, &a.CreatedAt); err != nil {
+			adminRows.Close()
+			return out, err
+		}
+		out.Admins = append(out.Admins, a)
+	}
+	if err = adminRows.Err(); err != nil {
+		adminRows.Close()
+		return out, err
+	}
+	if err = adminRows.Close(); err != nil {
+		return out, err
+	}
+	for i := range out.Admins {
+		out.Admins[i].DisplayName = displayNameOrFallback(displayNames, out.Admins[i].DiscordUserID)
+		out.Admins[i].AddedByDisplayName = displayNameOrFallback(displayNames, out.Admins[i].AddedBy)
 	}
 	pauses := map[string]rawPause{}
 	rows, err := s.DB.Query(`SELECT discord_user_id, pause_reason, pause_until FROM users WHERE pause_reason IS NOT NULL ORDER BY discord_user_id`)
@@ -269,6 +305,16 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 		return out.BotGuilds[i].Name < out.BotGuilds[j].Name
 	})
 	return out, nil
+}
+
+// displayNameOrFallback resolves id against the shared displayNames map,
+// falling back to the raw Discord ID when unresolved -- the same fallback
+// Account.DisplayName already uses in the loop below.
+func displayNameOrFallback(displayNames map[string]string, id string) string {
+	if name := displayNames[id]; name != "" {
+		return name
+	}
+	return id
 }
 
 type pauseCopy struct{ Code, Account, Breakdown string }

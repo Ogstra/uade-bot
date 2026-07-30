@@ -69,7 +69,7 @@ func TestSnapshotHasStableEmptyArraysAndUnknownSafeProjection(t *testing.T) {
 	}
 	encoded, _ := json.Marshal(snapshot)
 	text := string(encoded)
-	for _, want := range []string{`"botGuilds":[]`, `"accounts":[]`, `"code":"unknown"`, `"lastSuccessfulPollAt":null`} {
+	for _, want := range []string{`"botGuilds":[]`, `"accounts":[]`, `"admins":[]`, `"code":"unknown"`, `"lastSuccessfulPollAt":null`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %s in %s", want, text)
 		}
@@ -137,6 +137,46 @@ func TestSnapshotProvidersAreReadOnEveryBuildAndUseRawIDFallback(t *testing.T) {
 	}
 	if second.Accounts[0].AvatarURL != "https://cdn.discordapp.com/avatars/123/xyz.png" {
 		t.Fatalf("avatar provider was frozen: %+v", second.Accounts[0])
+	}
+}
+
+// TestSnapshotProjectsAdminsWithResolvedIdentitiesAndRawFallback seeds two
+// admins rows -- one whose id/added_by resolve via DisplayNames, one that
+// does not -- and confirms the snapshot exposes discordUserId/displayName/
+// addedBy/addedByDisplayName/createdAt for each, falling back to the raw ID
+// when unresolved, without leaking any credentials/ciphertext field.
+func TestSnapshotProjectsAdminsWithResolvedIdentitiesAndRawFallback(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/dashboard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`INSERT INTO users(discord_user_id,pause_reason,backoff_attempt,created_at,updated_at) VALUES('resolved-admin',NULL,0,1,1);
+		INSERT INTO credentials(discord_user_id,ciphertext,iv,auth_tag,updated_at) VALUES('resolved-admin','SECRET_CIPHER','SECRET_IV','SECRET_TAG',1);
+		INSERT INTO admins(discord_user_id,added_by,created_at) VALUES('resolved-admin','boss',100),('raw-admin','unresolved-granter',200)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (SnapshotSource{DB: db, Now: func() time.Time { return time.UnixMilli(500) }, DisplayNames: map[string]string{"resolved-admin": "Resolved Name", "boss": "Boss Name"}}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Admins) != 2 {
+		t.Fatalf("admins=%+v", snapshot.Admins)
+	}
+	first, second := snapshot.Admins[0], snapshot.Admins[1]
+	if first.DiscordUserID != "resolved-admin" || first.DisplayName != "Resolved Name" || first.AddedBy != "boss" || first.AddedByDisplayName != "Boss Name" || first.CreatedAt != 100 {
+		t.Fatalf("first admin=%+v", first)
+	}
+	if second.DiscordUserID != "raw-admin" || second.DisplayName != "raw-admin" || second.AddedBy != "unresolved-granter" || second.AddedByDisplayName != "unresolved-granter" || second.CreatedAt != 200 {
+		t.Fatalf("second admin (raw fallback)=%+v", second)
+	}
+	encoded, _ := json.Marshal(snapshot)
+	serialized := string(encoded)
+	for _, secret := range []string{"SECRET_", "ciphertext", "auth_tag"} {
+		if strings.Contains(serialized, secret) {
+			t.Errorf("admins projection leaked %q: %s", secret, serialized)
+		}
 	}
 }
 
