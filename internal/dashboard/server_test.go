@@ -352,6 +352,27 @@ func TestDashboardSSRHidesZeroCountDetailForNonFoundOutcomes(t *testing.T) {
 	}
 }
 
+func TestDashboardCSSStacksHealthCardAndAccountSummaryChildren(t *testing.T) {
+	snapshot := Snapshot{
+		BotGuilds: []Guild{},
+		Accounts:  []Account{},
+		Health:    Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}, Jobs: JobsHealth{}},
+	}
+	var rendered bytes.Buffer
+	if err := dashboardTemplate.Execute(&rendered, dashboardView{Snapshot: snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	html := rendered.String()
+	for _, want := range []string{
+		".health-card{display:flex;flex-direction:column;gap:4px}",
+		".account>summary{display:flex;align-items:center;flex-wrap:wrap;gap:8px}",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("rendered style block missing %q: %s", want, html)
+		}
+	}
+}
+
 func TestDashboardRefreshFormatsAndPatchesEveryTimestampInPlace(t *testing.T) {
 	var rendered bytes.Buffer
 	if err := dashboardTemplate.Execute(&rendered, dashboardView{Snapshot: Snapshot{BotGuilds: []Guild{}, Accounts: []Account{}, Health: Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}}}}); err != nil {
