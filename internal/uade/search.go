@@ -14,6 +14,39 @@ const (
 	OutcomeStaleURL    OutcomeCode = "stale_start_url"
 )
 
+// ResolveMateria loads only the bounded catalog flow and returns the cleaned
+// academic name without submitting a vacancy search.
+func (c *Client) ResolveMateria(ctx context.Context, startURL, username, password, code string) (string, error) {
+	initial, err := c.Fetch(ctx, startURL, username, password)
+	if err != nil {
+		return "", err
+	}
+	catalog := initial
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(initial))
+	if err != nil {
+		return "", ErrTransient
+	}
+	if doc.Find("input[type=checkbox][id*=chkSeleccionar]").Length() == 0 {
+		catalogForm, buildErr := BuildMateriaCatalogForm(initial)
+		if buildErr != nil {
+			return "", ErrTransient
+		}
+		state, stateErr := ExtractFormState(initial)
+		if stateErr != nil {
+			return "", ErrTransient
+		}
+		catalog, err = c.PostbackWithCredentials(ctx, catalogForm.Action, state, firstValues(catalogForm.Fields), username, password)
+		if err != nil {
+			return "", err
+		}
+	}
+	name, err := ResolveMateriaName(catalog, strings.TrimSpace(code))
+	if err != nil {
+		return "", ErrTransient
+	}
+	return name, nil
+}
+
 // Search executes the complete browserless WebForms GET/catalog/search flow.
 // Every ambiguous response fails closed as search_failed.
 func (c *Client) Search(ctx context.Context, startURL, username, password string, filters SearchFilters, excludedSedes []string) Outcome {

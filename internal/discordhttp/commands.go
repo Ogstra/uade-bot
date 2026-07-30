@@ -13,6 +13,7 @@ import (
 
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
 	"github.com/ogs/uade-bot/internal/sso"
+	"github.com/ogs/uade-bot/internal/uade"
 )
 
 const ephemeral = 1 << 6
@@ -79,6 +80,7 @@ type CommandDispatcher struct {
 	OnAccountReady func(string)
 	OnJobsChanged  func()
 	SendChannel    func(channelID, content string) error
+	ResolveMateria func(context.Context, string, string) (string, error)
 }
 
 // Dispatch is a thin JSON-unmarshal wrapper around DispatchInteraction, kept
@@ -239,7 +241,7 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 	}
 	jobID, jobErr := d.materializePendingSearch(ctx, userID)
 	if jobErr != nil {
-		return InteractionResponse{}, jobErr
+		return message("Credenciales guardadas, pero no pude validar la materia pendiente en UADE. No creé la búsqueda; volvé a intentar."), nil
 	}
 	if jobID != "" {
 		if d.OnJobCreated != nil {
@@ -280,12 +282,22 @@ func (d CommandDispatcher) materializePendingSearch(ctx context.Context, userID 
 	if err != nil {
 		return "", err
 	}
+	filters := parseJobFilters(filtersJSON)
+	materiaName, err := d.resolveMateriaName(ctx, userID, filters.MateriaCodigo)
+	if err != nil {
+		return "", err
+	}
 	tx, err := d.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
 	now := time.Now().UnixMilli()
+	if materiaName != "" {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO materias(codigo,nombre,updated_at) VALUES(?,?,?) ON CONFLICT(codigo) DO UPDATE SET nombre=excluded.nombre,updated_at=excluded.updated_at`, filters.MateriaCodigo, materiaName, now); err != nil {
+			return "", err
+		}
+	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,channel_id,guild_id,label,status,created_at) VALUES(?,?,?,?,?,'active',?)`, userID, filtersJSON, channelID, guildID, label, now)
 	if err != nil {
 		return "", err
@@ -412,18 +424,68 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 	if active >= 10 {
 		return message("Ya tenés 10 búsquedas activas o pausadas."), nil
 	}
+	materiaName, resolveErr := d.resolveMateriaName(ctx, userID, code)
+	if resolveErr != nil {
+		return message("No pude validar esa materia en UADE. No creé la búsqueda; volvé a intentar."), nil
+	}
 	now := time.Now().UnixMilli()
-	result, err := d.DB.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,channel_id,guild_id,label,status,created_at) VALUES(?,?,?,?,?,'active',?)`, userID, string(filters), nullable(channelID), nullable(guildID), label, now)
+	tx, err := d.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return InteractionResponse{}, err
 	}
+	defer tx.Rollback()
+	if materiaName != "" {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO materias(codigo,nombre,updated_at) VALUES(?,?,?) ON CONFLICT(codigo) DO UPDATE SET nombre=excluded.nombre,updated_at=excluded.updated_at`, code, materiaName, now); err != nil {
+			return InteractionResponse{}, err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO jobs(discord_user_id,filtros_json,channel_id,guild_id,label,status,created_at) VALUES(?,?,?,?,?,'active',?)`, userID, string(filters), nullable(channelID), nullable(guildID), label, now)
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return InteractionResponse{}, err
+	}
+	id, idErr := result.LastInsertId()
 	if d.OnJobCreated != nil {
-		if id, idErr := result.LastInsertId(); idErr == nil {
+		if idErr == nil {
 			d.OnJobCreated(strconv.FormatInt(id, 10))
 		}
 	}
-	summary := filterSummaryBlock(label, code, lookupMateriaNombre(ctx, d.DB, code), turno, ofrecimiento, dias, sedes)
-	return message(summary + "\nEl scheduler hará el primer intento sin bloquear esta interacción."), nil
+	summary := filterSummaryBlock(label, code, materiaName, turno, ofrecimiento, dias, sedes)
+	return message(summary + "\n**Monitoreo:** activo"), nil
+}
+
+func (d CommandDispatcher) resolveMateriaName(ctx context.Context, userID, code string) (string, error) {
+	var cached string
+	err := d.DB.QueryRowContext(ctx, `SELECT nombre FROM materias WHERE codigo=?`, code).Scan(&cached)
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	if err == nil {
+		clean := uade.NormalizeMateriaName(cached)
+		if clean != "" {
+			if clean != strings.TrimSpace(cached) {
+				_, updateErr := d.DB.ExecContext(ctx, `UPDATE materias SET nombre=?,updated_at=? WHERE codigo=?`, clean, time.Now().UnixMilli(), code)
+				if updateErr != nil {
+					return "", updateErr
+				}
+			}
+			return clean, nil
+		}
+	}
+	if d.ResolveMateria == nil {
+		return "", nil
+	}
+	name, err := d.ResolveMateria(ctx, userID, code)
+	if err != nil {
+		return "", err
+	}
+	name = uade.NormalizeMateriaName(name)
+	if name == "" {
+		return "", errors.New("materia resolver returned empty name")
+	}
+	return name, nil
 }
 
 func (d CommandDispatcher) estado(ctx context.Context, userID string, admin bool, filter string) (InteractionResponse, error) {

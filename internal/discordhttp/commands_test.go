@@ -235,6 +235,36 @@ func TestBuscarResolvesMateriaPersistsBeforeCallbackAndConfirmsMonitoring(t *tes
 	}
 }
 
+func TestBuscarPendingResolvesMateriaAfterCredentialsBeforeCreatingJob(t *testing.T) {
+	d := testDispatcher(t)
+	d.ResolveMateria = func(_ context.Context, user, code string) (string, error) {
+		if user != "pending-owner" || code != "3.1.050" {
+			t.Fatalf("resolver args=%s/%s", user, code)
+		}
+		return "ELEMENTOS DE ÁLGEBRA Y GEOMETRÍA", nil
+	}
+	d.OnJobCreated = func(string) {
+		var name string
+		if err := d.DB.QueryRow(`SELECT nombre FROM materias WHERE codigo='3.1.050'`).Scan(&name); err != nil || name != "ELEMENTOS DE ÁLGEBRA Y GEOMETRÍA" {
+			t.Fatalf("pending callback before materia commit: %q %v", name, err)
+		}
+	}
+	options := []map[string]any{{"name": "cod_materia", "value": "3.1.050"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
+	if out := dispatchJSON(t, d, command("pending-owner", "buscar", "0", options)); out.Type != 9 {
+		t.Fatalf("buscar type=%d", out.Type)
+	}
+	content := responseContent(dispatchJSON(t, d, credentialsSubmit("pending-owner", "u", "p")))
+	for _, want := range []string{"3.1.050", "ELEMENTOS DE ÁLGEBRA Y GEOMETRÍA"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("missing %q: %s", want, content)
+		}
+	}
+	var jobs int
+	if err := d.DB.QueryRow(`SELECT COUNT(*) FROM jobs WHERE discord_user_id='pending-owner'`).Scan(&jobs); err != nil || jobs != 1 {
+		t.Fatalf("jobs=%d err=%v", jobs, err)
+	}
+}
+
 // Un usuario sin credenciales que corre /buscar recibe el modal directamente en
 // vez de un texto pidiendole que descubra y tipee /credenciales.
 func TestBuscarWithoutCredentialsOpensModalDirectly(t *testing.T) {

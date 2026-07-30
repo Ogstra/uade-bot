@@ -35,7 +35,8 @@ type Runtime struct {
 	interval     time.Duration
 	// relink is injectable so tests can substitute a fake without hitting a
 	// real UADE/Microsoft host; production wiring defaults it to sso.Relink.
-	relink func(ctx context.Context, client *http.Client, portalURL, user, password string) (sso.Result, error)
+	relink          func(ctx context.Context, client *http.Client, portalURL, user, password string) (sso.Result, error)
+	catalogResolver func(context.Context, credentialcrypto.Credentials, string) (string, error)
 }
 
 type filters struct {
@@ -325,11 +326,42 @@ func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken, sso
 		options = append(options, scheduler.WithNotifier(&scheduler.ThrottledNotifier{Next: outboundNotifier{discord: discordrest.New(discordToken), progress: store}, Delay: 250 * time.Millisecond}))
 	}
 	runtime := &Runtime{DB: db, MasterKey: masterKey, SSOPortalURL: ssoPortalURL, Scheduler: scheduler.New(concurrency, options...), ctx: ctx, cancel: cancel, interval: interval, relink: sso.Relink}
+	runtime.catalogResolver = runtime.resolveMateriaCatalog
 	if _, err := runtime.Scheduler.Reconcile(ctx, runtime.job); err != nil {
 		cancel()
 		return nil, err
 	}
 	return runtime, nil
+}
+
+// ResolveMateria decrypts the account credentials and performs the bounded
+// UADE catalog lookup used by /buscar before the job becomes scheduler-visible.
+func (r *Runtime) ResolveMateria(ctx context.Context, account, code string) (string, error) {
+	var encrypted credentialcrypto.Ciphertext
+	if err := r.DB.QueryRowContext(ctx, `SELECT ciphertext,iv,auth_tag FROM credentials WHERE discord_user_id=?`, account).Scan(&encrypted.Ciphertext, &encrypted.IV, &encrypted.AuthTag); err != nil {
+		return "", err
+	}
+	credentials, err := credentialcrypto.Decrypt(r.MasterKey, account, encrypted)
+	if err != nil {
+		return "", err
+	}
+	resolver := r.catalogResolver
+	if resolver == nil {
+		resolver = r.resolveMateriaCatalog
+	}
+	return resolver(ctx, credentials, code)
+}
+
+func (r *Runtime) resolveMateriaCatalog(ctx context.Context, credentials credentialcrypto.Credentials, code string) (string, error) {
+	start, err := parseStartURL(credentials.UADEStartURL)
+	if err != nil {
+		return "", err
+	}
+	client, err := uade.NewClient(start.Scheme + "://" + start.Host)
+	if err != nil {
+		return "", err
+	}
+	return client.ResolveMateria(ctx, credentials.UADEStartURL, credentials.UADEUsername, credentials.UADEPassword, code)
 }
 
 // recoverGoroutine converts a panic in the current goroutine into a log line

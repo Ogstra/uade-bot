@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ogs/uade-bot/internal/uade"
 )
 
 type SQLStore struct{ DB *sql.DB }
@@ -178,7 +180,7 @@ func (s SQLStore) SaveOutcome(ctx context.Context, jobID string, outcome Outcome
 		return err
 	}
 	codigo := strings.TrimSpace(outcome.MateriaCodigo)
-	nombre := strings.TrimSpace(outcome.MateriaNombre)
+	nombre := uade.NormalizeMateriaName(outcome.MateriaNombre)
 	if codigo != "" && nombre != "" {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO materias (codigo, nombre, updated_at)
 			VALUES (?, ?, ?)

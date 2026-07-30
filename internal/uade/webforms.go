@@ -144,7 +144,10 @@ func BuildSearchForm(html string, filters SearchFilters) (SearchForm, error) {
 		if !ok {
 			value = "on"
 		}
-		title := strings.TrimSpace(strings.TrimPrefix(rowText[strings.Index(rowText, filters.MateriaCodigo)+len(filters.MateriaCodigo):], ":"))
+		title, titleErr := materiaNameFromRow(s.Closest("tr"), filters.MateriaCodigo)
+		if titleErr != nil {
+			title = ""
+		}
 		candidate := &materiaMatch{name: name, value: value, title: title}
 		if materia == nil {
 			materia = candidate
@@ -210,6 +213,61 @@ func BuildSearchForm(html string, filters SearchFilters) (SearchForm, error) {
 	}
 	action, _ := form.Attr("action")
 	return SearchForm{Action: action, Fields: fields, MateriaNombre: materia.title}, nil
+}
+
+// NormalizeMateriaName removes the specific evaluation-instance suffix UADE
+// appends to academic labels without applying a generic trailing-digit rule.
+func NormalizeMateriaName(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	upper := strings.ToUpper(value)
+	marker := strings.Index(upper, "EXAMEN FINAL OBLIGATORIO")
+	if marker < 0 {
+		return strings.TrimSpace(value)
+	}
+	cut := marker
+	for cut > 0 && value[cut-1] >= '0' && value[cut-1] <= '9' {
+		cut--
+	}
+	return strings.TrimSpace(value[:cut])
+}
+
+func materiaNameFromRow(row *goquery.Selection, code string) (string, error) {
+	var academic *goquery.Selection
+	row.Find("td").EachWithBreak(func(_ int, cell *goquery.Selection) bool {
+		if strings.Join(strings.Fields(cell.Text()), " ") == code {
+			academic = cell.Next()
+			return false
+		}
+		return true
+	})
+	if academic == nil || academic.Length() == 0 {
+		return "", errors.New("webforms materia academic cell missing")
+	}
+	name := NormalizeMateriaName(academic.Text())
+	if name == "" {
+		return "", errors.New("webforms materia name invalid")
+	}
+	return name, nil
+}
+
+// ResolveMateriaName extracts one academic label from the catalog table and
+// ignores sibling instance/evaluation cells.
+func ResolveMateriaName(html, code string) (string, error) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return "", err
+	}
+	var names []string
+	doc.Find("input[type=checkbox][id*=chkSeleccionar]").Each(func(_ int, checkbox *goquery.Selection) {
+		name, nameErr := materiaNameFromRow(checkbox.Closest("tr"), code)
+		if nameErr == nil {
+			names = append(names, name)
+		}
+	})
+	if len(names) != 1 {
+		return "", errors.New("webforms materia missing or ambiguous")
+	}
+	return names[0], nil
 }
 
 func serializeSuccessfulControls(form, chosenSubmit *goquery.Selection) url.Values {
