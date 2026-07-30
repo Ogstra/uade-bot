@@ -278,3 +278,56 @@ func TestGuildIDStringHandlesNilAndPopulated(t *testing.T) {
 		t.Fatalf("guildIDString(&id) = %q, want %q", got, id.String())
 	}
 }
+
+type fakeGuildCache struct {
+	guilds []discord.Guild
+}
+
+func (f *fakeGuildCache) GuildsForEach(fn func(discord.Guild)) {
+	for _, guild := range f.guilds {
+		fn(guild)
+	}
+}
+
+func TestGatewayProjectionGuildAndIdentityPrecedence(t *testing.T) {
+	global := "Nombre global"
+	nick := "Apodo guild"
+	guilds := &fakeGuildCache{guilds: []discord.Guild{
+		{ID: snowflake.ID(2), Name: "Zulu"},
+		{ID: snowflake.ID(1), Name: "Alpha"},
+	}}
+	projection := NewProjection(guilds)
+	projection.Observe(snowflake.ID(2), &discord.ResolvedMember{Member: discord.Member{Nick: &nick}}, discord.User{
+		ID: snowflake.ID(10), Username: "usuario", GlobalName: &global,
+	})
+
+	gotGuilds := projection.Guilds()
+	if len(gotGuilds) != 2 || gotGuilds[0].Name != "Alpha" || gotGuilds[1].Name != "Zulu" {
+		t.Fatalf("Guilds() = %+v, want stable name/ID order", gotGuilds)
+	}
+	if got := projection.DisplayNames()[snowflake.ID(10).String()]; got != nick {
+		t.Fatalf("DisplayNames()[10] = %q, want nickname %q", got, nick)
+	}
+
+	projection.Observe(snowflake.ID(2), &discord.ResolvedMember{}, discord.User{
+		ID: snowflake.ID(11), Username: "usuario", GlobalName: &global,
+	})
+	if got := projection.DisplayNames()[snowflake.ID(11).String()]; got != global {
+		t.Fatalf("DisplayNames()[11] = %q, want global name %q", got, global)
+	}
+	projection.Observe(snowflake.ID(2), nil, discord.User{ID: snowflake.ID(12), Username: "usuario"})
+	if got := projection.DisplayNames()[snowflake.ID(12).String()]; got != "usuario" {
+		t.Fatalf("DisplayNames()[12] = %q, want username", got)
+	}
+
+	copyNames := projection.DisplayNames()
+	copyNames[snowflake.ID(10).String()] = "mutado"
+	if got := projection.DisplayNames()[snowflake.ID(10).String()]; got != nick {
+		t.Fatalf("DisplayNames returned mutable internal state: %q", got)
+	}
+
+	guilds.guilds = append(guilds.guilds, discord.Guild{ID: snowflake.ID(3), Name: "Beta"})
+	if got := projection.Guilds(); len(got) != 3 || got[1].Name != "Beta" {
+		t.Fatalf("late guild not visible: %+v", got)
+	}
+}

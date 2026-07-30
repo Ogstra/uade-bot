@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ogs/uade-bot/internal/discordgateway"
+)
 
 // TestResolveSSOPortalURLDefaultsWhenUnset covers the "UADE_SSO_PORTAL_URL
 // unset -> default host, starts normally" behavior from 03.3-15-PLAN.md.
@@ -42,5 +46,13 @@ func TestResolveSSOPortalURLRejectsMismatchedHost(t *testing.T) {
 func TestResolveSSOPortalURLRejectsUnparsableURL(t *testing.T) {
 	if _, err := resolveSSOPortalURL("https://%zz/"); err == nil {
 		t.Fatal("expected error for unparsable url")
+	}
+}
+
+func TestDashboardWiringUsesLiveGatewayProjection(t *testing.T) {
+	projection := discordgateway.NewProjection(nil)
+	source := dashboardSnapshotSource(nil, projection)
+	if source.GuildProvider == nil || source.DisplayNameProvider == nil {
+		t.Fatalf("dashboard snapshot source is not wired to live gateway providers: %+v", source)
 	}
 }

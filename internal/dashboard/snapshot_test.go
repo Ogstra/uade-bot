@@ -67,3 +67,43 @@ func TestSnapshotHasStableEmptyArraysAndUnknownSafeProjection(t *testing.T) {
 		t.Fatal("raw pause reason leaked")
 	}
 }
+
+func TestSnapshotProvidersAreReadOnEveryBuildAndUseRawIDFallback(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/dashboard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`INSERT INTO users(discord_user_id,pause_reason,backoff_attempt,created_at,updated_at) VALUES('123',NULL,0,1,1);
+		INSERT INTO jobs(id,discord_user_id,filtros_json,status,created_at) VALUES(1,'123','{"materiaCodigo":"1.1.010","turno":"Noche"}','active',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guilds := []Guild{{ID: "b", Name: "Zulu"}, {ID: "a", Name: "Alpha"}}
+	names := map[string]string{}
+	source := SnapshotSource{
+		DB: db,
+		GuildProvider: func() []Guild { return append([]Guild(nil), guilds...) },
+		DisplayNameProvider: func() map[string]string {
+			out := make(map[string]string, len(names))
+			for key, value := range names { out[key] = value }
+			return out
+		},
+	}
+	first, err := source.Build()
+	if err != nil { t.Fatal(err) }
+	if len(first.BotGuilds) != 2 || first.BotGuilds[0].Name != "Alpha" {
+		t.Fatalf("first guilds = %+v", first.BotGuilds)
+	}
+	if len(first.Accounts) != 1 || first.Accounts[0].DisplayName != "123" {
+		t.Fatalf("raw ID fallback missing: %+v", first.Accounts)
+	}
+
+	guilds = append(guilds, Guild{ID: "c", Name: "Beta"})
+	names["123"] = "Ana"
+	second, err := source.Build()
+	if err != nil { t.Fatal(err) }
+	if len(second.BotGuilds) != 3 || second.BotGuilds[1].Name != "Beta" || second.Accounts[0].DisplayName != "Ana" {
+		t.Fatalf("providers were frozen: guilds=%+v accounts=%+v", second.BotGuilds, second.Accounts)
+	}
+}
