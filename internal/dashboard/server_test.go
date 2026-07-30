@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -208,5 +209,67 @@ func TestHTMLContractSnapshotSharedWithNode(t *testing.T) {
 				t.Errorf("render leaked %q", forbidden)
 			}
 		}
+	}
+}
+
+func TestDashboardSSRUsesReadableBuenosAiresTimestampsAndFallbacks(t *testing.T) {
+	fixed := time.Date(2026, 7, 30, 15, 4, 0, 0, time.UTC).UnixMilli()
+	zero := int64(0)
+	snapshot := Snapshot{
+		GeneratedAt: fixed,
+		Health:      Health{LastSuccessfulPollAt: &fixed, PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}, Jobs: JobsHealth{}},
+		BotGuilds:   []Guild{},
+		Accounts: []Account{{DiscordUserID: "123", DisplayName: "Ana", PauseUntil: &fixed, LastPolledAt: &fixed, Jobs: []Job{{
+			JobID: 7, LastPolledAt: &fixed, Filters: Filters{}, History: []HistoryItem{{ID: 9, RecordedAt: fixed}},
+		}}}},
+	}
+	var rendered bytes.Buffer
+	if err := dashboardTemplate.Execute(&rendered, dashboardView{Snapshot: snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	html := rendered.String()
+	if got := strings.Count(html, "30/07/2026, 12:04"); got < 6 {
+		t.Fatalf("formatted Buenos Aires timestamp count=%d, want at least 6: %s", got, html)
+	}
+	for _, marker := range []string{`data-field="generated-at"`, `data-field="health-last-success"`, `data-field="account-pause"`, `data-field="account-last-poll"`, `data-field="job-last-poll"`, `data-field="history-recorded-at"`} {
+		if !strings.Contains(html, marker) {
+			t.Errorf("missing %s", marker)
+		}
+	}
+
+	snapshot.GeneratedAt = 0
+	snapshot.Health.LastSuccessfulPollAt = nil
+	snapshot.Accounts[0].PauseUntil = &zero
+	snapshot.Accounts[0].LastPolledAt = nil
+	snapshot.Accounts[0].Jobs[0].LastPolledAt = nil
+	snapshot.Accounts[0].Jobs[0].History[0].RecordedAt = -1
+	rendered.Reset()
+	if err := dashboardTemplate.Execute(&rendered, dashboardView{Snapshot: snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	html = rendered.String()
+	if strings.Contains(html, "01/01/1970") || strings.Contains(html, ">0<") || strings.Contains(html, ">-1<") {
+		t.Fatalf("invalid epoch rendered visibly: %s", html)
+	}
+	for _, fallback := range []string{"—", "Sin polls exitosos", "Sin sondeos todavía"} {
+		if !strings.Contains(html, fallback) {
+			t.Errorf("missing fallback %q", fallback)
+		}
+	}
+}
+
+func TestDashboardRefreshFormatsAndPatchesEveryTimestampInPlace(t *testing.T) {
+	var rendered bytes.Buffer
+	if err := dashboardTemplate.Execute(&rendered, dashboardView{Snapshot: Snapshot{BotGuilds: []Guild{}, Accounts: []Account{}, Health: Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	script := rendered.String()
+	for _, want := range []string{"es-AR", "America/Argentina/Buenos_Aires", "formatTimestamp", "generated-at", "health-last-success", "account-pause", "account-last-poll", "job-last-poll", "history-recorded-at", "textContent"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("refresh script missing %q", want)
+		}
+	}
+	if strings.Contains(script, "dashboard-data').replace") || strings.Contains(script, `dashboard-data").replace`) {
+		t.Fatal("refresh replaces dashboard root")
 	}
 }
