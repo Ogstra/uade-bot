@@ -345,7 +345,7 @@ func (s *Server) recordFailure(key string) {
 func (s *Server) clearFailures(key string) { s.mu.Lock(); delete(s.attempts, key); s.mu.Unlock() }
 
 func (s *Server) securityHeaders(w http.ResponseWriter, nonce string) {
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'nonce-"+nonce+"'; style-src 'self' 'nonce-"+nonce+"'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https://cdn.discordapp.com; script-src 'self' 'nonce-"+nonce+"'; style-src 'self' 'nonce-"+nonce+"'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
 	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")

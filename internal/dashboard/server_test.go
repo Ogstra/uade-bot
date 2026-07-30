@@ -205,6 +205,19 @@ func TestUnauthorizedTamperOriginAndSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersIncludeDiscordCDNImgSrc(t *testing.T) {
+	s := &Server{SessionSecret: []byte("0123456789abcdef0123456789abcdef")}
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	csp := w.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "img-src 'self' https://cdn.discordapp.com") {
+		t.Fatalf("CSP missing img-src for cdn.discordapp.com: %s", csp)
+	}
+	if !strings.Contains(csp, "object-src 'none'") {
+		t.Fatalf("CSP missing object-src 'none': %s", csp)
+	}
+}
+
 func TestRootPathRedirectsToDashboard(t *testing.T) {
 	s := &Server{SessionSecret: []byte("0123456789abcdef0123456789abcdef")}
 	w := httptest.NewRecorder()
