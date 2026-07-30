@@ -42,8 +42,10 @@ type Vacancy struct {
 }
 
 type Outcome struct {
-	Code      string
-	Vacancies []Vacancy
+	Code          string
+	Vacancies     []Vacancy
+	MateriaCodigo string
+	MateriaNombre string
 }
 
 type Job struct {

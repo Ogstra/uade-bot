@@ -513,7 +513,11 @@ func (r *Runtime) poll(ctx context.Context, jobID, account string) (scheduler.Ou
 		return scheduler.Outcome{}, err
 	}
 	outcome := client.Search(ctx, credentials.UADEStartURL, credentials.UADEUsername, credentials.UADEPassword, uade.SearchFilters{MateriaCodigo: selected.MateriaCodigo, Ofrecimiento: selected.Ofrecimiento, Turno: selected.Turno, Dias: selected.Dias}, selected.SedesExcluidas)
-	converted := scheduler.Outcome{Code: string(outcome.Code)}
+	converted := scheduler.Outcome{
+		Code:          string(outcome.Code),
+		MateriaCodigo: selected.MateriaCodigo,
+		MateriaNombre: outcome.MateriaNombre,
+	}
 	for _, vacancy := range outcome.Vacancies {
 		converted.Vacancies = append(converted.Vacancies, scheduler.Vacancy{Materia: vacancy.Materia, Turno: vacancy.Turno, Sede: vacancy.Sede, Horario: vacancy.Horario, Dias: strings.Split(vacancy.Dias, ","), Cupos: vacancy.Cupos})
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -175,6 +176,15 @@ func (s SQLStore) SaveOutcome(ctx context.Context, jobID string, outcome Outcome
 	defer tx.Rollback()
 	if _, err = tx.ExecContext(ctx, `UPDATE jobs SET last_polled_at = ?, last_outcome = ? WHERE id = ?`, recordedAt.UnixMilli(), outcome.Code, jobID); err != nil {
 		return err
+	}
+	codigo := strings.TrimSpace(outcome.MateriaCodigo)
+	nombre := strings.TrimSpace(outcome.MateriaNombre)
+	if codigo != "" && nombre != "" {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO materias (codigo, nombre, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(codigo) DO UPDATE SET nombre = excluded.nombre, updated_at = excluded.updated_at`, codigo, nombre, recordedAt.UnixMilli()); err != nil {
+			return err
+		}
 	}
 	total := 0
 	for _, vacancy := range outcome.Vacancies {
