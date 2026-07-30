@@ -34,8 +34,10 @@ func genericMessageCreate(content string, components []discord.ContainerComponen
 
 func dmMessageCreate(content, nonce string, components []discord.ContainerComponent) discord.MessageCreate {
 	message := genericMessageCreate(content, components)
-	message.Nonce = nonce
-	message.EnforceNonce = true
+	if nonce != "" {
+		message.Nonce = nonce
+		message.EnforceNonce = true
+	}
 	return message
 }
 

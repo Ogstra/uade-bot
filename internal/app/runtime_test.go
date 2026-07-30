@@ -22,6 +22,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
+	"github.com/ogs/uade-bot/internal/discordrest"
 	"github.com/ogs/uade-bot/internal/scheduler"
 	"github.com/ogs/uade-bot/internal/sso"
 	"github.com/ogs/uade-bot/internal/store"
@@ -326,19 +327,29 @@ func TestOutboundNotifierRetryPreservesCompletedFragments(t *testing.T) {
 }
 
 func TestOutboundNotifierNonceIdentityIsStableAndScoped(t *testing.T) {
-	base := notificationFragmentNonce(notificationRouteDM, "target", 0, 2, "content")
+	event := vacancyNotificationEvent("")
+	event.DeliveryKey = strings.Repeat("d", 64)
+	components := []discord.ContainerComponent{discordrest.VacancyActionRow(event.Job.ID)}
+	base := notificationFragmentNonce(event, notificationRouteDM, "target", 0, 2, "content", components)
 	if len(base) != 25 || !strings.HasPrefix(base, "uade-") {
 		t.Fatalf("nonce = %q, want uade- plus 20 hex", base)
 	}
-	if base != notificationFragmentNonce(notificationRouteDM, "target", 0, 2, "content") {
+	if base != notificationFragmentNonce(event, notificationRouteDM, "target", 0, 2, "content", components) {
 		t.Fatal("identical fragment produced a different nonce")
 	}
+	otherDelivery := event
+	otherDelivery.DeliveryKey = strings.Repeat("e", 64)
+	otherJob := event
+	otherJob.Job.ID = "84"
 	variants := []string{
-		notificationFragmentNonce(notificationRouteChannel, "target", 0, 2, "content"),
-		notificationFragmentNonce(notificationRouteDM, "other", 0, 2, "content"),
-		notificationFragmentNonce(notificationRouteDM, "target", 1, 2, "content"),
-		notificationFragmentNonce(notificationRouteDM, "target", 0, 3, "content"),
-		notificationFragmentNonce(notificationRouteDM, "target", 0, 2, "changed"),
+		notificationFragmentNonce(event, notificationRouteChannel, "target", 0, 2, "content", components),
+		notificationFragmentNonce(event, notificationRouteDM, "other", 0, 2, "content", components),
+		notificationFragmentNonce(event, notificationRouteDM, "target", 1, 2, "content", components),
+		notificationFragmentNonce(event, notificationRouteDM, "target", 0, 3, "content", components),
+		notificationFragmentNonce(event, notificationRouteDM, "target", 0, 2, "changed", components),
+		notificationFragmentNonce(otherDelivery, notificationRouteDM, "target", 0, 2, "content", components),
+		notificationFragmentNonce(otherJob, notificationRouteDM, "target", 0, 2, "content", components),
+		notificationFragmentNonce(event, notificationRouteDM, "target", 0, 2, "content", []discord.ContainerComponent{discordrest.VacancyActionRow("84")}),
 	}
 	for i, variant := range variants {
 		if variant == base {

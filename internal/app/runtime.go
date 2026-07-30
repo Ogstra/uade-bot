@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -143,8 +144,7 @@ func (n outboundNotifier) Notify(ctx context.Context, event scheduler.Event) err
 		return errors.Join(routeErrors...)
 	}
 	content := notificationText(event)
-	nonce := notificationFragmentNonce(notificationRouteDM, event.Job.Account, 0, 1, content)
-	return n.discord.SendDM(event.Job.Account, content, nonce)
+	return n.discord.SendDM(event.Job.Account, content, "")
 }
 
 func notificationMessages(event scheduler.Event, route notificationRoute) []notificationMessage {
@@ -159,16 +159,18 @@ func notificationMessages(event scheduler.Event, route notificationRoute) []noti
 		if route == notificationRouteChannel {
 			target = event.Job.Channel
 		}
+		var components []discord.ContainerComponent
+		if i == len(contents)-1 {
+			components = []discord.ContainerComponent{discordrest.VacancyActionRow(event.Job.ID)}
+		}
 		fingerprint := sha256.Sum256([]byte(content))
 		messages[i] = notificationMessage{
 			Content:             content,
+			Components:          components,
 			FragmentIndex:       i,
 			FragmentCount:       len(contents),
 			FragmentFingerprint: hex.EncodeToString(fingerprint[:]),
-			Nonce:               notificationFragmentNonce(route, target, i, len(contents), content),
-		}
-		if i == len(contents)-1 {
-			messages[i].Components = []discord.ContainerComponent{discordrest.VacancyActionRow(event.Job.ID)}
+			Nonce:               notificationFragmentNonce(event, route, target, i, len(contents), content, components),
 		}
 	}
 	return messages
@@ -178,16 +180,25 @@ func notificationFragmentKey(route notificationRoute, index int) string {
 	return fmt.Sprintf("%s/%d", route, index)
 }
 
-func notificationFragmentNonce(route notificationRoute, target string, index, count int, content string) string {
+func notificationFragmentNonce(event scheduler.Event, route notificationRoute, target string, index, count int, content string, components []discord.ContainerComponent) string {
 	hash := sha256.New()
+	writeNotificationIdentityString(hash, "uade-notification-fragment-nonce-v2")
+	writeNotificationIdentityString(hash, event.Kind)
+	writeNotificationIdentityString(hash, event.DeliveryKey)
+	writeNotificationIdentityString(hash, event.Job.ID)
 	writeNotificationIdentityString(hash, string(route))
 	writeNotificationIdentityString(hash, target)
-	var number [8]byte
-	binary.BigEndian.PutUint64(number[:], uint64(index))
-	hash.Write(number[:])
-	binary.BigEndian.PutUint64(number[:], uint64(count))
-	hash.Write(number[:])
+	writeNotificationIdentityString(hash, strconv.Itoa(index))
+	writeNotificationIdentityString(hash, strconv.Itoa(count))
 	writeNotificationIdentityString(hash, content)
+	writeNotificationIdentityString(hash, strconv.Itoa(len(components)))
+	for _, component := range components {
+		encoded, err := json.Marshal(component)
+		if err != nil {
+			panic("notification component is not serializable")
+		}
+		writeNotificationIdentityBytes(hash, encoded)
+	}
 	return "uade-" + hex.EncodeToString(hash.Sum(nil))[:20]
 }
 
@@ -196,10 +207,14 @@ type notificationIdentityWriter interface {
 }
 
 func writeNotificationIdentityString(writer notificationIdentityWriter, value string) {
+	writeNotificationIdentityBytes(writer, []byte(value))
+}
+
+func writeNotificationIdentityBytes(writer notificationIdentityWriter, value []byte) {
 	var length [8]byte
 	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
 	_, _ = writer.Write(length[:])
-	_, _ = writer.Write([]byte(value))
+	_, _ = writer.Write(value)
 }
 
 func splitNotificationContent(payload, firstPrefix string) []string {
