@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -56,6 +56,17 @@ func GlobalCommands() []globalCommand {
 }
 
 func RegisterGlobal(ctx context.Context, client *http.Client, apiBase, token, applicationID string) error {
+	return convergeCommands(ctx, client, apiBase, token, applicationID, nil, false)
+}
+
+// ConvergeCommands atomically replaces the application's global command set,
+// then clears only this same application's guild-scoped sets. Guild IDs are
+// normalized so reconnect/retry calls are deterministic and idempotent.
+func ConvergeCommands(ctx context.Context, client *http.Client, apiBase, token, applicationID string, guildIDs []string) error {
+	return convergeCommands(ctx, client, apiBase, token, applicationID, guildIDs, true)
+}
+
+func convergeCommands(ctx context.Context, client *http.Client, apiBase, token, applicationID string, guildIDs []string, cleanup bool) error {
 	if applicationID == "" || token == "" {
 		return fmt.Errorf("discord application id and bot token are required")
 	}
@@ -70,6 +81,33 @@ func RegisterGlobal(ctx context.Context, client *http.Client, apiBase, token, ap
 		return err
 	}
 	endpoint := apiBase + "/applications/" + applicationID + "/commands"
+	if err := putCommandSet(ctx, client, endpoint, token, body, "global"); err != nil {
+		return err
+	}
+	if !cleanup {
+		return nil
+	}
+	unique := make(map[string]struct{}, len(guildIDs))
+	for _, id := range guildIDs {
+		if id != "" {
+			unique[id] = struct{}{}
+		}
+	}
+	ordered := make([]string, 0, len(unique))
+	for id := range unique {
+		ordered = append(ordered, id)
+	}
+	sort.Strings(ordered)
+	for _, guildID := range ordered {
+		guildEndpoint := apiBase + "/applications/" + applicationID + "/guilds/" + guildID + "/commands"
+		if err := putCommandSet(ctx, client, guildEndpoint, token, []byte("[]"), "guild:"+guildID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func putCommandSet(ctx context.Context, client *http.Client, endpoint, token string, body []byte, stage string) error {
 	for attempt := 0; attempt < 3; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
 		if err != nil {
@@ -81,13 +119,12 @@ func RegisterGlobal(ctx context.Context, client *http.Client, apiBase, token, ap
 		if err != nil {
 			return err
 		}
-		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return nil
 		}
 		if resp.StatusCode != http.StatusTooManyRequests {
-			return fmt.Errorf("discord global command registration: status %d: %s", resp.StatusCode, string(responseBody))
+			return fmt.Errorf("discord command convergence stage %s: status %d", stage, resp.StatusCode)
 		}
 		delay := time.Second
 		if value := resp.Header.Get("Retry-After"); value != "" {
@@ -103,5 +140,5 @@ func RegisterGlobal(ctx context.Context, client *http.Client, apiBase, token, ap
 		case <-timer.C:
 		}
 	}
-	return fmt.Errorf("discord global command registration remained rate limited")
+	return fmt.Errorf("discord command convergence stage %s remained rate limited", stage)
 }

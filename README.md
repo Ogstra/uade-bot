@@ -27,6 +27,8 @@ El dashboard y su endpoint JSON usan sesiones autenticadas, respuestas `no-store
 
 La implementación Go recibe slash commands, modal submits y autocomplete a través de una sesión de Discord Gateway saliente (WebSocket) y registra los 12 slash commands mediante el endpoint global de Discord. Requiere `DISCORD_BOT_TOKEN` y `DISCORD_CLIENT_ID`; no usa una lista de servidores ni `DISCORD_GUILD_ID`. Este transporte no necesita ningún puerto público entrante: el bot abre la conexión Gateway hacia Discord, por lo que funciona igual si el VPS solo es accesible localmente o vía WireGuard (decisiones D-19/D-20/D-21 del amendment de fase 03.3).
 
+Si Discord muestra cada comando dos veces, la causa es la coexistencia de las definiciones globales actuales con copias guild-scoped antiguas de la misma aplicación. Reiniciá una vez el proceso Go: cuando el Gateway confirma que terminó de cargar todas las guilds, el boot vuelve a publicar las 12 definiciones globales y reemplaza por `[]` únicamente los comandos guild-scoped bajo el `DISCORD_CLIENT_ID` actual. La convergencia es idempotente y no afecta comandos de otros bots. La interfaz de Discord puede tardar unos minutos en reflejar la limpieza. No ejecutes `npm run discord:register`: Node queda sólo como oráculo histórico y no participa del registro operativo.
+
 ## Límite de despliegue
 
 Esta fase sirve HTTP para desarrollo en una red confiable. No expongas el puerto directamente a Internet. TLS/HTTPS, HSTS, certificados y la configuración de un proxy inverso pertenecen a la Fase 4 de despliegue. Hasta completar esa topología, mantené `trust proxy` deshabilitado y restringí el acceso con red local o firewall.

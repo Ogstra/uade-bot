@@ -19,6 +19,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/events"
 )
 
 // allowedSSOPortalHost is the only host UADE_SSO_PORTAL_URL is permitted to
@@ -124,6 +127,10 @@ func main() {
 	}()
 
 	if token != "" && mode != "shadow" {
+		applicationID := os.Getenv("DISCORD_CLIENT_ID")
+		if applicationID == "" {
+			log.Fatal("DISCORD_CLIENT_ID is required when DISCORD_BOT_TOKEN is configured")
+		}
 		dispatcher := discordhttp.CommandDispatcher{
 			DB: db, MasterKey: os.Getenv("CREDENTIALS_MASTER_KEY"),
 			OnJobCreated: runtime.JobCreated, PrepareAccount: runtime.PrepareAccount,
@@ -136,25 +143,31 @@ func main() {
 		if clientErr != nil {
 			log.Fatal(clientErr)
 		}
+		// OpenGateway returning does not guarantee the guild cache is populated.
+		// disgo's GuildsReady event is emitted only after every initial guild has
+		// loaded, making the first normal boot cleanup deterministic. Reconnects
+		// safely repeat the same idempotent convergence.
+		client.AddEventListeners(bot.NewListenerFunc(func(*events.GuildsReady) {
+			go func() {
+				guilds := gatewayProjection.Guilds()
+				guildIDs := make([]string, 0, len(guilds))
+				for _, guild := range guilds {
+					guildIDs = append(guildIDs, guild.ID)
+				}
+				registerCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := discordhttp.ConvergeCommands(registerCtx, nil, "", token, applicationID, guildIDs); err != nil {
+					log.Printf("discord command convergence failed: %v", err)
+					return
+				}
+				log.Printf("converged 12 global discord commands and cleared guild-scoped copies in %d guilds", len(guildIDs))
+			}()
+		}))
 		if clientErr = client.OpenGateway(context.Background()); clientErr != nil {
 			log.Fatal(clientErr)
 		}
 		defer client.Close(context.Background())
 		log.Printf("discord gateway connected with interaction listeners")
-		applicationID := os.Getenv("DISCORD_CLIENT_ID")
-		if applicationID == "" {
-			log.Fatal("DISCORD_CLIENT_ID is required when DISCORD_BOT_TOKEN is configured")
-		}
-		registerCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		registerErr := discordhttp.RegisterGlobal(registerCtx, nil, "", token, applicationID)
-		cancel()
-		if registerErr != nil {
-			// Existing global commands remain usable; a transient REST outage must
-			// not take presence or the interaction endpoint offline.
-			log.Printf("global discord command registration failed: %v", registerErr)
-		} else {
-			log.Printf("registered 12 global discord commands")
-		}
 	}
 	log.Fatal(<-serverErr)
 }
