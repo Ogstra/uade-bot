@@ -94,6 +94,29 @@ func (f boundedFetcher) get(ctx context.Context, target string) (finalURL, body 
 	return f.do(req)
 }
 
+// getAjax is identical to get except it also sets X-Requested-With:
+// XMLHttpRequest -- the standard header jQuery's own $.get()/$.ajax() send
+// by default (this site's own /bundles/jquery is loaded on every page, per
+// .planning/spikes/001-uade-sso-flow-mapping/network-log.json), and the
+// single most common signal classic ASP.NET MVC actions check via
+// Request.IsAjaxRequest() to decide whether to serve a partial view instead
+// of a full page or a login redirect. SPECULATIVE: never independently
+// confirmed against the two specific endpoints this is used for
+// (network-log.json records method/url/status only, never headers -- see
+// fetchInscripcionesPartial in relink.go for the full context and the first
+// place to adjust if this assumption is wrong.
+func (f boundedFetcher) getAjax(ctx context.Context, target string) (finalURL, body string, err error) {
+	if err := f.checkAllowed(target); err != nil {
+		return "", "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	return f.do(req)
+}
+
 func (f boundedFetcher) post(ctx context.Context, target string, values url.Values) (finalURL, body string, err error) {
 	if err := f.checkAllowed(target); err != nil {
 		return "", "", err

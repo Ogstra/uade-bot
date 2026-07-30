@@ -99,7 +99,25 @@ func Relink(ctx context.Context, client *http.Client, portalURL, user, password 
 		return Result{Manual: true}, newMFARequiredError(pageURL, html, hopsUsed)
 	}
 
-	startURL, err := extractStartURL(html)
+	// The final portal page's raw HTML is only a shell -- confirmed via the
+	// historical network trace captured live 2026-07-12 by spike 001
+	// (.planning/spikes/001-uade-sso-flow-mapping/network-log.json, see
+	// fetchInscripcionesPartial's header comment for the full evidence): a
+	// real browser fires two same-origin AJAX GETs unconditionally on page
+	// load (never gated behind the Bootstrap tab click), and only the second
+	// response actually contains the enrollment panels this function
+	// searches for. Best-effort: merged into html (never replacing it) so
+	// BootstrapTabPresent (already confirmed present in the shell) is never
+	// lost from diagnostics, and any error here (network failure, non-2xx,
+	// or a portal/test fixture that simply doesn't implement these routes)
+	// silently falls back to extracting from the shell alone -- unchanged
+	// behavior from before this fix existed.
+	extractionHTML := html
+	if _, ajaxHTML, ajaxErr := fetchInscripcionesPartial(ctx, fetcher, pageURL); ajaxErr == nil {
+		extractionHTML = html + ajaxHTML
+	}
+
+	startURL, err := extractStartURL(extractionHTML)
 	if err != nil {
 		// newInvalidStartURLError enriches the sentinel with non-sensitive
 		// diagnostics (a.inscribite count, distinct data-tipolink values,
@@ -107,12 +125,71 @@ func Relink(ctx context.Context, client *http.Client, portalURL, user, password 
 		// StartURLDiagnosticsFrom, while errors.Is(err, ErrInvalidStartURL)
 		// still holds for every existing caller (Unwrap returns the sentinel
 		// itself -- see start_url_diagnostics.go).
-		return Result{}, newInvalidStartURLError(pageURL, html)
+		return Result{}, newInvalidStartURLError(pageURL, extractionHTML)
 	}
 	if !ValidStartURL(startURL) {
-		return Result{}, newInvalidStartURLError(pageURL, html)
+		return Result{}, newInvalidStartURLError(pageURL, extractionHTML)
 	}
 	return Result{StartURL: startURL}, nil
+}
+
+// fetchInscripcionesPartial replicates two same-origin AJAX GET requests a
+// real browser fires unconditionally on page load of the portal's landing
+// page -- never gated behind the Bootstrap tab click, and never visible to a
+// pure-HTTP client that doesn't execute JS. Confirmed via the historical
+// network trace captured live 2026-07-12 by spike 001
+// (.planning/spikes/001-uade-sso-flow-mapping/network-log.json, see
+// .planning/debug/resolved/sso-tab-ajax-not-fetched.md for the full
+// debugging trail): immediately after "/" finishes loading its own static
+// resources, the browser issues GET /Home/ValidarUsuario, and -- only once
+// THAT responds -- GET /Home/ObtenerInscripciones (their request/response
+// timestamps are chained ~1ms apart, not parallel). Neither URL has a
+// corresponding "navigated" event in that log (unlike the real "/"
+// navigation immediately before them), confirming both are background
+// XHR/fetch calls, not page navigations. ObtenerInscripciones's response is
+// what the shell HTML (the raw response to GET "/") never contains: the
+// a.inscribite/data-linkid markup extractStartURL searches for -- confirmed
+// indirectly (the spike's own security constraint never logs response
+// bodies) by that response being immediately followed in the log by
+// requests for icon images that only exist inside the enrollment listing's
+// own markup (virtual_on.png, intensivo.png, tarde.png, maniana.png,
+// noche.png, explicacion-02.png, link_aqui.png, warning.png) -- a browser
+// only discovers and fetches <img> resources once HTML referencing them has
+// actually been inserted into the live DOM.
+//
+// Best-effort by design: on any error (network failure, non-2xx, a
+// portal/test fixture that doesn't implement these routes at all) the
+// caller falls back to the original shell HTML unchanged -- this never
+// blocks or fails Relink on its own. ValidarUsuario is only ever fetched to
+// replicate the real sequencing (its own response body is discarded); if it
+// errors, ObtenerInscripciones is never attempted either, mirroring how the
+// real page's own JS only fires the second call from the first call's
+// success handler.
+//
+// X-Requested-With: XMLHttpRequest is set on both (see
+// boundedFetcher.getAjax in client.go) -- SPECULATIVE, not independently
+// confirmed against these two specific endpoints (network-log.json records
+// method/url/status only, never headers). It mirrors jQuery's own default
+// for $.get()/$.ajax(), and classic ASP.NET MVC (the framework this site's
+// /bundles/* paths indicate) commonly branches on exactly this header via
+// Request.IsAjaxRequest(). If the live checkpoint still returns
+// ErrInvalidStartURL after this change, this header assumption is the first
+// thing to verify against the real site's actual request headers (e.g. via
+// browser devtools during a manual login).
+func fetchInscripcionesPartial(ctx context.Context, fetcher boundedFetcher, pageURL string) (finalURL, html string, err error) {
+	validateURL, err := resolveURL(pageURL, "/Home/ValidarUsuario")
+	if err != nil {
+		return "", "", err
+	}
+	if _, _, err := fetcher.getAjax(ctx, validateURL); err != nil {
+		return "", "", err
+	}
+
+	obtenerURL, err := resolveURL(pageURL, "/Home/ObtenerInscripciones")
+	if err != nil {
+		return "", "", err
+	}
+	return fetcher.getAjax(ctx, obtenerURL)
 }
 
 // RelinkWithFallback keeps browser/manual work lazy: the fallback is invoked

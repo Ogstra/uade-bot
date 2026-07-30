@@ -169,6 +169,22 @@ func landingHTMLMRIBeforeAsignaturas(realStartURL string) string {
 </body></html>`, fixtureMRIDecoyLinkID, realStartURL)
 }
 
+// landingHTMLShellOnly simulates the real shell HTML confirmed live
+// (network-log.json, spike 001): the Bootstrap tab toggle IS present in the
+// raw response to GET "/", but the tab's own content (the enrollment
+// panels) is not -- it only arrives via the two AJAX calls
+// fetchInscripcionesPartial replicates. Matches the real symptom this file's
+// debug session (.planning/debug/sso-tab-ajax-not-fetched.md) confirmed:
+// bootstrapTabPresent=true, inscribeteLinkCount=0.
+func landingHTMLShellOnly() string {
+	return `<html><body>
+<ul class="nav nav-tabs">
+  <li><a data-toggle="tab" href="#menu3">Inscribite</a></li>
+</ul>
+<div id="menu3" class="tab-pane"></div>
+</body></html>`
+}
+
 // landingHTMLNoInscribeteLinks simulates hypothesis A of 03.3-21: the final
 // portal page has no a.inscribite element of any type -- the account
 // genuinely has no enrollment available right now.
@@ -722,6 +738,207 @@ func TestRelinkAttachesStartURLDiagnostics(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRelinkFetchesInscripcionesPartialWhenShellIsEmpty is the regression
+// test for the root cause documented in
+// .planning/debug/resolved/sso-tab-ajax-not-fetched.md: the final portal
+// page's raw HTML (/landing) is only the shell (Bootstrap tab present, no
+// enrollment panels -- landingHTMLShellOnly), and the real panel content
+// only exists behind the two AJAX GETs a real browser fires unconditionally
+// on page load (GET /Home/ValidarUsuario -> GET /Home/ObtenerInscripciones,
+// confirmed live 2026-07-12 via network-log.json). Relink must still
+// succeed by fetching and merging that content, exactly reproducing the
+// live symptom (bootstrapTabPresent=true, inscribeteLinkCount=0 from the
+// shell alone) and its fix.
+func TestRelinkFetchesInscripcionesPartialWhenShellIsEmpty(t *testing.T) {
+	portalMux := http.NewServeMux()
+	msMux := http.NewServeMux()
+
+	portalSrv := httptest.NewServer(portalMux)
+	defer portalSrv.Close()
+	msSrv := httptest.NewServer(msMux)
+	defer msSrv.Close()
+	msBase := localhostURL(msSrv.URL)
+
+	setMicrosoftLoginHost(t, hostnameOf(msBase))
+
+	var (
+		gotValidarAjaxHeader  string
+		gotObtenerAjaxHeader  string
+		obtenerInscripciones int
+	)
+
+	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/Account/Login", http.StatusFound)
+	})
+	portalMux.HandleFunc("/Account/Login", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, portalLoginHrefHTML(msBase+"/oauth/authorize"))
+	})
+	portalMux.HandleFunc("/landing", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, landingHTMLShellOnly())
+	})
+	portalMux.HandleFunc("/Home/ValidarUsuario", func(w http.ResponseWriter, r *http.Request) {
+		gotValidarAjaxHeader = r.Header.Get("X-Requested-With")
+		fmt.Fprint(w, `{"ok":true}`)
+	})
+	portalMux.HandleFunc("/Home/ObtenerInscripciones", func(w http.ResponseWriter, r *http.Request) {
+		obtenerInscripciones++
+		gotObtenerAjaxHeader = r.Header.Get("X-Requested-With")
+		fmt.Fprint(w, landingHTML(fixtureStartURL))
+	})
+
+	msMux.HandleFunc("/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, msConfigHTML("/oauth/login", fixtureFlowToken, fixtureSCtx, fixtureCanary, fixtureSessionID))
+	})
+	msMux.HandleFunc("/oauth/login", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, portalSrv.URL+"/landing", http.StatusFound)
+	})
+
+	client, err := NewClient(portalSrv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	result, err := Relink(context.Background(), client, portalSrv.URL, "jperez", fixturePassword)
+	if err != nil {
+		t.Fatalf("Relink error: %v (shell-only landing page should have been recovered via the AJAX partial)", err)
+	}
+	if result.StartURL != fixtureStartURL {
+		t.Fatalf("StartURL = %q, want %q", result.StartURL, fixtureStartURL)
+	}
+	if obtenerInscripciones != 1 {
+		t.Fatalf("ObtenerInscripciones called %d times, want 1", obtenerInscripciones)
+	}
+	if gotValidarAjaxHeader != "XMLHttpRequest" {
+		t.Fatalf("ValidarUsuario X-Requested-With = %q, want %q", gotValidarAjaxHeader, "XMLHttpRequest")
+	}
+	if gotObtenerAjaxHeader != "XMLHttpRequest" {
+		t.Fatalf("ObtenerInscripciones X-Requested-With = %q, want %q", gotObtenerAjaxHeader, "XMLHttpRequest")
+	}
+}
+
+// TestRelinkSkipsObtenerInscripcionesWhenValidarUsuarioFails proves the
+// sequencing dependency documented in fetchInscripcionesPartial: when
+// ValidarUsuario errors, ObtenerInscripciones must never be called (mirrors
+// the real page's own JS only firing the second AJAX call from the first
+// call's success handler), and Relink must fall back to the shell HTML
+// alone -- failing closed with ErrInvalidStartURL exactly as it did before
+// this fix existed, not panicking or hanging.
+func TestRelinkSkipsObtenerInscripcionesWhenValidarUsuarioFails(t *testing.T) {
+	portalMux := http.NewServeMux()
+	msMux := http.NewServeMux()
+
+	portalSrv := httptest.NewServer(portalMux)
+	defer portalSrv.Close()
+	msSrv := httptest.NewServer(msMux)
+	defer msSrv.Close()
+	msBase := localhostURL(msSrv.URL)
+
+	setMicrosoftLoginHost(t, hostnameOf(msBase))
+
+	var obtenerInscripcionesHit bool
+
+	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/Account/Login", http.StatusFound)
+	})
+	portalMux.HandleFunc("/Account/Login", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, portalLoginHrefHTML(msBase+"/oauth/authorize"))
+	})
+	portalMux.HandleFunc("/landing", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, landingHTMLShellOnly())
+	})
+	portalMux.HandleFunc("/Home/ValidarUsuario", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	portalMux.HandleFunc("/Home/ObtenerInscripciones", func(w http.ResponseWriter, r *http.Request) {
+		obtenerInscripcionesHit = true
+		fmt.Fprint(w, landingHTML(fixtureStartURL))
+	})
+
+	msMux.HandleFunc("/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, msConfigHTML("/oauth/login", fixtureFlowToken, fixtureSCtx, fixtureCanary, fixtureSessionID))
+	})
+	msMux.HandleFunc("/oauth/login", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, portalSrv.URL+"/landing", http.StatusFound)
+	})
+
+	client, err := NewClient(portalSrv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = Relink(context.Background(), client, portalSrv.URL, "jperez", fixturePassword)
+	if !errors.Is(err, ErrInvalidStartURL) {
+		t.Fatalf("err = %v, want ErrInvalidStartURL", err)
+	}
+	if obtenerInscripcionesHit {
+		t.Fatal("ObtenerInscripciones was called despite ValidarUsuario failing -- must preserve the real sequencing dependency")
+	}
+}
+
+// TestRelinkMergesAjaxPartialDiagnosticsWithShell proves the merge (not
+// replace) behavior: BootstrapTabPresent must still be reported from the
+// shell HTML even when the AJAX partial is what supplies the a.inscribite
+// links -- losing that diagnostic signal would make future ErrInvalidStartURL
+// investigations harder to distinguish from a genuinely different failure
+// mode.
+func TestRelinkMergesAjaxPartialDiagnosticsWithShell(t *testing.T) {
+	portalMux := http.NewServeMux()
+	msMux := http.NewServeMux()
+
+	portalSrv := httptest.NewServer(portalMux)
+	defer portalSrv.Close()
+	msSrv := httptest.NewServer(msMux)
+	defer msSrv.Close()
+	msBase := localhostURL(msSrv.URL)
+
+	setMicrosoftLoginHost(t, hostnameOf(msBase))
+
+	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/Account/Login", http.StatusFound)
+	})
+	portalMux.HandleFunc("/Account/Login", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, portalLoginHrefHTML(msBase+"/oauth/authorize"))
+	})
+	portalMux.HandleFunc("/landing", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, landingHTMLShellOnly())
+	})
+	portalMux.HandleFunc("/Home/ValidarUsuario", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"ok":true}`)
+	})
+	portalMux.HandleFunc("/Home/ObtenerInscripciones", func(w http.ResponseWriter, r *http.Request) {
+		// Other-type-only content -- no InscripcionAsignatura link, so Relink
+		// still fails closed, but the diagnostics attached to that failure
+		// must show the merged picture: BootstrapTabPresent from the shell,
+		// InscribeteLinkCount>0 from the AJAX partial.
+		fmt.Fprint(w, landingHTMLOtherTypesOnly())
+	})
+
+	msMux.HandleFunc("/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, msConfigHTML("/oauth/login", fixtureFlowToken, fixtureSCtx, fixtureCanary, fixtureSessionID))
+	})
+	msMux.HandleFunc("/oauth/login", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, portalSrv.URL+"/landing", http.StatusFound)
+	})
+
+	client, err := NewClient(portalSrv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = Relink(context.Background(), client, portalSrv.URL, "jperez", fixturePassword)
+	if !errors.Is(err, ErrInvalidStartURL) {
+		t.Fatalf("err = %v, want ErrInvalidStartURL", err)
+	}
+
+	diag, ok := StartURLDiagnosticsFrom(err)
+	if !ok {
+		t.Fatal("StartURLDiagnosticsFrom(err) ok = false, want true")
+	}
+	if !diag.BootstrapTabPresent {
+		t.Fatal("diag.BootstrapTabPresent = false, want true (present in the shell HTML, must survive the merge with the AJAX partial)")
+	}
+	if diag.InscribeteLinkCount != 2 {
+		t.Fatalf("diag.InscribeteLinkCount = %d, want 2 (from the AJAX partial, landingHTMLOtherTypesOnly)", diag.InscribeteLinkCount)
 	}
 }
 
