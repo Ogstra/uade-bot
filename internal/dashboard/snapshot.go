@@ -4,9 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ogs/uade-bot/internal/sysstats"
 )
 
 type SnapshotFunc func() (Snapshot, error)
@@ -100,6 +103,9 @@ type Health struct {
 	PausedAccounts       PausedHealth `json:"pausedAccounts"`
 	Jobs                 JobsHealth   `json:"jobs"`
 	LastSuccessfulPollAt *int64       `json:"lastSuccessfulPollAt"`
+	ProcessRSS           string       `json:"processRss"`
+	ProcessSwap          string       `json:"processSwap"`
+	DatabaseSize         string       `json:"databaseSize"`
 }
 
 type SnapshotSource struct {
@@ -111,6 +117,23 @@ type SnapshotSource struct {
 	DisplayNameProvider func() map[string]string
 	GuildProvider       func() []Guild
 	AvatarURLProvider   func() map[string]string
+	// DBPath is the resolved UADE_DB_PATH (see cmd/uade-bot/main.go), used to
+	// measure the SQLite file's size via sysStats.
+	DBPath string
+	// SysStats is injectable for tests; the default (sysStats) calls
+	// sysstats.Collect(os.Getpid(), dbPath).
+	SysStats func(dbPath string) sysstats.Stats
+}
+
+// sysStats returns s.SysStats if injected, or the production default that
+// measures the actual running process and dbPath.
+func (s SnapshotSource) sysStats() func(string) sysstats.Stats {
+	if s.SysStats != nil {
+		return s.SysStats
+	}
+	return func(dbPath string) sysstats.Stats {
+		return sysstats.Collect(os.Getpid(), dbPath)
+	}
 }
 
 type rawJob struct {
@@ -141,6 +164,12 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 		avatarURLs = s.AvatarURLProvider()
 	}
 	out := Snapshot{GeneratedAt: now.UnixMilli(), BotGuilds: guilds, Accounts: []Account{}, Admins: []Admin{}, Health: Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}, Jobs: JobsHealth{}}}
+	// Process RSS/swap and DB file size are process/filesystem metrics, not
+	// SQL -- compute them even when s.DB is nil (before the early return).
+	stats := s.sysStats()(s.DBPath)
+	out.Health.ProcessRSS = sysstats.FormatOrUnavailable(stats.RSSAvailable, stats.RSSBytes)
+	out.Health.ProcessSwap = sysstats.FormatOrUnavailable(stats.SwapAvailable, stats.SwapBytes)
+	out.Health.DatabaseSize = sysstats.FormatOrUnavailable(stats.DBSizeAvailable, stats.DBSizeBytes)
 	if s.DB == nil {
 		return out, nil
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ogs/uade-bot/internal/store"
+	"github.com/ogs/uade-bot/internal/sysstats"
 )
 
 func TestSnapshotProjectsSQLiteParityWithoutSecrets(t *testing.T) {
@@ -64,6 +65,40 @@ func TestSnapshotProjectsSQLiteParityWithoutSecrets(t *testing.T) {
 		if !strings.Contains(serialized, want) {
 			t.Errorf("snapshot missing %q: %s", want, serialized)
 		}
+	}
+}
+
+// TestSnapshotHealthIncludesProcessAndDatabaseSizeMetrics proves Build()
+// populates Health.ProcessRSS/ProcessSwap/DatabaseSize from an injected
+// SysStats func, formatted via sysstats.FormatOrUnavailable, and that
+// s.DBPath (not some other value) is what gets passed through.
+func TestSnapshotHealthIncludesProcessAndDatabaseSizeMetrics(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/dashboard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	source := SnapshotSource{
+		DB: db, Now: func() time.Time { return time.UnixMilli(500) }, DBPath: "/fake/path",
+		SysStats: func(dbPath string) sysstats.Stats {
+			if dbPath != "/fake/path" {
+				t.Fatalf("SysStats called with dbPath=%q, want /fake/path", dbPath)
+			}
+			return sysstats.Stats{RSSBytes: 52428800, RSSAvailable: true, SwapAvailable: false, DBSizeBytes: 2048, DBSizeAvailable: true}
+		},
+	}
+	snapshot, err := source.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Health.ProcessRSS != "50.0 MB" {
+		t.Errorf("ProcessRSS=%q, want %q", snapshot.Health.ProcessRSS, "50.0 MB")
+	}
+	if snapshot.Health.ProcessSwap != "no disponible" {
+		t.Errorf("ProcessSwap=%q, want %q", snapshot.Health.ProcessSwap, "no disponible")
+	}
+	if snapshot.Health.DatabaseSize != "2.0 KB" {
+		t.Errorf("DatabaseSize=%q, want %q", snapshot.Health.DatabaseSize, "2.0 KB")
 	}
 }
 
