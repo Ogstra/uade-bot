@@ -4,14 +4,19 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ogs/uade-bot/internal/jobactions"
 )
 
 const (
@@ -45,6 +50,15 @@ type Server struct {
 	LoginLimit     int
 	LoginWindow    time.Duration
 
+	// DB, OnJobsChanged and OnJobCreated back /jobs/accion (see jobAction).
+	// They mirror the same DB handle and scheduler-reconcile callbacks
+	// already wired to internal/discordhttp.CommandDispatcher in
+	// cmd/uade-bot/main.go, so a dashboard mutation reconciles the
+	// scheduler exactly like the equivalent Discord admin-* command.
+	DB            *sql.DB
+	OnJobsChanged func()
+	OnJobCreated  func(string)
+
 	mu       sync.Mutex
 	sessions map[string]session
 	attempts map[string]loginAttempt
@@ -68,6 +82,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.login(w, r, nonce)
 	case r.URL.Path == "/logout" && r.Method == http.MethodPost:
 		s.logout(w, r)
+	case r.URL.Path == "/jobs/accion" && r.Method == http.MethodPost:
+		s.jobAction(w, r)
 	case r.URL.Path == "/dashboard" && r.Method == http.MethodGet:
 		s.dashboard(w, r, nonce)
 	case r.URL.Path == "/api/dashboard" && r.Method == http.MethodGet:
@@ -182,6 +198,56 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	s.setCookie(w, "", -1)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// jobAction handles POST /jobs/accion (pausar/reanudar/detener a search
+// job). The dashboard is operator-only (single login, no notion of "owning
+// user" in the session), so any authenticated session may mutate ANY user's
+// job -- equivalent to admin=true in internal/discordhttp.mutateJob, not to
+// the per-owner commands a normal Discord user gets. This is not a new
+// security gap: it is the access model already in force for the entire
+// dashboard (one shared operator login gates everything it renders).
+func (s *Server) jobAction(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Solicitud rechazada.", http.StatusBadRequest)
+		return
+	}
+	_, current, ok := s.authenticated(r)
+	if !ok || !sameOrigin(r) || !constantEqual(r.FormValue("_csrf"), current.CSRF) {
+		http.Error(w, "Solicitud rechazada.", http.StatusForbidden)
+		return
+	}
+	if s.DB == nil {
+		http.Error(w, "Error interno.", http.StatusInternalServerError)
+		return
+	}
+	id, err := strconv.ParseInt(r.FormValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Búsqueda inválida.", http.StatusBadRequest)
+		return
+	}
+	action := r.FormValue("accion")
+	n, err := jobactions.Mutate(r.Context(), s.DB, action, id)
+	if err != nil {
+		if errors.Is(err, jobactions.ErrInvalidAction) {
+			http.Error(w, "Acción inválida.", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "Error interno.", http.StatusInternalServerError)
+		return
+	}
+	if n == 0 {
+		http.Error(w, "No encontré esa búsqueda.", http.StatusNotFound)
+		return
+	}
+	if s.OnJobsChanged != nil {
+		s.OnJobsChanged()
+	}
+	if action == "reanudar" && s.OnJobCreated != nil {
+		s.OnJobCreated(strconv.FormatInt(id, 10))
+	}
+	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request, nonce string) {

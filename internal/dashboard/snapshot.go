@@ -62,13 +62,14 @@ type HistoryItem struct {
 	Outcome    Outcome `json:"outcome"`
 }
 type Job struct {
-	JobID        int64         `json:"jobId"`
-	Label        string        `json:"label"`
-	Status       Status        `json:"status"`
-	LastPolledAt *int64        `json:"lastPolledAt"`
-	Outcome      Outcome       `json:"outcome"`
-	Filters      Filters       `json:"filters"`
-	History      []HistoryItem `json:"history"`
+	JobID          int64         `json:"jobId"`
+	Label          string        `json:"label"`
+	Status         Status        `json:"status"`
+	ManuallyPaused bool          `json:"manuallyPaused"`
+	LastPolledAt   *int64        `json:"lastPolledAt"`
+	Outcome        Outcome       `json:"outcome"`
+	Filters        Filters       `json:"filters"`
+	History        []HistoryItem `json:"history"`
 }
 type Account struct {
 	DiscordUserID string `json:"discordUserId"`
@@ -282,7 +283,7 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 				return pause.reason
 			}
 			return ""
-		}()), Outcome: current, Filters: filters, History: history}
+		}()), ManuallyPaused: r.status == "paused_by_user", Outcome: current, Filters: filters, History: history}
 		if r.last.Valid {
 			v := r.last.Int64
 			j.LastPolledAt = &v

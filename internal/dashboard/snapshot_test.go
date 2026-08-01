@@ -54,6 +54,17 @@ func TestSnapshotProjectsSQLiteParityWithoutSecrets(t *testing.T) {
 			t.Errorf("snapshot missing %q: %s", want, serialized)
 		}
 	}
+	if snapshot.Accounts[0].Jobs[0].JobID != 10 || !snapshot.Accounts[0].Jobs[0].ManuallyPaused {
+		t.Fatalf("job id=10 (status paused_by_user) must have ManuallyPaused=true: %+v", snapshot.Accounts[0].Jobs[0])
+	}
+	if snapshot.Accounts[1].Jobs[0].JobID != 20 || snapshot.Accounts[1].Jobs[0].ManuallyPaused {
+		t.Fatalf("job id=20 (status active) must have ManuallyPaused=false: %+v", snapshot.Accounts[1].Jobs[0])
+	}
+	for _, want := range []string{`"manuallyPaused":true`, `"manuallyPaused":false`} {
+		if !strings.Contains(serialized, want) {
+			t.Errorf("snapshot missing %q: %s", want, serialized)
+		}
+	}
 }
 
 func TestSnapshotHasStableEmptyArraysAndUnknownSafeProjection(t *testing.T) {

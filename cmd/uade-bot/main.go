@@ -103,10 +103,11 @@ func main() {
 	production := os.Getenv("APP_ENV") == "production" || os.Getenv("GO_ENV") == "production"
 	gatewayProjection := discordgateway.NewProjection(nil)
 	snapshotSource := dashboardSnapshotSource(db, gatewayProjection)
-	mux.Handle("/", &dashboard.Server{
+	dashboardServer := &dashboard.Server{
 		User: user, Password: os.Getenv("DASHBOARD_PASSWORD"), SessionSecret: sessionSecret,
-		Production: production, Snapshot: snapshotSource.Build,
-	})
+		Production: production, Snapshot: snapshotSource.Build, DB: db,
+	}
+	mux.Handle("/", dashboardServer)
 	token := os.Getenv("DISCORD_BOT_TOKEN")
 	interval := 30 * time.Second
 	if seconds, parseErr := strconv.Atoi(os.Getenv("UADE_POLL_INTERVAL_SECONDS")); parseErr == nil && seconds > 0 {
@@ -118,6 +119,14 @@ func main() {
 	}
 	defer runtime.Close()
 	runtime.Start()
+
+	// Wired here (not in the dashboardServer literal above) because runtime
+	// only exists after runtime.Start(); these are the same two callbacks
+	// already wired to discordhttp.CommandDispatcher below, reused as-is so
+	// a dashboard mutation reconciles the scheduler exactly like the
+	// equivalent Discord admin-* command.
+	dashboardServer.OnJobsChanged = runtime.JobsChanged
+	dashboardServer.OnJobCreated = runtime.JobCreated
 
 	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	serverErr := make(chan error, 1)

@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ogs/uade-bot/internal/store"
 )
 
 var csrfPattern = regexp.MustCompile(`name="_csrf" value="([^"]+)"`)
@@ -370,6 +373,229 @@ func TestDashboardCSSStacksHealthCardAndAccountSummaryChildren(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("rendered style block missing %q: %s", want, html)
 		}
+	}
+}
+
+func seedJobActionDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := store.Open(t.TempDir() + "/dashboard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err = db.Exec(`INSERT INTO users(discord_user_id,backoff_attempt,created_at,updated_at) VALUES ('user-a',0,1,1);
+INSERT INTO jobs(id,discord_user_id,filtros_json,status,created_at) VALUES (1,'user-a','{}','active',1)`); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func jobRowStatus(t *testing.T, db *sql.DB, id int64) (string, bool) {
+	t.Helper()
+	var status string
+	err := db.QueryRow(`SELECT status FROM jobs WHERE id=?`, id).Scan(&status)
+	if err == sql.ErrNoRows {
+		return "", false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status, true
+}
+
+func TestJobActionRequiresSessionSameOriginAndCSRF(t *testing.T) {
+	db := seedJobActionDB(t)
+	s := &Server{User: "admin", Password: "secret", SessionSecret: []byte("0123456789abcdef0123456789abcdef"), DB: db}
+	httpServer := httptest.NewServer(s)
+	defer httpServer.Close()
+
+	assertUnchanged := func() {
+		t.Helper()
+		status, ok := jobRowStatus(t, db, 1)
+		if !ok || status != "active" {
+			t.Fatalf("job mutated despite rejected request: status=%q ok=%v", status, ok)
+		}
+	}
+
+	// No cookie/session at all.
+	noSession := &http.Client{}
+	resp, err := noSession.PostForm(httpServer.URL+"/jobs/accion", url.Values{"id": {"1"}, "accion": {"pausar"}, "_csrf": {"whatever"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("no session status=%d", resp.StatusCode)
+	}
+	assertUnchanged()
+
+	client := authenticatedClient(t, httpServer, "admin", "secret")
+
+	// CSRF absent.
+	resp, err = client.PostForm(httpServer.URL+"/jobs/accion", url.Values{"id": {"1"}, "accion": {"pausar"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("csrf absent status=%d", resp.StatusCode)
+	}
+	assertUnchanged()
+
+	// CSRF present but incorrect.
+	resp, err = client.PostForm(httpServer.URL+"/jobs/accion", url.Values{"id": {"1"}, "accion": {"pausar"}, "_csrf": {"not-the-real-token"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("csrf wrong status=%d", resp.StatusCode)
+	}
+	assertUnchanged()
+
+	// Session + correct CSRF, but Origin header is cross-site.
+	dashboardResp, err := client.Get(httpServer.URL + "/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(dashboardResp.Body)
+	dashboardResp.Body.Close()
+	match := csrfPattern.FindSubmatch(body)
+	if len(match) != 2 {
+		t.Fatalf("csrf missing: %s", body)
+	}
+	req, err := http.NewRequest(http.MethodPost, httpServer.URL+"/jobs/accion", strings.NewReader(url.Values{"id": {"1"}, "accion": {"pausar"}, "_csrf": {string(match[1])}}.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin status=%d", resp.StatusCode)
+	}
+	assertUnchanged()
+}
+
+func TestJobActionPausesResumesDeletesAndNotifiesScheduler(t *testing.T) {
+	db := seedJobActionDB(t)
+	var jobsChangedCount int
+	var jobCreatedIDs []string
+	s := &Server{
+		User: "admin", Password: "secret", SessionSecret: []byte("0123456789abcdef0123456789abcdef"), DB: db,
+		OnJobsChanged: func() { jobsChangedCount++ },
+		OnJobCreated:  func(id string) { jobCreatedIDs = append(jobCreatedIDs, id) },
+	}
+	httpServer := httptest.NewServer(s)
+	defer httpServer.Close()
+	client := authenticatedClient(t, httpServer, "admin", "secret")
+	noRedirect := &http.Client{Jar: client.Jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	dashboardResp, err := client.Get(httpServer.URL + "/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(dashboardResp.Body)
+	dashboardResp.Body.Close()
+	csrf := string(csrfPattern.FindSubmatch(body)[1])
+
+	post := func(accion string) *http.Response {
+		t.Helper()
+		resp, err := noRedirect.PostForm(httpServer.URL+"/jobs/accion", url.Values{"id": {"1"}, "accion": {accion}, "_csrf": {csrf}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+
+	resp := post("pausar")
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/dashboard" {
+		t.Fatalf("pausar status=%d location=%s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if status, ok := jobRowStatus(t, db, 1); !ok || status != "paused_by_user" {
+		t.Fatalf("status=%q ok=%v", status, ok)
+	}
+	if jobsChangedCount != 1 {
+		t.Fatalf("jobsChangedCount=%d after pausar, want 1", jobsChangedCount)
+	}
+	if len(jobCreatedIDs) != 0 {
+		t.Fatalf("OnJobCreated invoked on pausar: %v", jobCreatedIDs)
+	}
+
+	resp = post("reanudar")
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("reanudar status=%d", resp.StatusCode)
+	}
+	if status, ok := jobRowStatus(t, db, 1); !ok || status != "active" {
+		t.Fatalf("status=%q ok=%v", status, ok)
+	}
+	if jobsChangedCount != 2 {
+		t.Fatalf("jobsChangedCount=%d after reanudar, want 2", jobsChangedCount)
+	}
+	if len(jobCreatedIDs) != 1 || jobCreatedIDs[0] != "1" {
+		t.Fatalf("OnJobCreated=%v after reanudar, want [\"1\"]", jobCreatedIDs)
+	}
+
+	resp = post("detener")
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("detener status=%d", resp.StatusCode)
+	}
+	if _, ok := jobRowStatus(t, db, 1); ok {
+		t.Fatal("job row still present after detener")
+	}
+	if jobsChangedCount != 3 {
+		t.Fatalf("jobsChangedCount=%d after detener, want 3", jobsChangedCount)
+	}
+	if len(jobCreatedIDs) != 1 {
+		t.Fatalf("OnJobCreated invoked on detener: %v", jobCreatedIDs)
+	}
+}
+
+func TestJobActionRejectsInvalidActionAndUnknownJob(t *testing.T) {
+	db := seedJobActionDB(t)
+	var jobsChangedCount int
+	s := &Server{
+		User: "admin", Password: "secret", SessionSecret: []byte("0123456789abcdef0123456789abcdef"), DB: db,
+		OnJobsChanged: func() { jobsChangedCount++ },
+	}
+	httpServer := httptest.NewServer(s)
+	defer httpServer.Close()
+	client := authenticatedClient(t, httpServer, "admin", "secret")
+	dashboardResp, err := client.Get(httpServer.URL + "/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(dashboardResp.Body)
+	dashboardResp.Body.Close()
+	csrf := string(csrfPattern.FindSubmatch(body)[1])
+
+	resp, err := client.PostForm(httpServer.URL+"/jobs/accion", url.Values{"id": {"1"}, "accion": {"borrar"}, "_csrf": {csrf}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid action status=%d", resp.StatusCode)
+	}
+	if status, ok := jobRowStatus(t, db, 1); !ok || status != "active" {
+		t.Fatalf("status=%q ok=%v", status, ok)
+	}
+
+	resp, err = client.PostForm(httpServer.URL+"/jobs/accion", url.Values{"id": {"999"}, "accion": {"pausar"}, "_csrf": {csrf}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown job status=%d", resp.StatusCode)
+	}
+	if jobsChangedCount != 0 {
+		t.Fatalf("jobsChangedCount=%d, want 0 (no successful mutation occurred)", jobsChangedCount)
 	}
 }
 
