@@ -27,7 +27,7 @@ func opt(name, description string, required, autocomplete bool) commandOption {
 	return value
 }
 
-// GlobalCommands is the single registration source for all fourteen commands.
+// GlobalCommands is the single registration source for all sixteen commands.
 // Registration deliberately uses the application-global endpoint; there is no
 // guild ID argument or guild-specific fallback.
 func GlobalCommands() []globalCommand {
@@ -59,6 +59,7 @@ func GlobalCommands() []globalCommand {
 		{"admin-estado", "[Admin] Ver todas las busquedas", 1, user(false)}, {"admin-detener", "[Admin] Detener cualquier busqueda", 1, job("Busqueda a detener")},
 		{"admin-pausar", "[Admin] Pausar cualquier busqueda", 1, job("Busqueda a pausar")}, {"admin-reanudar", "[Admin] Reanudar cualquier busqueda", 1, job("Busqueda a reanudar")},
 		{"admin-stats", "[Admin] Estadisticas generales del bot", 1, nil}, {"admin-user-stats", "[Admin] Estadisticas de una cuenta", 1, user(true)},
+		{"admin-ban", "[Admin] Bloquear a un usuario (pausa sus busquedas sin borrarlas)", 1, discordUser()}, {"admin-unban", "[Admin] Desbloquear a un usuario previamente bloqueado", 1, discordUser()},
 		{"superadmin-agregar", "[Super-admin] Agregar un admin", 1, discordUser()}, {"superadmin-eliminar", "[Super-admin] Quitar un admin", 1, discordUser()},
 	}
 }

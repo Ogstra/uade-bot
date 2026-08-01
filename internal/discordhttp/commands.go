@@ -188,6 +188,10 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 		return d.adminStats(ctx)
 	case "admin-user-stats":
 		return d.adminUserStats(ctx, in.GuildID, stringOption(in.Data.Options, "usuario"))
+	case "admin-ban":
+		return d.adminBan(ctx, stringOption(in.Data.Options, "usuario"))
+	case "admin-unban":
+		return d.adminUnban(ctx, stringOption(in.Data.Options, "usuario"))
 	case "superadmin-agregar":
 		return d.superadminAgregar(ctx, userID, stringOption(in.Data.Options, "usuario"))
 	case "superadmin-eliminar":
@@ -867,6 +871,61 @@ func (d CommandDispatcher) superadminEliminar(ctx context.Context, _, targetID s
 		return message(fmt.Sprintf("<@%s> no estaba en la tabla de admins.", targetID)), nil
 	}
 	return message(fmt.Sprintf("<@%s> ya no es admin.", targetID)), nil
+}
+
+// adminBan pauses every active search of targetID by upserting
+// users.pause_reason='banned', reusing the exact same column
+// needs_credentials/needs_new_start_url/rate_limited already use to exclude
+// an account from scheduler polling (accountPaused, scheduler.go). It never
+// touches jobs or credentials, so the target's searches and stored
+// credentials survive untouched, and it works even when targetID has never
+// had a row in users (never saved credentials).
+func (d CommandDispatcher) adminBan(ctx context.Context, targetID string) (InteractionResponse, error) {
+	if targetID == "" {
+		return message("Seleccioná un usuario."), nil
+	}
+	now := time.Now().UnixMilli()
+	_, err := d.DB.ExecContext(ctx, `INSERT INTO users(discord_user_id,pause_reason,pause_until,created_at,updated_at) VALUES(?,'banned',NULL,?,?) ON CONFLICT(discord_user_id) DO UPDATE SET pause_reason='banned',pause_until=NULL,updated_at=excluded.updated_at`, targetID, now, now)
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	return message(fmt.Sprintf("Bloqueé a <@%s>. Sus búsquedas quedaron pausadas, sin borrarse.", targetID)), nil
+}
+
+// adminUnban clears users.pause_reason for targetID only when its current
+// value is exactly 'banned' (WHERE pause_reason='banned', same
+// reversibility guard submitManualStartURL uses for needs_new_start_url):
+// if the account's pause reason changed to a real one (e.g.
+// needs_credentials) after the ban, adminUnban must not silently clobber
+// it -- see decisión 2, 260730-gvy.
+func (d CommandDispatcher) adminUnban(ctx context.Context, targetID string) (InteractionResponse, error) {
+	if targetID == "" {
+		return message("Seleccioná un usuario."), nil
+	}
+	now := time.Now().UnixMilli()
+	result, err := d.DB.ExecContext(ctx, `UPDATE users SET pause_reason=NULL,updated_at=? WHERE discord_user_id=? AND pause_reason='banned'`, now, targetID)
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	if affected > 0 {
+		return message(fmt.Sprintf("Desbloqueé a <@%s>. Sus búsquedas se reanudan en el próximo sondeo.", targetID)), nil
+	}
+	var reason sql.NullString
+	err = d.DB.QueryRowContext(ctx, `SELECT pause_reason FROM users WHERE discord_user_id=?`, targetID).Scan(&reason)
+	if err == sql.ErrNoRows {
+		return message(fmt.Sprintf("<@%s> no está registrado.", targetID)), nil
+	}
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	if reason.Valid && reason.String != "" {
+		return message(fmt.Sprintf("<@%s> no estaba bloqueado por admin-ban; su pausa actual es por otro motivo (%s) y no la modifiqué.", targetID, reason.String)), nil
+	}
+	return message(fmt.Sprintf("<@%s> no estaba bloqueado.", targetID)), nil
 }
 
 func (d CommandDispatcher) autocomplete(ctx context.Context, userID string, in Interaction) (InteractionResponse, error) {

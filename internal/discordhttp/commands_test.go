@@ -418,11 +418,11 @@ func TestAdminBanCreatesUsersRowForTargetWithoutPriorRow(t *testing.T) {
 // registered" from "not currently banned".
 func TestAdminUnbanReactivatesOnlyWhenPauseReasonIsExactlyBanned(t *testing.T) {
 	cases := []struct {
-		name           string
+		name            string
 		seedPauseReason string // "" means no row at all
-		noRow          bool
-		wantCleared    bool
-		wantContains   string
+		noRow           bool
+		wantCleared     bool
+		wantContains    string
 	}{
 		{name: "banned clears and reactivates", seedPauseReason: "banned", wantCleared: true, wantContains: "target"},
 		{name: "changed reason is preserved", seedPauseReason: "needs_credentials", wantCleared: false, wantContains: "needs_credentials"},
