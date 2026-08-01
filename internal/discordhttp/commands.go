@@ -19,6 +19,14 @@ import (
 
 const ephemeral = 1 << 6
 
+// unavailableMessage is the response returned to an actor whose account has
+// pause_reason='banned' (see actorBlocked) for every interaction type
+// except autocomplete (which uses an empty-choices Type 8 response
+// instead). It MUST stay generic and indistinguishable from a common
+// failure: never add any word to this text that would reveal the account's
+// blocked status (decisión 3, 260730-gvy).
+const unavailableMessage = "No pude procesar tu solicitud. Volvé a intentar más tarde."
+
 var materiaPattern = regexp.MustCompile(`^\d+(?:\.\d+){2}$`)
 
 // Interaction is the exported, transport-agnostic contract for a Discord
@@ -133,6 +141,23 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 	}
 	if userID == "" {
 		return message("No pude identificar tu cuenta."), nil
+	}
+	// actorBlocked gates every interaction type (modal/autocomplete/
+	// component/command) alike, immediately after resolving the actor's own
+	// userID and before any of them dispatches -- decisión 4, 260730-gvy.
+	// This check is strictly about the ACTOR of the interaction, never
+	// about the target of an admin-* command's "usuario" option: an admin
+	// who is not blocked keeps operating normally on a blocked target's
+	// account (admin-ban/admin-unban included, no change needed in Task 1).
+	blocked, err := d.actorBlocked(ctx, userID)
+	if err != nil {
+		return InteractionResponse{}, err
+	}
+	if blocked {
+		if in.Type == 4 {
+			return InteractionResponse{Type: 8, Data: map[string]any{"choices": []any{}}}, nil
+		}
+		return message(unavailableMessage), nil
 	}
 	if in.Type == 5 {
 		if in.Data.CustomID == "sso_manual_link" {
@@ -1083,4 +1108,25 @@ func (d CommandDispatcher) isAdmin(ctx context.Context, userID string) (bool, er
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// actorBlocked reports whether userID's own account currently has
+// pause_reason='banned' (set only by adminBan). A missing row (never
+// registered) or a nil DB is treated as "not blocked" -- there is nothing
+// to gate for an account that was never banned. Only the exact value
+// 'banned' blocks: any other pause reason (needs_credentials, rate_limited,
+// etc.) is an unrelated scheduler pause and must not silence the actor.
+func (d CommandDispatcher) actorBlocked(ctx context.Context, userID string) (bool, error) {
+	if d.DB == nil {
+		return false, nil
+	}
+	var reason sql.NullString
+	err := d.DB.QueryRowContext(ctx, `SELECT pause_reason FROM users WHERE discord_user_id=?`, userID).Scan(&reason)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return reason.String == "banned", nil
 }
