@@ -104,3 +104,80 @@ func MFADiagnosticsFrom(err error) (MFADiagnostics, bool) {
 	}
 	return MFADiagnostics{}, false
 }
+
+// invalidCredentialsAADSTSCodes are Microsoft's own public, documented AADSTS
+// error-code prefixes (https://learn.microsoft.com/entra/identity-platform/
+// reference-error-codes) that mean the submitted credentials were rejected
+// outright -- wrong username/password, an expired password, or a locked
+// account -- as opposed to a real MFA/additional-verification code. The
+// correct recovery for any of these is asking the user for a NEW PASSWORD,
+// never the manual enrollment-link flow ErrMFARequired triggers.
+//
+// Deliberately NOT included here (these mean real MFA/additional
+// verification, and must keep returning ErrMFARequired):
+// AADSTS50079/50076/50072/50074.
+var invalidCredentialsAADSTSCodes = map[string]bool{
+	"AADSTS50126": true, // invalid username or password
+	"AADSTS50053": true, // account locked
+	"AADSTS50055": true, // password expired
+}
+
+// isInvalidCredentialsAADSTSCode reports whether code is one of Microsoft's
+// documented invalid-credentials codes. An empty string or any unrecognized
+// code (including every known MFA code, and any future/unmapped Microsoft
+// error) returns false -- callers must fail closed toward ErrMFARequired for
+// anything not explicitly on this list, since incorrectly assuming "not MFA"
+// would prompt a user for a password that might actually already be correct.
+func isInvalidCredentialsAADSTSCode(code string) bool {
+	return invalidCredentialsAADSTSCodes[code]
+}
+
+// invalidCredentialsError wraps ErrInvalidCredentials with the same
+// non-sensitive MFADiagnostics shape mfaRequiredError already attaches to
+// ErrMFARequired, without changing its observable contract for any existing
+// caller: Error() delegates to ErrInvalidCredentials.Error() verbatim, and
+// Unwrap() returns the exact sentinel value (not a copy), so
+// errors.Is(err, ErrInvalidCredentials) holds for every caller.
+type invalidCredentialsError struct {
+	diag MFADiagnostics
+}
+
+func (e *invalidCredentialsError) Error() string {
+	return ErrInvalidCredentials.Error()
+}
+
+func (e *invalidCredentialsError) Unwrap() error {
+	return ErrInvalidCredentials
+}
+
+// newInvalidCredentialsError builds the enriched invalid-credentials error
+// Relink returns instead of ErrMFARequired when isInvalidCredentialsAADSTSCode
+// matches. Mirrors newMFARequiredError field for field -- see that function's
+// header comment for the non-sensitivity guarantees each field carries (this
+// never issues an extra request, and a pageURL that fails to parse leaves
+// Host/Path at their zero value rather than failing this function).
+func newInvalidCredentialsError(pageURL, html string, hops int) error {
+	diag := MFADiagnostics{
+		AADSTSCode: extractAADSTSCode(html),
+		Hops:       hops,
+		ConfigKeys: extractMicrosoftConfigKeyNames(html),
+	}
+	if u, err := url.Parse(pageURL); err == nil {
+		diag.Host = u.Hostname()
+		diag.Path = u.Path
+	}
+	return &invalidCredentialsError{diag: diag}
+}
+
+// InvalidCredentialsDiagnosticsFrom extracts MFADiagnostics from err if err is
+// (or wraps) a *invalidCredentialsError. It returns ok=false for any other
+// error, including the pure ErrInvalidCredentials sentinel a test double
+// might return directly -- that bare sentinel never carries diagnostics.
+// Mirrors MFADiagnosticsFrom.
+func InvalidCredentialsDiagnosticsFrom(err error) (MFADiagnostics, bool) {
+	var credErr *invalidCredentialsError
+	if errors.As(err, &credErr) {
+		return credErr.diag, true
+	}
+	return MFADiagnostics{}, false
+}

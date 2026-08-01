@@ -554,7 +554,24 @@ func (r *Runtime) poll(ctx context.Context, jobID, account string) (scheduler.Ou
 	if err != nil {
 		healed, healErr := r.healStartURL(ctx, account, credentials)
 		if healErr != nil {
-			// Covers every healStartURL failure mode, including
+			// sso.ErrInvalidCredentials means Microsoft rejected the
+			// password outright (not MFA) -- reuse the exact same
+			// Outcome.Code ("invalid_credentials") the normal poll path uses
+			// for a UADE 401 (see the decrypt-failure branch above and
+			// uade/outcome.go's OutcomeAuthError) so NextBackoff
+			// (scheduler.go) maps it to pause_reason="needs_credentials",
+			// matching what healStartURL's own markNeedsCredentials call
+			// already wrote. This must NOT fall through to the
+			// stale_start_url branch below: handleOutcome always runs after
+			// this Run() returns (scheduler.go's runJobPipelineSafely) and
+			// recomputes pause_reason purely from Outcome.Code, so returning
+			// "stale_start_url" here would silently overwrite the correct
+			// needs_credentials reason back to needs_new_start_url on this
+			// same cycle.
+			if errors.Is(healErr, sso.ErrInvalidCredentials) {
+				return scheduler.Outcome{Code: "invalid_credentials"}, nil
+			}
+			// Covers every other healStartURL failure mode, including
 			// sso.ErrMFARequired -- markNeedsManualStartURL (called inside
 			// healStartURL) already recorded the manual-action state; the
 			// scheduler's existing stale_start_url handling still owns
@@ -597,11 +614,14 @@ func parseStartURL(raw string) (*url.URL, error) {
 
 // healStartURL attempts an SSO relink for account and, on success, persists
 // the fresh start URL (encrypted) before returning it. On an
+// sso.ErrInvalidCredentials failure it best-effort marks the account
+// needs_credentials (Microsoft rejected the password outright -- the normal
+// /credenciales password modal is the correct next step). On an
 // sso.ErrMFARequired failure it best-effort marks the account
 // needs_new_start_url so the pause DM and /credenciales both reflect the
-// real blocker instead of a generic staleness code; the markNeedsManualStartURL
-// error itself is intentionally swallowed so it never shadows the original
-// relink error returned to the caller.
+// real blocker instead of a generic staleness code. Either mark* call's own
+// error is intentionally swallowed so it never shadows the original relink
+// error returned to the caller.
 func (r *Runtime) healStartURL(ctx context.Context, account string, credentials credentialcrypto.Credentials) (string, error) {
 	client, err := sso.NewClient(r.SSOPortalURL)
 	if err != nil {
@@ -609,7 +629,10 @@ func (r *Runtime) healStartURL(ctx context.Context, account string, credentials 
 	}
 	result, err := r.relink(ctx, client, r.SSOPortalURL, credentials.UADEUsername, credentials.UADEPassword)
 	if err != nil {
-		if errors.Is(err, sso.ErrMFARequired) {
+		switch {
+		case errors.Is(err, sso.ErrInvalidCredentials):
+			_ = r.markNeedsCredentials(ctx, account)
+		case errors.Is(err, sso.ErrMFARequired):
 			_ = r.markNeedsManualStartURL(ctx, account)
 		}
 		return "", err
@@ -646,5 +669,25 @@ func (r *Runtime) markNeedsManualStartURL(ctx context.Context, account string) e
 		return err
 	}
 	current.Reason = "needs_new_start_url"
+	return repo.SaveAccountState(ctx, account, current)
+}
+
+// markNeedsCredentials records that account's relink hit
+// sso.ErrInvalidCredentials (Microsoft rejected the password outright, not
+// MFA), reusing the exact same pause_reason mechanism and consumers as
+// markNeedsManualStartURL above -- the pause DM (notificationText) and
+// /credenciales (credencialesModal, commands.go) -- except with the reason
+// the normal (non-relink) poll path already uses for a UADE 401
+// (scheduler.go's NextBackoff, case "invalid_credentials"), so /credenciales
+// opens the normal password modal instead of the manual-link fallback.
+// Preserves any existing BackoffAttempt/LastPauseNotifiedReason instead of
+// clobbering them.
+func (r *Runtime) markNeedsCredentials(ctx context.Context, account string) error {
+	repo := scheduler.SQLStore{DB: r.DB}
+	current, err := repo.AccountState(ctx, account)
+	if err != nil {
+		return err
+	}
+	current.Reason = "needs_credentials"
 	return repo.SaveAccountState(ctx, account, current)
 }

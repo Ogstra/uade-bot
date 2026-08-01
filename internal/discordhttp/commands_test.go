@@ -1249,6 +1249,35 @@ func TestCredencialesShowsManualLinkModalWhenAccountNeedsNewStartURL(t *testing.
 	}
 }
 
+// TestCredencialesShowsNormalModalWhenAccountNeedsCredentials is the
+// confirmatory end-to-end regression test for
+// .planning/debug/resolved/relink-mfa-vs-wrong-password.md: a relink that
+// failed because Microsoft rejected the password (sso.ErrInvalidCredentials,
+// pause_reason='needs_credentials' via markNeedsCredentials in
+// internal/app/runtime.go) must make /credenciales open the NORMAL
+// username/password modal, never manualLinkModal -- unlike
+// needs_new_start_url above, which is the one and only reason that opens the
+// manual-link fallback.
+func TestCredencialesShowsNormalModalWhenAccountNeedsCredentials(t *testing.T) {
+	d := testDispatcher(t)
+	seedCredentials(t, d, "u1", "user", "pass", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	if _, err := d.DB.Exec(`UPDATE users SET pause_reason='needs_credentials' WHERE discord_user_id=?`, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	out := dispatchJSON(t, d, command("u1", "credenciales", "0", nil))
+	if out.Type != 9 {
+		t.Fatalf("type %d", out.Type)
+	}
+	data := out.Data.(map[string]any)
+	if data["custom_id"] != "credentials" {
+		t.Fatalf("custom_id = %v, want credentials (the normal password modal, not sso_manual_link)", data["custom_id"])
+	}
+	components := data["components"].([]any)
+	if len(components) != 2 {
+		t.Fatalf("modal tiene %d campos, want 2 (usuario + password)", len(components))
+	}
+}
+
 func manualLinkSubmit(user, link string) map[string]any {
 	field := func(id, value string) any {
 		return map[string]any{"components": []any{map[string]any{"custom_id": id, "value": value}}}

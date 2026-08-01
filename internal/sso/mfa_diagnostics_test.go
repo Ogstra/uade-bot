@@ -150,3 +150,89 @@ func TestMFADiagnosticsFromRejectsBareSentinel(t *testing.T) {
 		t.Fatal("MFADiagnosticsFrom(nil) ok = true, want false")
 	}
 }
+
+// TestIsInvalidCredentialsAADSTSCode is a direct unit test of the
+// classification table itself (Relink's end-to-end behavior is covered
+// separately by TestRelinkClassifiesAADSTSCodeForInvalidCredentialsVsMFA in
+// relink_test.go): every documented invalid-credentials code must return
+// true, every documented MFA code plus an empty/unrecognized code must
+// return false -- fail closed by default.
+func TestIsInvalidCredentialsAADSTSCode(t *testing.T) {
+	invalidCreds := []string{"AADSTS50126", "AADSTS50053", "AADSTS50055"}
+	for _, code := range invalidCreds {
+		if !isInvalidCredentialsAADSTSCode(code) {
+			t.Fatalf("isInvalidCredentialsAADSTSCode(%q) = false, want true", code)
+		}
+	}
+
+	notInvalidCreds := []string{"AADSTS50079", "AADSTS50076", "AADSTS50072", "AADSTS50074", "", "AADSTS99999", "not-a-code"}
+	for _, code := range notInvalidCreds {
+		if isInvalidCredentialsAADSTSCode(code) {
+			t.Fatalf("isInvalidCredentialsAADSTSCode(%q) = true, want false (fail closed toward ErrMFARequired)", code)
+		}
+	}
+}
+
+// TestInvalidCredentialsErrorPreservesSentinel proves invalidCredentialsError
+// never changes errors.Is(err, ErrInvalidCredentials) or Error() from what
+// internal/app/runtime.go's healStartURL depends on -- mirrors
+// TestMFARequiredErrorPreservesSentinel.
+func TestInvalidCredentialsErrorPreservesSentinel(t *testing.T) {
+	err := newInvalidCredentialsError("https://login.microsoftonline.com/tenant/login", msLoginErrorHTML("AADSTS50126"), 0)
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatal("errors.Is(err, ErrInvalidCredentials) = false, want true")
+	}
+	if err.Error() != ErrInvalidCredentials.Error() {
+		t.Fatalf("Error() = %q, want byte-identical %q", err.Error(), ErrInvalidCredentials.Error())
+	}
+	if errors.Is(err, ErrMFARequired) {
+		t.Fatal("errors.Is(err, ErrMFARequired) = true, want false -- must not also satisfy the MFA sentinel")
+	}
+}
+
+// TestNewInvalidCredentialsErrorAndDiagnosticsFrom confirms the diagnostic
+// fields are populated correctly, mirroring
+// TestNewMFARequiredErrorAndDiagnosticsFrom for the invalid-credentials
+// sentinel.
+func TestNewInvalidCredentialsErrorAndDiagnosticsFrom(t *testing.T) {
+	pageURL := "https://login.microsoftonline.com/common/login?sessionId=abc123&uaid=9987766"
+	html := `<div>AADSTS50126: Error validando las credenciales.</div>`
+	err := newInvalidCredentialsError(pageURL, html, 1)
+
+	diag, ok := InvalidCredentialsDiagnosticsFrom(err)
+	if !ok {
+		t.Fatal("InvalidCredentialsDiagnosticsFrom(err) ok = false, want true")
+	}
+	if diag.AADSTSCode != "AADSTS50126" {
+		t.Fatalf("diag.AADSTSCode = %q, want %q", diag.AADSTSCode, "AADSTS50126")
+	}
+	if diag.Host != "login.microsoftonline.com" {
+		t.Fatalf("diag.Host = %q, want %q", diag.Host, "login.microsoftonline.com")
+	}
+	if diag.Path != "/common/login" {
+		t.Fatalf("diag.Path = %q, want %q", diag.Path, "/common/login")
+	}
+	if diag.Hops != 1 {
+		t.Fatalf("diag.Hops = %d, want 1", diag.Hops)
+	}
+	if strings.Contains(diag.Host, "sessionId") || strings.Contains(diag.Path, "sessionId") {
+		t.Fatalf("query string leaked into Host/Path: host=%q path=%q", diag.Host, diag.Path)
+	}
+
+	// A bare invalidCredentialsError must never satisfy MFADiagnosticsFrom.
+	if _, ok := MFADiagnosticsFrom(err); ok {
+		t.Fatal("MFADiagnosticsFrom(invalidCredentialsError) ok = true, want false")
+	}
+}
+
+// TestInvalidCredentialsDiagnosticsFromRejectsBareSentinel confirms the pure
+// sentinel ErrInvalidCredentials never appears to carry diagnostics, mirroring
+// TestMFADiagnosticsFromRejectsBareSentinel.
+func TestInvalidCredentialsDiagnosticsFromRejectsBareSentinel(t *testing.T) {
+	if _, ok := InvalidCredentialsDiagnosticsFrom(ErrInvalidCredentials); ok {
+		t.Fatal("InvalidCredentialsDiagnosticsFrom(ErrInvalidCredentials) ok = true, want false")
+	}
+	if _, ok := InvalidCredentialsDiagnosticsFrom(nil); ok {
+		t.Fatal("InvalidCredentialsDiagnosticsFrom(nil) ok = true, want false")
+	}
+}

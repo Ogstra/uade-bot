@@ -114,6 +114,19 @@ func msNoFormHTML() string {
 	return `<html><body><p>Ingresá el código de verificación enviado a tu teléfono.</p></body></html>`
 }
 
+// msLoginErrorHTML simulates Microsoft re-serving its login/error page after
+// rejecting the combined password POST -- no <form> and no $Config, same
+// shape as msNoFormHTML, so continueMicrosoftChain immediately stops (hop=0)
+// and Relink's classification branch sees this html directly. aadstsCode is
+// embedded exactly like a real Microsoft error message would (code, colon,
+// human-readable text), covering both invalid-credentials codes (AADSTS50126/
+// 50053/50055) and MFA codes (AADSTS50079/50076/50072/50074) -- Microsoft's
+// own public, documented error-code prefixes
+// (learn.microsoft.com/entra/identity-platform/reference-error-codes).
+func msLoginErrorHTML(aadstsCode string) string {
+	return fmt.Sprintf(`<html><body><div id="err"><p>%s: Error validando las credenciales.</p></div></body></html>`, aadstsCode)
+}
+
 // landingHTML wraps both links in the real .panel.panel-primary /
 // .lbl-inscripciones panel structure extractStartURL now scopes its search
 // to (03.3-22) -- the decoy link sits under a heading that does NOT start
@@ -438,6 +451,106 @@ func TestRelinkMFAWhenNoFormAfterPassword(t *testing.T) {
 	}
 	if diag.Host != hostnameOf(msBase) {
 		t.Fatalf("diag.Host = %q, want %q", diag.Host, hostnameOf(msBase))
+	}
+	// No AADSTS code present at all must fail closed toward ErrMFARequired,
+	// never ErrInvalidCredentials -- regression guard for the classification
+	// added in .planning/debug/resolved/relink-mfa-vs-wrong-password.md.
+	if errors.Is(err, ErrInvalidCredentials) {
+		t.Fatal("err must NOT also be ErrInvalidCredentials when no AADSTS code is present")
+	}
+}
+
+// TestRelinkClassifiesAADSTSCodeForInvalidCredentialsVsMFA is the regression
+// test for .planning/debug/resolved/relink-mfa-vs-wrong-password.md: Relink
+// must distinguish Microsoft's own documented invalid-credentials AADSTS
+// codes (wrong/expired password, locked account -- learn.microsoft.com/entra/
+// identity-platform/reference-error-codes) from real MFA/additional-
+// verification codes, even though both leave the final page on a Microsoft
+// host (msLoginErrorHTML, same "no <form>, no $Config" shape as
+// TestRelinkMFAWhenNoFormAfterPassword's msNoFormHTML). Wrong-password-shaped
+// codes must return ErrInvalidCredentials (never ErrMFARequired); MFA-shaped
+// codes must keep returning ErrMFARequired (never ErrInvalidCredentials).
+func TestRelinkClassifiesAADSTSCodeForInvalidCredentialsVsMFA(t *testing.T) {
+	cases := []struct {
+		name             string
+		aadstsCode       string
+		wantInvalidCreds bool
+	}{
+		{"WrongUsernameOrPassword", "AADSTS50126", true},
+		{"AccountLocked", "AADSTS50053", true},
+		{"PasswordExpired", "AADSTS50055", true},
+		{"MFARequired", "AADSTS50079", false},
+		{"AdditionalVerificationRequired", "AADSTS50076", false},
+		{"StrongAuthRequired", "AADSTS50072", false},
+		{"StrongAuthEnrollmentRequired", "AADSTS50074", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			portalMux := http.NewServeMux()
+			msMux := http.NewServeMux()
+
+			portalSrv := httptest.NewServer(portalMux)
+			defer portalSrv.Close()
+			msSrv := httptest.NewServer(msMux)
+			defer msSrv.Close()
+			msBase := localhostURL(msSrv.URL)
+
+			setMicrosoftLoginHost(t, hostnameOf(msBase))
+
+			portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/Account/Login", http.StatusFound)
+			})
+			portalMux.HandleFunc("/Account/Login", func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, portalLoginHrefHTML(msBase+"/oauth/authorize"))
+			})
+
+			msMux.HandleFunc("/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, msConfigHTML("/oauth/login", fixtureFlowToken, fixtureSCtx, fixtureCanary, fixtureSessionID))
+			})
+			msMux.HandleFunc("/oauth/login", func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, msLoginErrorHTML(tc.aadstsCode))
+			})
+
+			client, err := NewClient(portalSrv.URL)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			result, err := Relink(context.Background(), client, portalSrv.URL, "jperez", fixturePassword)
+			if !result.Manual {
+				t.Fatalf("result.Manual = false, want true (result=%+v)", result)
+			}
+
+			if tc.wantInvalidCreds {
+				if !errors.Is(err, ErrInvalidCredentials) {
+					t.Fatalf("err = %v, want ErrInvalidCredentials", err)
+				}
+				if errors.Is(err, ErrMFARequired) {
+					t.Fatalf("err = %v, must NOT also be ErrMFARequired", err)
+				}
+				diag, ok := InvalidCredentialsDiagnosticsFrom(err)
+				if !ok {
+					t.Fatal("InvalidCredentialsDiagnosticsFrom(err) ok = false, want true")
+				}
+				if diag.AADSTSCode != tc.aadstsCode {
+					t.Fatalf("diag.AADSTSCode = %q, want %q", diag.AADSTSCode, tc.aadstsCode)
+				}
+			} else {
+				if !errors.Is(err, ErrMFARequired) {
+					t.Fatalf("err = %v, want ErrMFARequired", err)
+				}
+				if errors.Is(err, ErrInvalidCredentials) {
+					t.Fatalf("err = %v, must NOT also be ErrInvalidCredentials", err)
+				}
+				diag, ok := MFADiagnosticsFrom(err)
+				if !ok {
+					t.Fatal("MFADiagnosticsFrom(err) ok = false, want true")
+				}
+				if diag.AADSTSCode != tc.aadstsCode {
+					t.Fatalf("diag.AADSTSCode = %q, want %q", diag.AADSTSCode, tc.aadstsCode)
+				}
+			}
+		})
 	}
 }
 

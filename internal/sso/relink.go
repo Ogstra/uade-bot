@@ -16,6 +16,17 @@ var ErrInvalidStartURL = errors.New("sso did not produce a valid enrollment URL"
 var ErrLoginTriggerNotFound = errors.New("sso login trigger not found")
 var ErrMicrosoftFormNotFound = errors.New("microsoft login form not found")
 
+// ErrInvalidCredentials is returned instead of ErrMFARequired when the final
+// Microsoft-hosted page carries one of Microsoft's own documented
+// invalid-credentials AADSTS error codes (wrong/expired password, locked
+// account -- see isInvalidCredentialsAADSTSCode in mfa_diagnostics.go). Both
+// errors leave Relink still on a Microsoft host, but only ErrInvalidCredentials
+// means the recovery is "ask the user for a new password" -- ErrMFARequired
+// means "fall back to the manual enrollment-link flow". Distinguishing them is
+// the entire point of the classification in Relink's IsMicrosoftLogin branch
+// below.
+var ErrInvalidCredentials = errors.New("uade credentials were rejected")
+
 // microsoftLoginHost is a package-level var (not const) so tests can
 // substitute an httptest server's host without touching any other logic --
 // same seam pattern as respondTimeout in internal/discordgateway/listeners.go.
@@ -88,14 +99,32 @@ func Relink(ctx context.Context, client *http.Client, portalURL, user, password 
 	}
 
 	if IsMicrosoftLogin(pageURL) {
-		// Never guess or submit a challenge/code value we weren't given --
-		// still on a Microsoft host after the password chain means MFA or
-		// another additional-verification step. newMFARequiredError enriches
-		// the sentinel with non-sensitive diagnostics (AADSTS code if
-		// present, host+path without query, hops consumed) recoverable via
-		// MFADiagnosticsFrom, while errors.Is(err, ErrMFARequired) still
-		// holds for every existing caller (Unwrap returns the sentinel
-		// itself -- see mfa_diagnostics.go).
+		// Still on a Microsoft host after the password chain means either a
+		// real MFA/additional-verification challenge, OR Microsoft rejecting
+		// the credentials outright (wrong/expired password, locked account)
+		// and re-serving its own login/error page -- both look identical at
+		// the "still on login.microsoftonline.com" level, so they must be
+		// told apart by Microsoft's own public AADSTS error code
+		// (isInvalidCredentialsAADSTSCode, mfa_diagnostics.go) before
+		// deciding which sentinel to return. A recognized invalid-credentials
+		// code means the correct recovery is a NEW PASSWORD, not the manual
+		// enrollment-link flow -- returning ErrMFARequired for that case is
+		// exactly the misclassification bug this branch fixes
+		// (.planning/debug/resolved/relink-mfa-vs-wrong-password.md).
+		//
+		// Any other code (a real MFA code, or none at all -- e.g. a genuinely
+		// unrecognized interstitial) still falls through to ErrMFARequired:
+		// never guess or submit a challenge/code value we weren't given, and
+		// never assume "not a known invalid-credentials code" means "safe to
+		// treat as a plain retry" -- fail closed toward the manual path.
+		if isInvalidCredentialsAADSTSCode(extractAADSTSCode(html)) {
+			return Result{Manual: true}, newInvalidCredentialsError(pageURL, html, hopsUsed)
+		}
+		// newMFARequiredError enriches the sentinel with non-sensitive
+		// diagnostics (AADSTS code if present, host+path without query, hops
+		// consumed) recoverable via MFADiagnosticsFrom, while errors.Is(err,
+		// ErrMFARequired) still holds for every existing caller (Unwrap
+		// returns the sentinel itself -- see mfa_diagnostics.go).
 		return Result{Manual: true}, newMFARequiredError(pageURL, html, hopsUsed)
 	}
 

@@ -947,6 +947,51 @@ func TestPollMarksNeedsManualStartURLAndFallsBackToStaleOnMFA(t *testing.T) {
 	}
 }
 
+// TestPollMarksNeedsCredentialsAndReturnsInvalidCredentialsOnWrongPassword is
+// the regression test for
+// .planning/debug/resolved/relink-mfa-vs-wrong-password.md: a poll() whose
+// Runtime.relink fake returns sso.ErrInvalidCredentials (Microsoft rejected
+// the password outright, not MFA) must return
+// Outcome.Code="invalid_credentials" -- the SAME code the normal (non-relink)
+// poll path already uses for a UADE 401 -- rather than falling back to
+// stale_start_url. Returning the wrong code here would make Scheduler's own
+// handleOutcome/NextBackoff (scheduler.go) overwrite pause_reason back to
+// needs_new_start_url on the very next tick even though markNeedsCredentials
+// (called inside healStartURL) already wrote the correct value. The pause DM
+// and /credenciales (credencialesModal, commands.go) both key off pause_reason
+// to decide between the normal password modal and the manual-link modal.
+func TestPollMarksNeedsCredentialsAndReturnsInvalidCredentialsOnWrongPassword(t *testing.T) {
+	db := newTestRuntimeDB(t)
+	const account = "user-wrong-password"
+	seedRuntimeAccount(t, db, account, "u", "p", "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx")
+	jobID := seedRuntimeJob(t, db, account, `{"materiaCodigo":"3.1.050","ofrecimiento":"curricular","turno":"mañana","dias":["LU"]}`)
+
+	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	runtime.relink = func(context.Context, *http.Client, string, string, string) (sso.Result, error) {
+		return sso.Result{Manual: true}, sso.ErrInvalidCredentials
+	}
+
+	outcome, err := runtime.poll(context.Background(), jobID, account)
+	if err != nil {
+		t.Fatalf("poll returned unexpected error: %v", err)
+	}
+	if outcome.Code != "invalid_credentials" {
+		t.Fatalf("outcome.Code = %q, want invalid_credentials (must reuse the same code the normal poll's UADE-401 path uses, so the scheduler's NextBackoff maps it to needs_credentials instead of stomping back to needs_new_start_url)", outcome.Code)
+	}
+
+	var reason sql.NullString
+	if err = db.QueryRow(`SELECT pause_reason FROM users WHERE discord_user_id=?`, account).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason.String != "needs_credentials" {
+		t.Fatalf("pause_reason = %q, want needs_credentials", reason.String)
+	}
+}
+
 // TestAttemptRelinkOnAccountReadyPersistsHealedStartURL calls
 // attemptRelinkOnAccountReady directly (synchronously, same goroutine as the
 // test) instead of through AccountReady's own launched goroutine, so the
