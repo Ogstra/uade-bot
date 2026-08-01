@@ -599,6 +599,115 @@ func TestJobActionRejectsInvalidActionAndUnknownJob(t *testing.T) {
 	}
 }
 
+func TestDashboardSSRRendersPausarReanudarEliminarButtonsPerJobState(t *testing.T) {
+	snapshot := Snapshot{
+		BotGuilds: []Guild{},
+		Health:    Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}, Jobs: JobsHealth{}},
+		Accounts: []Account{{DiscordUserID: "user-a", DisplayName: "Ana", Jobs: []Job{
+			{JobID: 1, Label: "Activa", ManuallyPaused: false, Filters: Filters{}},
+			{JobID: 2, Label: "Pausada", ManuallyPaused: true, Filters: Filters{}},
+		}}},
+	}
+	var rendered bytes.Buffer
+	if err := dashboardTemplate.Execute(&rendered, dashboardView{Snapshot: snapshot, CSRF: "csrf-test-token"}); err != nil {
+		t.Fatal(err)
+	}
+	html := rendered.String()
+
+	activePanelEnd := strings.Index(html, `data-job-id="2"`)
+	if activePanelEnd == -1 {
+		t.Fatalf("job 2 panel missing: %s", html)
+	}
+	activePanel := html[:activePanelEnd]
+	pausedPanel := html[activePanelEnd:]
+
+	if !strings.Contains(activePanel, `value="pausar"`) || strings.Contains(activePanel, `value="reanudar"`) {
+		t.Fatalf("active job panel must show Pausar only: %s", activePanel)
+	}
+	if !strings.Contains(pausedPanel, `value="reanudar"`) || strings.Contains(pausedPanel, `value="pausar"`) {
+		t.Fatalf("manually-paused job panel must show Reanudar only: %s", pausedPanel)
+	}
+	if strings.Count(html, `value="detener"`) != 2 {
+		t.Fatalf("expected a Eliminar button per job panel: %s", html)
+	}
+	if strings.Count(html, `action="/jobs/accion"`) != 2 {
+		t.Fatalf("expected one /jobs/accion form per job panel: %s", html)
+	}
+	// The logout form (already present pre-existing) also carries a CSRF
+	// input, so the total across the page is 3 (logout + one per job panel)
+	// -- checked precisely per-panel below via activePanel/pausedPanel.
+	if strings.Count(html, `value="csrf-test-token"`) != 3 {
+		t.Fatalf("expected the real session CSRF in each job-actions form: %s", html)
+	}
+	if !strings.Contains(activePanel, `action="/jobs/accion"`) || !strings.Contains(activePanel, `value="csrf-test-token"`) {
+		t.Fatalf("active job panel missing CSRF-protected /jobs/accion form: %s", activePanel)
+	}
+	if !strings.Contains(pausedPanel, `action="/jobs/accion"`) || !strings.Contains(pausedPanel, `value="csrf-test-token"`) {
+		t.Fatalf("paused job panel missing CSRF-protected /jobs/accion form: %s", pausedPanel)
+	}
+}
+
+func TestDashboardEndToEndJobActionButtonsChangeStatusViaHTTP(t *testing.T) {
+	db := seedJobActionDB(t)
+	source := SnapshotSource{DB: db}
+	s := &Server{User: "admin", Password: "secret", SessionSecret: []byte("0123456789abcdef0123456789abcdef"), DB: db, Snapshot: source.Build}
+	httpServer := httptest.NewServer(s)
+	defer httpServer.Close()
+	client := authenticatedClient(t, httpServer, "admin", "secret")
+
+	dashboardResp, err := client.Get(httpServer.URL + "/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(dashboardResp.Body)
+	dashboardResp.Body.Close()
+	html := string(body)
+	csrf := string(csrfPattern.FindSubmatch(body)[1])
+	jobIDMatch := regexp.MustCompile(`data-job-id="(\d+)"`).FindStringSubmatch(html)
+	if len(jobIDMatch) != 2 {
+		t.Fatalf("job id missing from dashboard HTML: %s", html)
+	}
+	jobID := jobIDMatch[1]
+
+	pause, err := client.PostForm(httpServer.URL+"/jobs/accion", url.Values{"id": {jobID}, "accion": {"pausar"}, "_csrf": {csrf}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pauseBody, _ := io.ReadAll(pause.Body)
+	pause.Body.Close()
+	if pause.Request.URL.Path != "/dashboard" {
+		t.Fatalf("pausar did not redirect to /dashboard: path=%s body=%s", pause.Request.URL.Path, pauseBody)
+	}
+
+	api, err := client.Get(httpServer.URL + "/api/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiBody, _ := io.ReadAll(api.Body)
+	api.Body.Close()
+	apiJSON := string(apiBody)
+	if !strings.Contains(apiJSON, `"manuallyPaused":true`) || !strings.Contains(apiJSON, `"status":{"code":"paused_by_user"`) {
+		t.Fatalf("api/dashboard did not reflect pausar: %s", apiJSON)
+	}
+
+	resume, err := client.PostForm(httpServer.URL+"/jobs/accion", url.Values{"id": {jobID}, "accion": {"reanudar"}, "_csrf": {csrf}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume.Body.Close()
+
+	api, err = client.Get(httpServer.URL + "/api/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiBody, _ = io.ReadAll(api.Body)
+	api.Body.Close()
+	apiJSON = string(apiBody)
+	if !strings.Contains(apiJSON, `"manuallyPaused":false`) {
+		t.Fatalf("api/dashboard did not reflect reanudar: %s", apiJSON)
+	}
+}
+
 func TestDashboardRefreshFormatsAndPatchesEveryTimestampInPlace(t *testing.T) {
 	var rendered bytes.Buffer
 	if err := dashboardTemplate.Execute(&rendered, dashboardView{Snapshot: Snapshot{BotGuilds: []Guild{}, Accounts: []Account{}, Health: Health{PausedAccounts: PausedHealth{Breakdown: []Breakdown{}}}}}); err != nil {
