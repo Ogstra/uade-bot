@@ -102,7 +102,7 @@ func main() {
 	mux := http.NewServeMux()
 	production := os.Getenv("APP_ENV") == "production" || os.Getenv("GO_ENV") == "production"
 	gatewayProjection := discordgateway.NewProjection(nil)
-	snapshotSource := dashboardSnapshotSource(db, gatewayProjection)
+	snapshotSource := dashboardSnapshotSource(db, path, gatewayProjection)
 	dashboardServer := &dashboard.Server{
 		User: user, Password: os.Getenv("DASHBOARD_PASSWORD"), SessionSecret: sessionSecret,
 		Production: production, Snapshot: snapshotSource.Build, DB: db,
@@ -146,6 +146,7 @@ func main() {
 			OnJobCreated: runtime.JobCreated, PrepareAccount: runtime.PrepareAccount,
 			OnAccountActivated: runtime.AccountActivated, OnJobsChanged: runtime.JobsChanged,
 			ResolveMateria: runtime.ResolveMateria,
+			DBPath:         path,
 		}
 		dispatcher = wireGatewayIdentity(dispatcher, gatewayProjection)
 		notifier := discordrest.New(token)
@@ -188,8 +189,8 @@ func wireGatewayIdentity(dispatcher discordhttp.CommandDispatcher, projection *d
 	return dispatcher
 }
 
-func dashboardSnapshotSource(db *sql.DB, projection *discordgateway.Projection) dashboard.SnapshotSource {
-	source := dashboard.SnapshotSource{DB: db}
+func dashboardSnapshotSource(db *sql.DB, dbPath string, projection *discordgateway.Projection) dashboard.SnapshotSource {
+	source := dashboard.SnapshotSource{DB: db, DBPath: dbPath}
 	if projection != nil {
 		source.GuildProvider = projection.Guilds
 		source.DisplayNameProvider = projection.DisplayNames

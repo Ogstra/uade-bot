@@ -18,6 +18,7 @@ import (
 
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
 	"github.com/ogs/uade-bot/internal/store"
+	"github.com/ogs/uade-bot/internal/sysstats"
 )
 
 func TestCredentialsActivationPreparesBeforePendingMaterialization(t *testing.T) {
@@ -391,6 +392,28 @@ func TestAdminBanPausesAccountWithoutTouchingJobsOrCredentials(t *testing.T) {
 	}
 	if ciphertextAfter != ciphertextBefore {
 		t.Fatal("credentials ciphertext changed by admin-ban")
+	}
+}
+
+// TestAdminStatsIncludesProcessAndDatabaseSizeMetrics proves /admin-stats
+// appends RAM/swap/DB-size to its existing response text, formatted with
+// the exact same wording internal/sysstats.FormatOrUnavailable produces for
+// the dashboard, without altering the 4 existing lines.
+func TestAdminStatsIncludesProcessAndDatabaseSizeMetrics(t *testing.T) {
+	d := testDispatcher(t)
+	seedAdmin(t, d, "admin")
+	d.DBPath = "/fake/path"
+	d.SysStats = func(dbPath string) sysstats.Stats {
+		if dbPath != "/fake/path" {
+			t.Fatalf("SysStats called with dbPath=%q, want /fake/path", dbPath)
+		}
+		return sysstats.Stats{RSSBytes: 104857600, RSSAvailable: true, SwapAvailable: false, DBSizeBytes: 4096, DBSizeAvailable: true}
+	}
+	content := responseContent(dispatchJSON(t, d, command("admin", "admin-stats", "8", nil)))
+	for _, want := range []string{"RAM del proceso: 100.0 MB", "Swap del proceso: no disponible", "Tamaño de la base de datos: 4.0 KB"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("respuesta no contiene %q: %q", want, content)
+		}
 	}
 }
 

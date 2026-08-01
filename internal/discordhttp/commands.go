@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
 	"github.com/ogs/uade-bot/internal/sso"
+	"github.com/ogs/uade-bot/internal/sysstats"
 	"github.com/ogs/uade-bot/internal/uade"
 )
 
@@ -116,6 +118,25 @@ type CommandDispatcher struct {
 	SendChannel        func(channelID, content string) error
 	ResolveMateria     func(context.Context, string, string) (string, error)
 	IdentityResolver   IdentityResolver
+	// DBPath is the resolved UADE_DB_PATH (see cmd/uade-bot/main.go), used to
+	// measure the SQLite file's size for /admin-stats via sysStats.
+	DBPath string
+	// SysStats is injectable for tests; the default (sysStats) calls
+	// sysstats.Collect(os.Getpid(), dbPath). Same pattern as
+	// dashboard.SnapshotSource.SysStats.
+	SysStats func(dbPath string) sysstats.Stats
+}
+
+// sysStats returns d.SysStats if injected, or the production default that
+// measures the actual running process and dbPath. Identical in form to
+// dashboard.SnapshotSource.sysStats.
+func (d CommandDispatcher) sysStats() func(string) sysstats.Stats {
+	if d.SysStats != nil {
+		return d.SysStats
+	}
+	return func(dbPath string) sysstats.Stats {
+		return sysstats.Collect(os.Getpid(), dbPath)
+	}
 }
 
 var credentialActivationTimeout = 2 * time.Minute
@@ -828,7 +849,12 @@ func (d CommandDispatcher) adminStats(ctx context.Context) (InteractionResponse,
 			return InteractionResponse{}, err
 		}
 	}
-	return message(fmt.Sprintf("Usuarios: %d\nBúsquedas: %d\nCuentas pausadas: %d\nResultados registrados: %d", users, jobs, paused, history)), nil
+	stats := d.sysStats()(d.DBPath)
+	return message(fmt.Sprintf("Usuarios: %d\nBúsquedas: %d\nCuentas pausadas: %d\nResultados registrados: %d\nRAM del proceso: %s\nSwap del proceso: %s\nTamaño de la base de datos: %s",
+		users, jobs, paused, history,
+		sysstats.FormatOrUnavailable(stats.RSSAvailable, stats.RSSBytes),
+		sysstats.FormatOrUnavailable(stats.SwapAvailable, stats.SwapBytes),
+		sysstats.FormatOrUnavailable(stats.DBSizeAvailable, stats.DBSizeBytes))), nil
 }
 
 func (d CommandDispatcher) adminUserStats(ctx context.Context, guildID, userID string) (InteractionResponse, error) {
