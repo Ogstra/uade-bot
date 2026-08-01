@@ -338,8 +338,127 @@ func TestSuperadminAgregarGrantsImmediateIsAdminAccess(t *testing.T) {
 	}
 }
 
-func TestGlobalCommandsContainsExactlyFourteenRequiredCommands(t *testing.T) {
-	want := []string{"buscar", "estado", "detener", "pausar", "reanudar", "credenciales", "admin-estado", "admin-detener", "admin-pausar", "admin-reanudar", "admin-stats", "admin-user-stats", "superadmin-agregar", "superadmin-eliminar"}
+// TestAdminBanPausesAccountWithoutTouchingJobsOrCredentials proves
+// admin-ban reuses users.pause_reason='banned' without deleting or altering
+// the target's jobs (same count/status) or their stored credentials (same
+// ciphertext) -- decisión 1, 260730-gvy.
+func TestAdminBanPausesAccountWithoutTouchingJobsOrCredentials(t *testing.T) {
+	d := testDispatcher(t)
+	seedAdmin(t, d, "admin")
+	seedCredentials(t, d, "target", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	filters := `{"materiaCodigo":"3.1.050","turno":"Noche","ofrecimiento":"curricular","dias":["LU"],"sedesExcluidas":[]}`
+	if _, err := d.DB.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,status,created_at) VALUES('target',?,'active',1),('target',?,'paused_by_user',2)`, filters, filters); err != nil {
+		t.Fatal(err)
+	}
+	var ciphertextBefore string
+	if err := d.DB.QueryRow(`SELECT ciphertext FROM credentials WHERE discord_user_id='target'`).Scan(&ciphertextBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	content := responseContent(dispatchJSON(t, d, command("admin", "admin-ban", "8", []map[string]any{{"name": "usuario", "value": "target"}})))
+	if !strings.Contains(content, "target") {
+		t.Fatalf("respuesta no menciona al usuario: %q", content)
+	}
+
+	var reason sql.NullString
+	if err := d.DB.QueryRow(`SELECT pause_reason FROM users WHERE discord_user_id='target'`).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason.String != "banned" {
+		t.Fatalf("pause_reason=%v, want banned", reason)
+	}
+	var jobCount int
+	var statuses []string
+	rows, err := d.DB.Query(`SELECT status FROM jobs WHERE discord_user_id='target' ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		statuses = append(statuses, status)
+		jobCount++
+	}
+	rows.Close()
+	if jobCount != 2 || statuses[0] != "active" || statuses[1] != "paused_by_user" {
+		t.Fatalf("jobs mutated by admin-ban: count=%d statuses=%v", jobCount, statuses)
+	}
+	var ciphertextAfter string
+	if err := d.DB.QueryRow(`SELECT ciphertext FROM credentials WHERE discord_user_id='target'`).Scan(&ciphertextAfter); err != nil {
+		t.Fatal(err)
+	}
+	if ciphertextAfter != ciphertextBefore {
+		t.Fatal("credentials ciphertext changed by admin-ban")
+	}
+}
+
+// TestAdminBanCreatesUsersRowForTargetWithoutPriorRow proves admin-ban works
+// even for a target that never saved credentials (no prior row in users).
+func TestAdminBanCreatesUsersRowForTargetWithoutPriorRow(t *testing.T) {
+	d := testDispatcher(t)
+	seedAdmin(t, d, "admin")
+	content := responseContent(dispatchJSON(t, d, command("admin", "admin-ban", "8", []map[string]any{{"name": "usuario", "value": "never-registered"}})))
+	if !strings.Contains(content, "never-registered") {
+		t.Fatalf("respuesta no menciona al usuario: %q", content)
+	}
+	var reason sql.NullString
+	if err := d.DB.QueryRow(`SELECT pause_reason FROM users WHERE discord_user_id='never-registered'`).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason.String != "banned" {
+		t.Fatalf("pause_reason=%v, want banned", reason)
+	}
+}
+
+// TestAdminUnbanReactivatesOnlyWhenPauseReasonIsExactlyBanned covers
+// decisión 2, 260730-gvy: admin-unban must never clobber a real pause
+// reason that appeared after the ban, and must distinguish "not
+// registered" from "not currently banned".
+func TestAdminUnbanReactivatesOnlyWhenPauseReasonIsExactlyBanned(t *testing.T) {
+	cases := []struct {
+		name           string
+		seedPauseReason string // "" means no row at all
+		noRow          bool
+		wantCleared    bool
+		wantContains   string
+	}{
+		{name: "banned clears and reactivates", seedPauseReason: "banned", wantCleared: true, wantContains: "target"},
+		{name: "changed reason is preserved", seedPauseReason: "needs_credentials", wantCleared: false, wantContains: "needs_credentials"},
+		{name: "no row at all", noRow: true, wantCleared: false, wantContains: "no está registrado"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDispatcher(t)
+			seedAdmin(t, d, "admin")
+			if !tc.noRow {
+				if _, err := d.DB.Exec(`INSERT INTO users(discord_user_id,pause_reason,created_at,updated_at) VALUES('target',?,1,1)`, tc.seedPauseReason); err != nil {
+					t.Fatal(err)
+				}
+			}
+			content := responseContent(dispatchJSON(t, d, command("admin", "admin-unban", "8", []map[string]any{{"name": "usuario", "value": "target"}})))
+			if !strings.Contains(content, tc.wantContains) {
+				t.Fatalf("response=%q, want to contain %q", content, tc.wantContains)
+			}
+			if !tc.noRow {
+				var reason sql.NullString
+				if err := d.DB.QueryRow(`SELECT pause_reason FROM users WHERE discord_user_id='target'`).Scan(&reason); err != nil {
+					t.Fatal(err)
+				}
+				if tc.wantCleared && reason.Valid {
+					t.Fatalf("pause_reason not cleared: %v", reason)
+				}
+				if !tc.wantCleared && reason.String != tc.seedPauseReason {
+					t.Fatalf("pause_reason changed: got %v, want %q", reason, tc.seedPauseReason)
+				}
+			}
+		})
+	}
+}
+
+func TestGlobalCommandsContainsExactlySixteenRequiredCommands(t *testing.T) {
+	want := []string{"buscar", "estado", "detener", "pausar", "reanudar", "credenciales", "admin-estado", "admin-detener", "admin-pausar", "admin-reanudar", "admin-stats", "admin-user-stats", "admin-ban", "admin-unban", "superadmin-agregar", "superadmin-eliminar"}
 	commands := GlobalCommands()
 	if len(commands) != len(want) {
 		t.Fatalf("got %d", len(commands))
@@ -719,7 +838,7 @@ func (r *mutableIdentityResolver) ResolveIdentity(guildID, userID string) string
 }
 
 func TestAllCanonicalAdminCommandsHaveIdentityPolicyCoverage(t *testing.T) {
-	want := map[string]bool{"admin-estado": true, "admin-detener": true, "admin-pausar": true, "admin-reanudar": true, "admin-stats": true, "admin-user-stats": true}
+	want := map[string]bool{"admin-estado": true, "admin-detener": true, "admin-pausar": true, "admin-reanudar": true, "admin-stats": true, "admin-user-stats": true, "admin-ban": true, "admin-unban": true}
 	got := map[string]bool{}
 	for _, command := range GlobalCommands() {
 		if strings.HasPrefix(command.Name, "admin-") {
