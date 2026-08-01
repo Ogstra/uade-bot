@@ -457,6 +457,120 @@ func TestAdminUnbanReactivatesOnlyWhenPauseReasonIsExactlyBanned(t *testing.T) {
 	}
 }
 
+// TestBlockedActorReceivesGenericResponseAcrossInteractionTypesWithoutSideEffects
+// covers decisiones 3/4, 260730-gvy: a user with pause_reason='banned' gets
+// a generic, non-revealing response across all four interaction types
+// (command, modal, component, autocomplete), and none of the underlying
+// handlers execute (no job created, no credentials changed, no job deleted).
+func TestBlockedActorReceivesGenericResponseAcrossInteractionTypesWithoutSideEffects(t *testing.T) {
+	d := testDispatcher(t)
+	const blocked = "blocked-user"
+	seedCredentials(t, d, blocked, "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	filters := `{"materiaCodigo":"3.1.050","turno":"Noche","ofrecimiento":"curricular","dias":["LU"],"sedesExcluidas":[]}`
+	result, err := d.DB.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,channel_id,label,status,created_at) VALUES(?,?,?,?,'active',1)`, blocked, filters, "channel", "3.1.050")
+	if err != nil {
+		t.Fatal(err)
+	}
+	existingJobID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.DB.Exec(`UPDATE users SET pause_reason='banned' WHERE discord_user_id=?`, blocked); err != nil {
+		t.Fatal(err)
+	}
+	var ciphertextBefore string
+	if err = d.DB.QueryRow(`SELECT ciphertext FROM credentials WHERE discord_user_id=?`, blocked).Scan(&ciphertextBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	forbidden := []string{"ban", "bane", "bloque"}
+	assertGeneric := func(t *testing.T, out InteractionResponse) {
+		t.Helper()
+		if out.Type != 4 {
+			t.Fatalf("type=%d, want 4", out.Type)
+		}
+		content := strings.ToLower(responseContent(out))
+		for _, word := range forbidden {
+			if strings.Contains(content, word) {
+				t.Fatalf("response reveals block status (%q): %q", word, responseContent(out))
+			}
+		}
+	}
+
+	// (a) application command: buscar must not create a job.
+	buscarOptions := []map[string]any{{"name": "cod_materia", "value": "3.1.051"}, {"name": "turno", "value": "Noche"}, {"name": "ofrecimiento", "value": "curricular"}, {"name": "dias", "value": "LU"}}
+	assertGeneric(t, dispatchJSON(t, d, command(blocked, "buscar", "0", buscarOptions)))
+	var jobCount int
+	if err = d.DB.QueryRow(`SELECT COUNT(*) FROM jobs WHERE discord_user_id=?`, blocked).Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("jobs=%d, want 1 (buscar must not have created a new job)", jobCount)
+	}
+
+	// (b) modal submit: credentials must not change.
+	assertGeneric(t, dispatchJSON(t, d, credentialsSubmit(blocked, "new-user", "new-pass")))
+	var ciphertextAfter string
+	if err = d.DB.QueryRow(`SELECT ciphertext FROM credentials WHERE discord_user_id=?`, blocked).Scan(&ciphertextAfter); err != nil {
+		t.Fatal(err)
+	}
+	if ciphertextAfter != ciphertextBefore {
+		t.Fatal("credentials changed for a blocked actor's modal submit")
+	}
+
+	// (c) component: the "Detener búsqueda" button must not delete the job.
+	assertGeneric(t, dispatchJSON(t, d, componentInteraction(blocked, "channel", "detener_job:"+strconv.FormatInt(existingJobID, 10))))
+	if count := componentJobCount(t, d, existingJobID); count != 1 {
+		t.Fatalf("job deleted by blocked actor's component interaction: count=%d", count)
+	}
+
+	// (d) autocomplete: Type 8 with empty choices, same pattern as the
+	// existing non-admin gate.
+	autocompleteOut := dispatchJSON(t, d, map[string]any{"type": 4, "guild_id": "any-guild", "member": map[string]any{"user": map[string]any{"id": blocked}}, "data": map[string]any{"name": "detener", "options": []map[string]any{{"name": "busqueda", "value": "", "focused": true}}}})
+	if autocompleteOut.Type != 8 {
+		t.Fatalf("autocomplete type=%d, want 8", autocompleteOut.Type)
+	}
+	choices, ok := autocompleteOut.Data.(map[string]any)["choices"].([]any)
+	if !ok || len(choices) != 0 {
+		t.Fatalf("autocomplete choices=%v, want empty", autocompleteOut.Data)
+	}
+}
+
+// TestNonBlockedAdminActsNormallyOnBlockedTargetAccount closes the loop with
+// Task 1: the actorBlocked gate must apply only to the actor running the
+// interaction, never to the target of an admin-* command -- an admin who is
+// not blocked keeps working on a blocked target's account, including
+// running admin-unban on it.
+func TestNonBlockedAdminActsNormallyOnBlockedTargetAccount(t *testing.T) {
+	d := testDispatcher(t)
+	seedAdmin(t, d, "admin2")
+	seedCredentials(t, d, "target", "u", "p", "https://inscripcionespia.uade.edu.ar/x?param=v")
+	filters := `{"materiaCodigo":"3.1.050","turno":"Noche","ofrecimiento":"curricular","dias":["LU"],"sedesExcluidas":[]}`
+	if _, err := d.DB.Exec(`INSERT INTO jobs(discord_user_id,filtros_json,channel_id,label,status,created_at) VALUES('target',?,'channel','3.1.050','active',1)`, filters); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.DB.Exec(`UPDATE users SET pause_reason='banned' WHERE discord_user_id='target'`); err != nil {
+		t.Fatal(err)
+	}
+
+	estado := responseContent(dispatchJSON(t, d, command("admin2", "admin-estado", "8", []map[string]any{{"name": "usuario", "value": "target"}})))
+	if !strings.Contains(estado, "3.1.050") {
+		t.Fatalf("admin-estado on blocked target was denied normal service: %q", estado)
+	}
+
+	unban := responseContent(dispatchJSON(t, d, command("admin2", "admin-unban", "8", []map[string]any{{"name": "usuario", "value": "target"}})))
+	if !strings.Contains(unban, "target") {
+		t.Fatalf("admin-unban on blocked target was denied normal service: %q", unban)
+	}
+	var reason sql.NullString
+	if err := d.DB.QueryRow(`SELECT pause_reason FROM users WHERE discord_user_id='target'`).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason.Valid {
+		t.Fatalf("admin-unban did not clear the blocked target's pause_reason: %v", reason)
+	}
+}
+
 func TestGlobalCommandsContainsExactlySixteenRequiredCommands(t *testing.T) {
 	want := []string{"buscar", "estado", "detener", "pausar", "reanudar", "credenciales", "admin-estado", "admin-detener", "admin-pausar", "admin-reanudar", "admin-stats", "admin-user-stats", "admin-ban", "admin-unban", "superadmin-agregar", "superadmin-eliminar"}
 	commands := GlobalCommands()
