@@ -4,10 +4,6 @@ Bot de Discord que monitorea el sistema de inscripciones de UADE y avisa cuando 
 
 Incluye un dashboard web local de solo lectura para el operador.
 
-## Stack
-
-Go + SQLite. `src/` es la implementación Node original, conservada como oráculo para pruebas diferenciales.
-
 ## Comandos de Discord
 
 | Comando | Qué hace |
@@ -18,22 +14,48 @@ Go + SQLite. `src/` es la implementación Node original, conservada como orácul
 | `/pausar`, `/reanudar`, `/detener` | Controlan una búsqueda |
 | `/admin-*`, `/superadmin-*` | Gestión de operadores y del servicio |
 
-## Correr local
+## Instalación
+
+Necesitás Docker con Compose y una aplicación de bot creada en el [portal de desarrolladores de Discord](https://discord.com/developers/applications).
 
 ```sh
-cp .env.example .env    # completar DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, CREDENTIALS_MASTER_KEY, DASHBOARD_*
-go test ./...
-docker compose -f docker-compose.go.yml up -d --build
-./smoke-test.sh
+git clone https://github.com/Ogstra/uade-bot.git
+cd uade-bot
+cp .env.example .env
 ```
 
-Genera los secretos con `openssl rand -hex 32`. `CREDENTIALS_MASTER_KEY` tiene que ser de 64 caracteres hex.
+Completá en `.env`:
 
-Dashboard en `http://127.0.0.1:3000/login`.
+| Variable | De dónde sale |
+|---|---|
+| `DISCORD_BOT_TOKEN` | Portal de Discord, pestaña Bot |
+| `DISCORD_CLIENT_ID` | Portal de Discord, Application ID |
+| `UADE_SUPER_ADMIN_ID` | Tu ID de usuario de Discord (modo desarrollador, clic derecho sobre tu nombre) |
+| `CREDENTIALS_MASTER_KEY` | `openssl rand -hex 32` (64 caracteres hex) |
+| `DASHBOARD_PASSWORD` | Una password larga y única |
+| `DASHBOARD_SESSION_SECRET` | `openssl rand -hex 32` |
 
-## Deploy
+Levantá el bot:
 
-`./deploy.sh` levanta el stack con Docker Compose. Para volver a un digest previo: `PREVIOUS_GO_IMAGE=... ./rollback.sh`. Más detalle en [deploy/UPDATE_VM.md](deploy/UPDATE_VM.md).
+```sh
+./deploy.sh
+```
+
+Invitá el bot a tu servidor con el link de OAuth2 del portal (scopes `bot` y `applications.commands`). Los slash commands se registran solos al arrancar.
+
+El dashboard queda en `http://127.0.0.1:3000/login`. Es HTTP plano: no lo expongas a Internet, dejalo detrás del firewall o de un proxy con TLS.
+
+## Operación
+
+```sh
+./smoke-test.sh                                   # verifica que responde
+docker compose -f docker-compose.go.yml logs -f   # logs
+PREVIOUS_GO_IMAGE=... ./rollback.sh               # volver a una imagen previa
+```
+
+Los datos viven en `./data` (SQLite). Respaldá ese directorio: contiene las credenciales cifradas de tus usuarios. Si perdés `CREDENTIALS_MASTER_KEY` no se pueden descifrar y cada usuario tiene que volver a cargarlas.
+
+Más detalle de actualización de la VM en [deploy/UPDATE_VM.md](deploy/UPDATE_VM.md).
 
 El bot abre la conexión al Gateway de Discord de forma saliente, así que no necesita puerto público entrante.
 
