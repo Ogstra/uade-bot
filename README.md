@@ -1,14 +1,14 @@
 # UADE Bot
 
-Bot de Discord que monitorea el sistema de inscripciones de UADE y avisa cuando se libera una vacante en una materia. Cada usuario busca con su propia cuenta de UADE; las credenciales se guardan cifradas (AES-256-GCM) y nunca se muestran ni se loguean.
+Bot de Discord que monitorea el sistema de inscripciones de UADE y avisa cuando se libera una vacante en una materia. Cada usuario busca con su propia cuenta de UADE. Las credenciales se guardan cifradas (AES-256-GCM) y nunca se muestran ni se loguean.
 
 Incluye un dashboard web local de solo lectura para el operador.
 
 ## Stack
 
-Go (runtime operativo) + SQLite. `src/` es la implementación Node original, conservada solo como oráculo para pruebas diferenciales.
+Go + SQLite. `src/` es la implementación Node original, conservada como oráculo para pruebas diferenciales.
 
-## Uso en Discord
+## Comandos de Discord
 
 | Comando | Qué hace |
 |---|---|
@@ -27,22 +27,16 @@ docker compose -f docker-compose.go.yml up -d --build
 ./smoke-test.sh
 ```
 
-Genera los secretos con `openssl rand -hex 32`. `CREDENTIALS_MASTER_KEY` debe ser de 64 caracteres hex.
+Genera los secretos con `openssl rand -hex 32`. `CREDENTIALS_MASTER_KEY` tiene que ser de 64 caracteres hex.
 
 Dashboard en `http://127.0.0.1:3000/login`.
 
 ## Deploy
 
-`./deploy.sh` (Docker Compose) y `PREVIOUS_GO_IMAGE=... ./rollback.sh` para volver a un digest previo. Detalles en [deploy/UPDATE_VM.md](deploy/UPDATE_VM.md).
+`./deploy.sh` levanta el stack con Docker Compose. Para volver a un digest previo: `PREVIOUS_GO_IMAGE=... ./rollback.sh`. Más detalle en [deploy/UPDATE_VM.md](deploy/UPDATE_VM.md).
 
-El bot se conecta al Gateway de Discord de forma saliente: no requiere puerto público entrante.
-
-## Seguridad
-
-- No expongas el puerto del dashboard a Internet: es HTTP plano, pensado para red local o detrás de un proxy/firewall con TLS.
-- Nunca commitees un `.env` real, tokens, passwords ni claves de cifrado.
-- Quien tenga acceso root al host donde corre el bot puede, técnicamente, acceder a las credenciales descifradas en memoria. El código es abierto justamente para que eso sea auditable.
+El bot abre la conexión al Gateway de Discord de forma saliente, así que no necesita puerto público entrante.
 
 ## Licencia
 
-MIT — ver [LICENSE](LICENSE).
+MIT. Ver [LICENSE](LICENSE).
