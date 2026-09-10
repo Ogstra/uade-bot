@@ -12,7 +12,7 @@ empaqueta ni usa para rollback.
 - `UADE_RUNTIME_MODE=shadow` abre SQLite read-only y no registra comandos ni envía notificaciones.
 - `UADE_RUNTIME_MODE=active` exige `UADE_CUTOVER_ENABLED=true` y todos los gates de shadow/live.
 - `./data` debe pertenecer al UID/GID `65532` del contenedor distroless nonroot.
-  `./deploy.sh` ahora lo intenta automáticamente después de crear el directorio; si
+  `./scripts/deploy.sh` ahora lo intenta automáticamente después de crear el directorio; si
   el chown falla (Docker rootless o deploy sin sudo) hay que corregir la propiedad
   a mano, porque el proceso no puede escribir un `./data` creado por el usuario SSH.
 
@@ -59,10 +59,10 @@ sigue exigiendo `UADE_CUTOVER_ENABLED=true`.
 ## Deploy con Docker Compose
 
 ```sh
-docker compose -f docker-compose.go.yml build uade-go
-./deploy.sh
-docker compose -f docker-compose.go.yml ps
-./smoke-test.sh
+docker compose -f compose.yaml build uade-go
+./scripts/deploy.sh
+docker compose -f compose.yaml ps
+./scripts/smoke-test.sh
 ```
 
 Además del smoke HTTP, el corte requiere verificar manualmente presencia online,
@@ -74,7 +74,7 @@ active si falta cualquiera de esos checkpoints.
 Registrar antes del deploy el digest de la imagen Go activa. Para volver:
 
 ```sh
-PREVIOUS_GO_IMAGE=repo/uade-bot@sha256:... ./rollback.sh
+PREVIOUS_GO_IMAGE=repo/uade-bot@sha256:... ./scripts/rollback.sh
 ```
 
 El script recrea únicamente `uade-go` con la imagen Go anterior y ejecuta el

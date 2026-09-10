@@ -11,11 +11,11 @@ import (
 )
 
 func TestSearchRunsFullWebFormsFlowAndClassifies(t *testing.T) {
-	initial, err := os.ReadFile(filepath.Join("..", "..", "src", "automation", "__fixtures__", "webforms", "initial-form.html"))
+	initial, err := os.ReadFile(filepath.Join("testdata", "webforms", "initial-form.html"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	found, err := os.ReadFile(filepath.Join("..", "..", "src", "automation", "__fixtures__", "webforms", "postback-found.html"))
+	found, err := os.ReadFile(filepath.Join("testdata", "webforms", "postback-found.html"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestSearchClassifiesAuthAndStaleStartURL(t *testing.T) {
 
 func readSearchFixture(t *testing.T, name string) string {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join("..", "..", "src", "automation", "__fixtures__", "webforms", name))
+	body, err := os.ReadFile(filepath.Join("testdata", "webforms", name))
 	if err != nil {
 		t.Fatal(err)
 	}

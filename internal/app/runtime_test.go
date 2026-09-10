@@ -830,7 +830,7 @@ func withFakeUADEHost(t *testing.T, server *httptest.Server) {
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "src", "automation", "__fixtures__", "webforms", name))
+	b, err := os.ReadFile(filepath.Join("testdata", "webforms", name))
 	if err != nil {
 		t.Fatal(err)
 	}

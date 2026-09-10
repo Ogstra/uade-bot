@@ -7,7 +7,7 @@ import (
 )
 
 func TestParseDeltaFixture(t *testing.T) {
-	b, e := os.ReadFile("../../src/automation/__fixtures__/webforms/delta-found.txt")
+	b, e := os.ReadFile("testdata/webforms/delta-found.txt")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -36,7 +36,7 @@ func TestParseDeltaMatchesAllNodeOracleFixtures(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			b, err := os.ReadFile("../../src/automation/__fixtures__/webforms/" + tc.name)
+			b, err := os.ReadFile("testdata/webforms/" + tc.name)
 			if err != nil {
 				t.Fatal(err)
 			}

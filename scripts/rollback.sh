@@ -6,8 +6,11 @@ if [ -z "${PREVIOUS_GO_IMAGE:-}" ]; then
   exit 1
 fi
 
-COMPOSE_FILE=${COMPOSE_FILE:-docker-compose.go.yml}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$SCRIPT_DIR/.."
+
+COMPOSE_FILE=${COMPOSE_FILE:-compose.yaml}
 export UADE_GO_IMAGE=$PREVIOUS_GO_IMAGE
 docker compose -f "$COMPOSE_FILE" up -d --no-build --force-recreate uade-go
-./smoke-test.sh
+"$SCRIPT_DIR/smoke-test.sh"
 echo "Rollback to previous Go image completed"

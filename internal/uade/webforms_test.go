@@ -105,7 +105,7 @@ func TestReflectedSearchDifferentialFixtures(t *testing.T) {
 
 func readWebFormsFixture(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile("../../src/automation/__fixtures__/webforms/" + name)
+	b, err := os.ReadFile("testdata/webforms/" + name)
 	if err != nil {
 		t.Fatal(err)
 	}

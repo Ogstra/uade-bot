@@ -38,7 +38,7 @@ Completá en `.env`:
 Levantá el bot:
 
 ```sh
-./deploy.sh
+./scripts/deploy.sh
 ```
 
 Invitá el bot a tu servidor con el link de OAuth2 del portal (scopes `bot` y `applications.commands`). Los slash commands se registran solos al arrancar.
@@ -48,9 +48,9 @@ El dashboard queda en `http://127.0.0.1:3000/login`. Es HTTP plano: no lo expong
 ## Operación
 
 ```sh
-./smoke-test.sh                                   # verifica que responde
-docker compose -f docker-compose.go.yml logs -f   # logs
-PREVIOUS_GO_IMAGE=... ./rollback.sh               # volver a una imagen previa
+./scripts/smoke-test.sh                      # verifica que responde
+docker compose logs -f                       # logs
+PREVIOUS_GO_IMAGE=... ./scripts/rollback.sh  # volver a una imagen previa
 ```
 
 Los datos viven en `./data` (SQLite). Respaldá ese directorio: contiene las credenciales cifradas de tus usuarios. Si perdés `CREDENTIALS_MASTER_KEY` no se pueden descifrar y cada usuario tiene que volver a cargarlas.

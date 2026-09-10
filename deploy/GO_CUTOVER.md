@@ -60,7 +60,7 @@ Node no se ejecutó. Revisar los logs de arranque es cómo se confirma si un dep
 pasó o no por esa verificación:
 
 ```sh
-docker compose -f docker-compose.go.yml logs uade-go | grep UADE_STANDALONE
+docker compose -f compose.yaml logs uade-go | grep UADE_STANDALONE
 ```
 
 Ausencia de esa línea con `UADE_CUTOVER_ENABLED=true` significa que el arranque sí pasó
@@ -81,8 +81,8 @@ copiar ni reemplazar la DB persistente durante el rollback.
 
 ```sh
 export UADE_GO_IMAGE="$PREVIOUS_GO_IMAGE"
-docker compose -f docker-compose.go.yml up -d --no-build --force-recreate uade-go
-docker compose -f docker-compose.go.yml ps
+docker compose -f compose.yaml up -d --no-build --force-recreate uade-go
+docker compose -f compose.yaml ps
 curl -fsS http://127.0.0.1:3000/healthz
 ```
 

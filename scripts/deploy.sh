@@ -1,10 +1,11 @@
 #!/usr/bin/env sh
 set -eu
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$ROOT_DIR"
 
-COMPOSE_FILE=${COMPOSE_FILE:-docker-compose.go.yml}
+COMPOSE_FILE=${COMPOSE_FILE:-compose.yaml}
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required" >&2
@@ -17,7 +18,7 @@ fi
 
 mkdir -p data
 # El contenedor corre como UID/GID 65532 (gcr.io/distroless/static-debian12:nonroot)
-# y docker-compose.go.yml bind-montea ./data:/app/data. En modo active/development
+# y compose.yaml bind-montea ./data:/app/data. En modo active/development
 # store.Open crea data/uade.db: si el directorio lo creo el usuario del host, el
 # proceso no puede escribir y modernc.org/sqlite reporta ese fallo de permisos como
 # un error de memoria ("unable to open database file: out of memory (14)").
@@ -29,7 +30,7 @@ docker compose -f "$COMPOSE_FILE" up -d --build
 attempt=0
 while [ "$attempt" -lt 30 ]; do
   if docker compose -f "$COMPOSE_FILE" ps --status running | grep -q uade-go; then
-    if command -v curl >/dev/null 2>&1 && ./smoke-test.sh; then
+    if command -v curl >/dev/null 2>&1 && "$SCRIPT_DIR/smoke-test.sh"; then
       echo "uade-go is healthy"
       exit 0
     fi
