@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ogs/uade-bot/internal/discordhttp"
+	"github.com/Ogstra/uade-bot/internal/discordhttp"
 )
 
 func TestRespondPostsNoBotAuthCallback(t *testing.T) {

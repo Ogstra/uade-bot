@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ogs/uade-bot/internal/shadow"
+	"github.com/Ogstra/uade-bot/internal/shadow"
 )
 
 type Config struct {

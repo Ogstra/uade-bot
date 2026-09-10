@@ -15,8 +15,8 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
 
-	"github.com/ogs/uade-bot/internal/dashboard"
-	"github.com/ogs/uade-bot/internal/discordhttp"
+	"github.com/Ogstra/uade-bot/internal/dashboard"
+	"github.com/Ogstra/uade-bot/internal/discordhttp"
 )
 
 const ephemeral = 1 << 6

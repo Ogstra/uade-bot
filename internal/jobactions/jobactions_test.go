@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ogs/uade-bot/internal/store"
+	"github.com/Ogstra/uade-bot/internal/store"
 )
 
 // openSeeded returns a fresh SQLite DB (store.Open's schema) seeded with two

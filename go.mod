@@ -1,4 +1,4 @@
-module github.com/ogs/uade-bot
+module github.com/Ogstra/uade-bot
 
 go 1.25
 

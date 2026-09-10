@@ -16,9 +16,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
-	"github.com/ogs/uade-bot/internal/store"
-	"github.com/ogs/uade-bot/internal/sysstats"
+	credentialcrypto "github.com/Ogstra/uade-bot/internal/crypto"
+	"github.com/Ogstra/uade-bot/internal/store"
+	"github.com/Ogstra/uade-bot/internal/sysstats"
 )
 
 func TestCredentialsActivationPreparesBeforePendingMaterialization(t *testing.T) {
@@ -167,6 +167,7 @@ func credentialsSubmit(user, username, password string) map[string]any {
 	}
 	return map[string]any{"type": 5, "member": map[string]any{"user": map[string]any{"id": user}}, "data": map[string]any{"custom_id": "credentials", "components": []any{field("uade_username", username), field("uade_password", password)}}}
 }
+
 // seedAdmin inserts a row directly into the admins table, standing in for a
 // grant made through /superadmin-agregar so tests can exercise the admin-*
 // gate (isAdmin) without going through the super-admin-only command path.

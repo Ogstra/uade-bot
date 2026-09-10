@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ogs/uade-bot/internal/store"
-	"github.com/ogs/uade-bot/internal/sysstats"
+	"github.com/Ogstra/uade-bot/internal/store"
+	"github.com/Ogstra/uade-bot/internal/sysstats"
 )
 
 func TestSnapshotProjectsSQLiteParityWithoutSecrets(t *testing.T) {

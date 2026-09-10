@@ -878,8 +878,8 @@ func TestRelinkFetchesInscripcionesPartialWhenShellIsEmpty(t *testing.T) {
 	setMicrosoftLoginHost(t, hostnameOf(msBase))
 
 	var (
-		gotValidarAjaxHeader  string
-		gotObtenerAjaxHeader  string
+		gotValidarAjaxHeader string
+		gotObtenerAjaxHeader string
 		obtenerInscripciones int
 	)
 

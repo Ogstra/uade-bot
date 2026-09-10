@@ -13,10 +13,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
-	"github.com/ogs/uade-bot/internal/sso"
-	"github.com/ogs/uade-bot/internal/sysstats"
-	"github.com/ogs/uade-bot/internal/uade"
+	credentialcrypto "github.com/Ogstra/uade-bot/internal/crypto"
+	"github.com/Ogstra/uade-bot/internal/sso"
+	"github.com/Ogstra/uade-bot/internal/sysstats"
+	"github.com/Ogstra/uade-bot/internal/uade"
 )
 
 const ephemeral = 1 << 6
@@ -101,8 +101,8 @@ type IdentityResolver interface {
 // `admins` table that only the super-admin can mutate via
 // /superadmin-agregar and /superadmin-eliminar. See isAdmin.
 type CommandDispatcher struct {
-	DB             *sql.DB
-	MasterKey      string
+	DB        *sql.DB
+	MasterKey string
 	// SuperAdminID is the fixed operator identity (UADE_SUPER_ADMIN_ID) that
 	// always satisfies isAdmin and is the only identity allowed to mutate the
 	// admins table via /superadmin-agregar and /superadmin-eliminar.
@@ -1119,6 +1119,7 @@ func csvValues(value string, upper bool) []string {
 	}
 	return out
 }
+
 // isAdmin is the sole authorization mechanism for the admin-* commands
 // (see CommandDispatcher's doc comment). userID satisfies it either by
 // being the fixed super-admin (SuperAdminID, compared exactly -- an empty

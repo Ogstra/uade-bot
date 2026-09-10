@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ogs/uade-bot/internal/jobactions"
+	"github.com/Ogstra/uade-bot/internal/jobactions"
 )
 
 const (

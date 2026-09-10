@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ogs/uade-bot/internal/store"
+	"github.com/Ogstra/uade-bot/internal/store"
 )
 
 var csrfPattern = regexp.MustCompile(`name="_csrf" value="([^"]+)"`)

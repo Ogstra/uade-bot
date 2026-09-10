@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ogs/uade-bot/internal/sysstats"
+	"github.com/Ogstra/uade-bot/internal/sysstats"
 )
 
 type SnapshotFunc func() (Snapshot, error)
@@ -480,6 +480,7 @@ func materiaName(db *sql.DB, code string) (*string, error) {
 	}
 	return &name, nil
 }
+
 // historyDisplayLimit is the number of deduplicated (real-change) history
 // entries shown to the user, applied AFTER dedupeHistory collapses
 // consecutive identical polls -- not a raw-row limit.

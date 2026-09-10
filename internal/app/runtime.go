@@ -17,12 +17,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	credentialcrypto "github.com/Ogstra/uade-bot/internal/crypto"
+	"github.com/Ogstra/uade-bot/internal/discordrest"
+	"github.com/Ogstra/uade-bot/internal/scheduler"
+	"github.com/Ogstra/uade-bot/internal/sso"
+	"github.com/Ogstra/uade-bot/internal/uade"
 	"github.com/disgoorg/disgo/discord"
-	credentialcrypto "github.com/ogs/uade-bot/internal/crypto"
-	"github.com/ogs/uade-bot/internal/discordrest"
-	"github.com/ogs/uade-bot/internal/scheduler"
-	"github.com/ogs/uade-bot/internal/sso"
-	"github.com/ogs/uade-bot/internal/uade"
 )
 
 type Runtime struct {

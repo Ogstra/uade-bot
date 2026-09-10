@@ -3,10 +3,10 @@ package main
 import (
 	"testing"
 
+	"github.com/Ogstra/uade-bot/internal/discordgateway"
+	"github.com/Ogstra/uade-bot/internal/discordhttp"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
-	"github.com/ogs/uade-bot/internal/discordgateway"
-	"github.com/ogs/uade-bot/internal/discordhttp"
 )
 
 // TestResolveSSOPortalURLDefaultsWhenUnset covers the "UADE_SSO_PORTAL_URL

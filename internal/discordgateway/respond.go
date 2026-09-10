@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/ogs/uade-bot/internal/discordhttp"
+	"github.com/Ogstra/uade-bot/internal/discordhttp"
 )
 
 // Respond posts an interaction callback response directly to Discord's REST

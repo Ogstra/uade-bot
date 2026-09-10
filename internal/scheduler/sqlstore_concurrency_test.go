@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ogs/uade-bot/internal/store"
+	"github.com/Ogstra/uade-bot/internal/store"
 )
 
 // TestSQLStoreOpenPinsSingleConnection is a fast regression guard for the

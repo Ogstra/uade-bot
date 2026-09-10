@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ogs/uade-bot/internal/shadow"
+	"github.com/Ogstra/uade-bot/internal/shadow"
 )
 
 // TestCollectReflectsShadowPrimitivesForOwnProcess compares Collect's

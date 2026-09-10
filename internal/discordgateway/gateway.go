@@ -6,7 +6,7 @@ import (
 	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/gateway"
 
-	"github.com/ogs/uade-bot/internal/discordhttp"
+	"github.com/Ogstra/uade-bot/internal/discordhttp"
 )
 
 // New boots a single Discord Gateway session that carries both presence and

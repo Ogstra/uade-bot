@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ogs/uade-bot/internal/uade"
+	"github.com/Ogstra/uade-bot/internal/uade"
 	_ "modernc.org/sqlite"
 )
 
