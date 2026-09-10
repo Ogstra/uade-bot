@@ -6,3 +6,6 @@ node_modules/
 *.log
 .claude/settings.local.json
 data/
+/uade-bot
+uade-bot-go.tar.gz
+uade-bot-go.tar.gz.sha256

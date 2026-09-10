@@ -1,50 +1,48 @@
 # UADE Bot
 
-Bot de Discord que monitorea vacantes de materias de UADE y puede exponer un dashboard web de solo lectura para el operador.
+Bot de Discord que monitorea el sistema de inscripciones de UADE y avisa cuando se libera una vacante en una materia. Cada usuario busca con su propia cuenta de UADE; las credenciales se guardan cifradas (AES-256-GCM) y nunca se muestran ni se loguean.
 
-## Dashboard web local
+Incluye un dashboard web local de solo lectura para el operador.
 
-El dashboard corre dentro del mismo proceso Go que el bot y reutiliza su conexión SQLite. Configuralo con estas variables en tu `.env` local o gestor de secretos:
+## Stack
 
-```dotenv
-DASHBOARD_ADDR=:3000
-DASHBOARD_USERNAME=operator
-DASHBOARD_PASSWORD=
-DASHBOARD_SESSION_SECRET=
-```
+Go (runtime operativo) + SQLite. `src/` es la implementación Node original, conservada solo como oráculo para pruebas diferenciales.
 
-El oráculo histórico Node conserva los nombres `DASHBOARD_ENABLED=true` y
-`DASHBOARD_PORT=3000` sólo para ejecutar sus pruebas diferenciales; el deploy
-operativo Go usa `DASHBOARD_ADDR`.
+## Uso en Discord
 
-Completá los dos campos vacíos solamente en tu archivo local o gestor de secretos: usá una password larga y única, y un secreto de sesión aleatorio de al menos 32 caracteres.
+| Comando | Qué hace |
+|---|---|
+| `/credenciales` | Carga o rota tus credenciales de UADE (por DM) |
+| `/buscar` | Crea una búsqueda por materia, turno, días y sedes |
+| `/estado` | Lista tus búsquedas activas |
+| `/pausar`, `/reanudar`, `/detener` | Controlan una búsqueda |
+| `/admin-*`, `/superadmin-*` | Gestión de operadores y del servicio |
 
-`DASHBOARD_ADDR` determina el puerto HTTP. Después de iniciar el bot, abrí `http://127.0.0.1:3000/login` y limitá el puerto con el firewall.
-
-Los valores `admin` / `admin` son defaults solo para desarrollo. El proceso emite un warning seguro si siguen activos, pero no bloquea el arranque. Cambiá siempre `DASHBOARD_USERNAME` y `DASHBOARD_PASSWORD` antes de un uso compartido. Configurá también un `DASHBOARD_SESSION_SECRET` aleatorio y persistente; si se omite, las sesiones se invalidan cada vez que reinicia el proceso.
-
-El dashboard y su endpoint JSON usan sesiones autenticadas, respuestas `no-store` y no muestran credenciales de UADE ni secretos.
-
-La implementación Go recibe slash commands, modal submits y autocomplete a través de una sesión de Discord Gateway saliente (WebSocket) y registra los 12 slash commands mediante el endpoint global de Discord. Requiere `DISCORD_BOT_TOKEN` y `DISCORD_CLIENT_ID`; no usa una lista de servidores ni `DISCORD_GUILD_ID`. Este transporte no necesita ningún puerto público entrante: el bot abre la conexión Gateway hacia Discord, por lo que funciona igual si el VPS solo es accesible localmente o vía WireGuard (decisiones D-19/D-20/D-21 del amendment de fase 03.3).
-
-Si Discord muestra cada comando dos veces, la causa es la coexistencia de las definiciones globales actuales con copias guild-scoped antiguas de la misma aplicación. Reiniciá una vez el proceso Go: cuando el Gateway confirma que terminó de cargar todas las guilds, el boot vuelve a publicar las 12 definiciones globales y reemplaza por `[]` únicamente los comandos guild-scoped bajo el `DISCORD_CLIENT_ID` actual. La convergencia es idempotente y no afecta comandos de otros bots. La interfaz de Discord puede tardar unos minutos en reflejar la limpieza. No ejecutes `npm run discord:register`: Node queda sólo como oráculo histórico y no participa del registro operativo.
-
-## Límite de despliegue
-
-Esta fase sirve HTTP para desarrollo en una red confiable. No expongas el puerto directamente a Internet. TLS/HTTPS, HSTS, certificados y la configuración de un proxy inverso pertenecen a la Fase 4 de despliegue. Hasta completar esa topología, mantené `trust proxy` deshabilitado y restringí el acceso con red local o firewall.
-
-## Comandos
+## Correr local
 
 ```sh
+cp .env.example .env    # completar DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, CREDENTIALS_MASTER_KEY, DASHBOARD_*
 go test ./...
-go vet ./...
-docker compose -f docker-compose.go.yml build uade-go
-./deploy.sh
+docker compose -f docker-compose.go.yml up -d --build
 ./smoke-test.sh
 ```
 
-Node se conserva únicamente como oráculo histórico para pruebas diferenciales;
-no se empaqueta ni forma parte del rollback. El rollback operativo es siempre a
-un digest previo de la imagen Go mediante `rollback.sh`.
+Genera los secretos con `openssl rand -hex 32`. `CREDENTIALS_MASTER_KEY` debe ser de 64 caracteres hex.
 
-Las demás variables requeridas y sus comentarios seguros están en `.env.example`. Nunca confirmes un `.env` real, tokens, passwords ni claves de cifrado en Git.
+Dashboard en `http://127.0.0.1:3000/login`.
+
+## Deploy
+
+`./deploy.sh` (Docker Compose) y `PREVIOUS_GO_IMAGE=... ./rollback.sh` para volver a un digest previo. Detalles en [deploy/UPDATE_VM.md](deploy/UPDATE_VM.md).
+
+El bot se conecta al Gateway de Discord de forma saliente: no requiere puerto público entrante.
+
+## Seguridad
+
+- No expongas el puerto del dashboard a Internet: es HTTP plano, pensado para red local o detrás de un proxy/firewall con TLS.
+- Nunca commitees un `.env` real, tokens, passwords ni claves de cifrado.
+- Quien tenga acceso root al host donde corre el bot puede, técnicamente, acceder a las credenciales descifradas en memoria. El código es abierto justamente para que eso sea auditable.
+
+## Licencia
+
+MIT — ver [LICENSE](LICENSE).
