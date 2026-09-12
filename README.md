@@ -8,7 +8,7 @@ Incluye un dashboard web local de solo lectura para el operador.
 
 | Comando | Qué hace |
 |---|---|
-| `/credenciales` | Carga o rota tus credenciales de UADE (por DM) |
+| `/credenciales` | Carga o rota tus credenciales de UADE |
 | `/buscar` | Crea una búsqueda por materia, turno, días y sedes |
 | `/estado` | Lista tus búsquedas activas |
 | `/pausar`, `/reanudar`, `/detener` | Controlan una búsqueda |
