@@ -1,0 +1,63 @@
+#!/sbin/openrc-run
+# Servicio OpenRC para correr el bot en Alpine sin Docker.
+#
+# Instalar en /etc/init.d/uade-bot (chmod +x) y habilitar con:
+#   rc-update add uade-bot default
+#   rc-service uade-bot start
+#
+# El binario es estatico (CGO_ENABLED=0) y el SQLite del proyecto es puro Go,
+# asi que no necesita musl-dev ni ninguna libreria del sistema.
+
+name="uade-bot"
+description="UADE Bot - vacantes por Discord"
+
+: ${UADE_HOME:=/opt/uade-bot}
+: ${UADE_USER:=uade-bot}
+
+command="${UADE_HOME}/uade-bot"
+command_background=true
+command_user="${UADE_USER}:${UADE_USER}"
+directory="${UADE_HOME}"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.log"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	if [ ! -f "${UADE_HOME}/.env" ]; then
+		eerror "falta ${UADE_HOME}/.env"
+		return 1
+	fi
+
+	# Dos procesos del bot abren dos sesiones de Gateway contra Discord, y
+	# cada interaccion se responde dos veces mientras ambos compiten por la
+	# misma SQLite. Cualquier instancia previa -- arrancada a mano, huerfana
+	# de un deploy anterior o sobreviviente de un pidfile perdido -- muere
+	# antes de levantar esta.
+	for pid in $(pgrep -f "${command}" 2>/dev/null); do
+		[ "$pid" = "$$" ] && continue
+		einfo "matando instancia previa (pid ${pid})"
+		kill "$pid" 2>/dev/null || true
+	done
+	# Segunda pasada: lo que no se fue por las buenas en 5s se va por las malas.
+	i=0
+	while [ "$i" -lt 5 ] && pgrep -f "${command}" >/dev/null 2>&1; do
+		sleep 1
+		i=$((i + 1))
+	done
+	pkill -9 -f "${command}" 2>/dev/null || true
+
+	# El .env se carga acá y no via un archivo de entorno de OpenRC para que
+	# los valores queden en el proceso del bot y nunca en la linea de
+	# comandos ni en el log del servicio.
+	set -a
+	. "${UADE_HOME}/.env"
+	set +a
+
+	checkpath --directory --owner "${UADE_USER}:${UADE_USER}" --mode 0750 "${UADE_HOME}/data"
+	checkpath --file --owner "${UADE_USER}:${UADE_USER}" --mode 0640 "${output_log}"
+}
