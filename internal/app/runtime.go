@@ -250,12 +250,20 @@ func splitNotificationContent(payload, firstPrefix string) []string {
 }
 
 func notificationText(event scheduler.Event) string {
+	if event.Kind == "account_resumed" {
+		return "Las inscripciones de UADE volvieron a abrir. Tus búsquedas ya están corriendo de nuevo, no tenés que hacer nada."
+	}
 	if event.Kind == "account_pause" {
 		switch event.Reason {
 		case "needs_credentials":
 			return "Pausé tus búsquedas: UADE rechazó las credenciales. Actualizalas con /credenciales."
 		case "needs_new_start_url":
 			return "Pausé tus búsquedas: no pude renovar automáticamente tu link de inscripción (puede requerir verificación adicional de tu cuenta). Volvé a correr /credenciales para reintentarlo."
+		case "inscripciones_cerradas":
+			// Deliberately asks for nothing: during a closed period there is
+			// no action that would help, and the previous behavior (telling
+			// everyone to relink) was the bug this replaces.
+			return "UADE no tiene inscripciones abiertas en este momento, así que puse tus búsquedas en espera. Quedan guardadas y las reactivo sola cuando el período vuelva a abrir: te aviso ahí mismo."
 		default:
 			return "Pausé temporalmente tus búsquedas de UADE."
 		}
@@ -571,6 +579,16 @@ func (r *Runtime) poll(ctx context.Context, jobID, account string) (scheduler.Ou
 			if errors.Is(healErr, sso.ErrInvalidCredentials) {
 				return scheduler.Outcome{Code: "invalid_credentials"}, nil
 			}
+			// UADE is between enrollment periods: the portal rendered fine
+			// and this account is healthy, there is simply no enrollment to
+			// link to. Checked before the stale_start_url fallback below
+			// because that code path exists to tell the user to relink, and
+			// during a closed period there is nothing to relink to -- the
+			// account parks itself instead (NextBackoff) and resumes on its
+			// own once the period reopens.
+			if sso.EnrollmentClosed(healErr) {
+				return scheduler.Outcome{Code: "inscripciones_cerradas"}, nil
+			}
 			// Covers every other healStartURL failure mode, including
 			// sso.ErrMFARequired -- markNeedsManualStartURL (called inside
 			// healStartURL) already recorded the manual-action state; the
@@ -589,8 +607,16 @@ func (r *Runtime) poll(ctx context.Context, jobID, account string) (scheduler.Ou
 		return scheduler.Outcome{}, err
 	}
 	outcome := client.Search(ctx, credentials.UADEStartURL, credentials.UADEUsername, credentials.UADEPassword, uade.SearchFilters{MateriaCodigo: selected.MateriaCodigo, Ofrecimiento: selected.Ofrecimiento, Turno: selected.Turno, Dias: selected.Dias}, selected.SedesExcluidas)
+	code := string(outcome.Code)
+	if outcome.Code == uade.OutcomeStaleURL {
+		// Search infers staleness from the page it got back (no search form
+		// means no usable link), which is also exactly what a closed
+		// enrollment period looks like from here. Only the portal itself can
+		// tell the two apart, so ask it before blaming the user's link.
+		code = r.resolveStaleOutcome(ctx, account, credentials)
+	}
 	converted := scheduler.Outcome{
-		Code:          string(outcome.Code),
+		Code:          code,
 		MateriaCodigo: selected.MateriaCodigo,
 		MateriaNombre: outcome.MateriaNombre,
 	}
@@ -598,6 +624,32 @@ func (r *Runtime) poll(ctx context.Context, jobID, account string) (scheduler.Ou
 		converted.Vacancies = append(converted.Vacancies, scheduler.Vacancy{Materia: vacancy.Materia, Turno: vacancy.Turno, Sede: vacancy.Sede, Horario: vacancy.Horario, Dias: strings.Split(vacancy.Dias, ","), Cupos: vacancy.Cupos})
 	}
 	return converted, nil
+}
+
+// resolveStaleOutcome decides what a Search that found no enrollment form
+// actually means, by relinking against the portal and reading which of three
+// worlds we are in:
+//
+//   - the portal has no enrollment period open -> inscripciones_cerradas, so
+//     the account parks itself quietly instead of nagging the user forever
+//   - the relink produced a fresh link -> the stored one had genuinely gone
+//     stale and is now repaired, so this cycle is just a transient failure
+//     (search_failed); pausing here would DM the user about a link that no
+//     longer has a problem
+//   - anything else -> stale_start_url, unchanged from before: the user has
+//     to intervene and the existing pause + DM path says so
+//
+// The relink costs a handful of requests and only runs on the stale branch,
+// which is rare outside a closed period -- and during a closed period the
+// account is parked on ClosedEnrollmentRetry, so this is not a hot path.
+func (r *Runtime) resolveStaleOutcome(ctx context.Context, account string, credentials credentialcrypto.Credentials) string {
+	if _, err := r.healStartURL(ctx, account, credentials); err != nil {
+		if sso.EnrollmentClosed(err) {
+			return "inscripciones_cerradas"
+		}
+		return "stale_start_url"
+	}
+	return "search_failed"
 }
 
 // parseStartURL validates raw against the same rules sso.Relink's own output

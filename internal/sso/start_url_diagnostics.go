@@ -120,8 +120,16 @@ func (e *startURLError) Error() string {
 	return ErrInvalidStartURL.Error()
 }
 
-func (e *startURLError) Unwrap() error {
-	return ErrInvalidStartURL
+// Unwrap reports ErrInvalidStartURL for every caller that already relies on
+// it, and additionally ErrEnrollmentClosed when the diagnostics show the
+// Asignaturas panel present but empty. Returning both lets the poll path
+// branch on the cause with plain errors.Is while every pre-existing
+// errors.Is(err, ErrInvalidStartURL) check keeps matching exactly as before.
+func (e *startURLError) Unwrap() []error {
+	if e.diag.AsignaturasPanelFound && e.diag.AsignaturasPanelLinkCount == 0 {
+		return []error{ErrInvalidStartURL, ErrEnrollmentClosed}
+	}
+	return []error{ErrInvalidStartURL}
 }
 
 // newInvalidStartURLError builds the enriched start-URL error Relink returns

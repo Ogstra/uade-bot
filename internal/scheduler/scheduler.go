@@ -477,7 +477,7 @@ func (s *Scheduler) handleOutcome(ctx context.Context, job Job, outcome Outcome)
 
 func signalFor(code string) string {
 	switch code {
-	case "invalid_credentials", "rate_limited", "stale_start_url":
+	case "invalid_credentials", "rate_limited", "stale_start_url", "inscripciones_cerradas":
 		return code
 	default:
 		return "success"
@@ -486,12 +486,27 @@ func signalFor(code string) string {
 
 var backoffSequence = [...]time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute}
 
+// ClosedEnrollmentRetry is how long an account sits parked while UADE runs no
+// enrollment period. It is deliberately flat rather than escalating like
+// backoffSequence: a closure lasts months, so an exponential curve would end
+// up checking once a week and miss the reopening by days. A fixed window
+// bounds that miss to the window itself while keeping the portal traffic
+// negligible.
+const ClosedEnrollmentRetry = 6 * time.Hour
+
 func NextBackoff(current AccountState, signal string, now time.Time) AccountState {
 	switch signal {
 	case "invalid_credentials":
 		return AccountState{Reason: "needs_credentials", LastPauseNotifiedReason: current.LastPauseNotifiedReason}
 	case "stale_start_url":
 		return AccountState{Reason: "needs_new_start_url", LastPauseNotifiedReason: current.LastPauseNotifiedReason}
+	case "inscripciones_cerradas":
+		// No BackoffAttempt: this is not a failure escalating toward
+		// something, it is a wait for UADE to open a period. Keeping the
+		// counter at zero also means a later real failure starts its own
+		// backoff from the first step instead of inheriting months of
+		// closed-period cycles.
+		return AccountState{Reason: "inscripciones_cerradas", PauseUntil: now.Add(ClosedEnrollmentRetry), LastPauseNotifiedReason: current.LastPauseNotifiedReason}
 	case "rate_limited":
 		attempt := 1
 		if current.Reason == "rate_limited" {
@@ -508,9 +523,23 @@ func NextBackoff(current AccountState, signal string, now time.Time) AccountStat
 }
 
 func (s *Scheduler) dispatchPause(ctx context.Context, job Job, previous, next AccountState) error {
-	actionable := next.Reason == "needs_credentials" || next.Reason == "needs_new_start_url"
-	if !actionable {
+	// Two kinds of pause are worth a message. The actionable ones ask the
+	// user to do something; inscripciones_cerradas asks for nothing and
+	// exists precisely so the account stops being told to fix an unfixable
+	// thing -- but staying silent while every search goes quiet for months
+	// reads as the bot being broken, so it is announced once too.
+	announce := next.Reason == "needs_credentials" || next.Reason == "needs_new_start_url" || next.Reason == "inscripciones_cerradas"
+	if !announce {
 		if previous.LastPauseNotifiedReason != "" && s.store != nil {
+			// Only a closure was framed as "this will come back", so only a
+			// closure earns the matching all-clear. Announcing the end of a
+			// pause nobody was told about would be the first the user ever
+			// heard of it.
+			if previous.LastPauseNotifiedReason == "inscripciones_cerradas" && next.Reason == "" && s.notifier != nil {
+				if err := s.notifier.Notify(ctx, Event{Kind: "account_resumed", Job: job, Reason: previous.LastPauseNotifiedReason}); err != nil {
+					return err
+				}
+			}
 			return s.store.MarkPauseNotification(ctx, job.Account, "")
 		}
 		return nil

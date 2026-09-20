@@ -165,6 +165,8 @@ func lastOutcomeLine(ctx context.Context, db *sql.DB, jobID int64, code string) 
 		return "credenciales invalidas"
 	case "search_failed":
 		return "fallo la busqueda"
+	case "inscripciones_cerradas":
+		return "inscripciones cerradas"
 	case "found":
 		var vacancyCount, totalCupos sql.NullInt64
 		err := db.QueryRowContext(ctx, `SELECT vacancy_count, total_cupos FROM poll_outcome_history WHERE job_id=? ORDER BY recorded_at DESC, id DESC LIMIT 1`, jobID).Scan(&vacancyCount, &totalCupos)

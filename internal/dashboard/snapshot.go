@@ -357,6 +357,8 @@ func safePause(v string) pauseCopy {
 		return pauseCopy{v, "Pausada: requiere un nuevo link", "Requiere un nuevo link"}
 	case "rate_limited":
 		return pauseCopy{v, "Pausada temporalmente por límite de UADE", "Límite de UADE"}
+	case "inscripciones_cerradas":
+		return pauseCopy{v, "En espera: UADE no tiene inscripciones abiertas", "Inscripciones cerradas"}
 	default:
 		return pauseCopy{"unknown", "Pausada: revisar el estado", "Revisar el estado"}
 	}
@@ -424,6 +426,10 @@ func outcomeCode(code string, count, total *int) Outcome {
 		return Outcome{code, "Limitada por UADE", "warning", count, total}
 	case "stale_start_url", "needs_new_start_url":
 		return Outcome{code, "Link de inscripción vencido", "warning", count, total}
+	case "inscripciones_cerradas":
+		// Neutral, not warning: nothing is wrong and nobody has to act. It
+		// reads next to "Sin vacantes" rather than next to the failures.
+		return Outcome{code, "Inscripciones cerradas", "neutral", count, total}
 	case "found":
 		return Outcome{code, "Vacantes encontradas", "healthy", count, total}
 	default:
