@@ -44,6 +44,8 @@ type discordSend struct {
 	content    string
 	nonce      string
 	components []discord.ContainerComponent
+	card       discordrest.Card
+	mention    string
 }
 
 func (f *fakeDiscordSender) SendDM(user, content, nonce string, components ...discord.ContainerComponent) error {
@@ -54,8 +56,28 @@ func (f *fakeDiscordSender) SendMention(channel, owner, content, nonce string, c
 	return f.send(notificationRouteChannel, channel, content, nonce, components)
 }
 
+// The carded senders record the same fields as the plain ones plus the card
+// itself, so existing delivery assertions keep reading `content` unchanged.
+// For the channel route the mention now travels outside the embed, and is
+// recorded separately rather than folded back into content -- a test that
+// wants to prove the ping survives should assert on it explicitly.
+func (f *fakeDiscordSender) SendDMCard(user string, card discordrest.Card, content, nonce string, components ...discord.ContainerComponent) error {
+	return f.sendCard(notificationRouteDM, user, card, "", content, nonce, components)
+}
+
+func (f *fakeDiscordSender) SendMentionCard(channel, owner string, card discordrest.Card, content, nonce string, components ...discord.ContainerComponent) error {
+	return f.sendCard(notificationRouteChannel, channel, card, "<@"+owner+">", content, nonce, components)
+}
+
+func (f *fakeDiscordSender) sendCard(route notificationRoute, target string, card discordrest.Card, mention, content, nonce string, components []discord.ContainerComponent) error {
+	return f.record(discordSend{target: target, content: content, nonce: nonce, components: components, card: card, mention: mention}, route)
+}
+
 func (f *fakeDiscordSender) send(route notificationRoute, target, content, nonce string, components []discord.ContainerComponent) error {
-	call := discordSend{target: target, content: content, nonce: nonce, components: components}
+	return f.record(discordSend{target: target, content: content, nonce: nonce, components: components}, route)
+}
+
+func (f *fakeDiscordSender) record(call discordSend, route notificationRoute) error {
 	var calls *[]discordSend
 	var failures map[int]error
 	if route == notificationRouteDM {
@@ -68,10 +90,10 @@ func (f *fakeDiscordSender) send(route notificationRoute, target, content, nonce
 		return err
 	}
 	if f.nonceExpiry != nil {
-		if expiry, ok := f.nonceExpiry[nonce]; ok && f.now.Before(expiry) {
+		if expiry, ok := f.nonceExpiry[call.nonce]; ok && f.now.Before(expiry) {
 			return nil
 		}
-		f.nonceExpiry[nonce] = f.now.Add(f.nonceTTL)
+		f.nonceExpiry[call.nonce] = f.now.Add(f.nonceTTL)
 	}
 	f.created = append(f.created, call)
 	return nil

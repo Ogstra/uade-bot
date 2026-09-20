@@ -50,6 +50,38 @@ type filters struct {
 type discordSender interface {
 	SendDM(user, content, nonce string, components ...discord.ContainerComponent) error
 	SendMention(channel, owner, content, nonce string, components ...discord.ContainerComponent) error
+	SendDMCard(user string, card discordrest.Card, content, nonce string, components ...discord.ContainerComponent) error
+	SendMentionCard(channel, owner string, card discordrest.Card, content, nonce string, components ...discord.ContainerComponent) error
+}
+
+// eventCard picks the frame an event arrives in. The color is the whole
+// point: a green card in a DM list is a vacancy worth acting on right now,
+// yellow is the bot waiting on UADE, red is something only the user can fix.
+func eventCard(event scheduler.Event) discordrest.Card {
+	switch event.Kind {
+	case "vacancy":
+		return discordrest.CardVacancy
+	case "account_resumed":
+		return discordrest.CardResumed
+	case "account_pause":
+		if event.Reason == "inscripciones_cerradas" {
+			return discordrest.CardPaused
+		}
+		return discordrest.CardAction
+	default:
+		return discordrest.CardInfo
+	}
+}
+
+// stripLeadingMention removes the "<@id>\n" prefix notificationMessages puts
+// at the head of a channel fragment. The mention has to move out of the
+// embed to still ping (Discord does not notify from embed bodies), and
+// SendMentionCard re-adds it as the message content. The fragment's stored
+// content -- and therefore its fingerprint and nonce -- is deliberately left
+// untouched, so switching to cards does not invalidate deliveries already
+// recorded against the old format.
+func stripLeadingMention(content, account string) string {
+	return strings.TrimPrefix(content, "<@"+account+">\n")
 }
 
 type notificationProgressStore interface {
@@ -115,10 +147,11 @@ func (n outboundNotifier) Notify(ctx context.Context, event scheduler.Event) err
 					continue
 				}
 				var sendErr error
+				card := eventCard(event)
 				if route == notificationRouteChannel {
-					sendErr = n.discord.SendMention(event.Job.Channel, event.Job.Account, message.Content, message.Nonce, message.Components...)
+					sendErr = n.discord.SendMentionCard(event.Job.Channel, event.Job.Account, card, stripLeadingMention(message.Content, event.Job.Account), message.Nonce, message.Components...)
 				} else {
-					sendErr = n.discord.SendDM(event.Job.Account, message.Content, message.Nonce, message.Components...)
+					sendErr = n.discord.SendDMCard(event.Job.Account, card, message.Content, message.Nonce, message.Components...)
 				}
 				if sendErr != nil {
 					log.Printf("notification delivery failed job=%s route=%s", event.Job.ID, route)
@@ -145,7 +178,7 @@ func (n outboundNotifier) Notify(ctx context.Context, event scheduler.Event) err
 		return errors.Join(routeErrors...)
 	}
 	content := notificationText(event)
-	return n.discord.SendDM(event.Job.Account, content, "")
+	return n.discord.SendDMCard(event.Job.Account, eventCard(event), content, "")
 }
 
 func notificationMessages(event scheduler.Event, route notificationRoute) []notificationMessage {

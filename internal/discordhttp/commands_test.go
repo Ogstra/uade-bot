@@ -1360,10 +1360,21 @@ func TestSubmitManualStartURLValidatesAndReactivatesAccount(t *testing.T) {
 	}
 }
 
+// Replies are embeds now, so the assertable text lives in the embed
+// description. Reading it here keeps every existing content assertion
+// meaningful without each test knowing how a card is built.
 func responseContent(response InteractionResponse) string {
 	data, _ := response.Data.(map[string]any)
-	value, _ := data["content"].(string)
-	return value
+	if value, ok := data["content"].(string); ok && value != "" {
+		return value
+	}
+	embeds, _ := data["embeds"].([]any)
+	if len(embeds) == 0 {
+		return ""
+	}
+	embed, _ := embeds[0].(map[string]any)
+	description, _ := embed["description"].(string)
+	return description
 }
 
 // TestDispatchInteractionMatchesDispatchForEquivalentPayload proves the

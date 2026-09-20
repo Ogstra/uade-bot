@@ -161,7 +161,7 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 		userID = in.User.ID
 	}
 	if userID == "" {
-		return message("No pude identificar tu cuenta."), nil
+		return card(cardDanger, "No pude identificar tu cuenta."), nil
 	}
 	// actorBlocked gates every interaction type (modal/autocomplete/
 	// component/command) alike, immediately after resolving the actor's own
@@ -247,12 +247,11 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 	}
 }
 
+// message is the neutral card every command reply defaults to. Call card()
+// directly with a different style when the reply is a confirmation or a
+// refusal and the color carries real information.
 func message(content string) InteractionResponse {
-	return InteractionResponse{Type: 4, Data: map[string]any{
-		"content":          content,
-		"flags":            ephemeral,
-		"allowed_mentions": map[string]any{"parse": []string{}},
-	}}
+	return card(cardInfo, content)
 }
 
 func credentialsModal() InteractionResponse {
@@ -309,7 +308,7 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 	creds.UADEUsername = values["uade_username"]
 	creds.UADEPassword = values["uade_password"]
 	if creds.UADEUsername == "" || creds.UADEPassword == "" || d.MasterKey == "" {
-		return message("Faltan datos para guardar las credenciales."), nil
+		return card(cardWarning, "Faltan datos para guardar las credenciales."), nil
 	}
 	encrypted, err := credentialcrypto.Encrypt(d.MasterKey, userID, creds)
 	if err != nil {
@@ -332,14 +331,14 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 	}
 	if d.PrepareAccount != nil {
 		go d.activateCredentials(userID)
-		return message("Credenciales guardadas de forma cifrada. La activación de tus búsquedas está en curso."), nil
+		return card(cardSuccess, "Credenciales guardadas de forma cifrada. La activación de tus búsquedas está en curso."), nil
 	}
 	if d.OnAccountReady != nil {
 		d.OnAccountReady(userID)
 	}
 	activation, jobErr := d.materializePendingSearchResult(ctx, userID)
 	if jobErr != nil {
-		return message("Credenciales guardadas, pero no pude validar la materia pendiente en UADE. No creé la búsqueda; volvé a intentar."), nil
+		return card(cardDanger, "Credenciales guardadas, pero no pude validar la materia pendiente en UADE. No creé la búsqueda; volvé a intentar."), nil
 	}
 	if activation.id != "" {
 		if activation.created && d.OnJobCreated != nil {
@@ -351,9 +350,9 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 		}
 		filters := parseJobFilters(rawFilters)
 		summary := filterSummaryBlock(label, filters.MateriaCodigo, lookupMateriaNombre(ctx, d.DB, filters.MateriaCodigo), filters.Turno, filters.Ofrecimiento, filters.Dias, filters.SedesExcluidas)
-		return message("Credenciales guardadas de forma cifrada. Ya creé la búsqueda que habías pedido con /buscar.\n\n" + summary), nil
+		return card(cardSuccess, "Credenciales guardadas de forma cifrada. Ya creé la búsqueda que habías pedido con /buscar.\n\n"+summary), nil
 	}
-	return message("Credenciales guardadas de forma cifrada. Todavía no creé ninguna búsqueda: volvé a usar /buscar para crearla."), nil
+	return card(cardSuccess, "Credenciales guardadas de forma cifrada. Todavía no creé ninguna búsqueda: volvé a usar /buscar para crearla."), nil
 }
 
 func (d CommandDispatcher) activateCredentials(userID string) {
@@ -503,7 +502,7 @@ func (d CommandDispatcher) submitManualStartURL(ctx context.Context, userID stri
 	values := modalValues(raw)
 	link := strings.TrimSpace(values["start_url"])
 	if !sso.ValidStartURL(link) {
-		return message("Ese link no parece válido. Tiene que ser el link completo de inscripcionespia.uade.edu.ar con param=."), nil
+		return card(cardWarning, "Ese link no parece válido. Tiene que ser el link completo de inscripcionespia.uade.edu.ar con param=."), nil
 	}
 	creds, err := d.readCredentials(ctx, userID)
 	if err != nil {
@@ -532,7 +531,7 @@ func (d CommandDispatcher) submitManualStartURL(ctx context.Context, userID stri
 	if d.OnJobsChanged != nil {
 		d.OnJobsChanged()
 	}
-	return message("Link guardado. Reactivé tus búsquedas."), nil
+	return card(cardSuccess, "Link guardado. Reactivé tus búsquedas."), nil
 }
 
 func modalValues(raw json.RawMessage) map[string]string {
@@ -555,11 +554,11 @@ func modalValues(raw json.RawMessage) map[string]string {
 func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildID string, options []Option) (InteractionResponse, error) {
 	code := strings.TrimSpace(stringOption(options, "cod_materia"))
 	if !materiaPattern.MatchString(code) {
-		return message("El código de materia no es válido (ejemplo: 3.1.050)."), nil
+		return card(cardWarning, "El código de materia no es válido (ejemplo: 3.1.050)."), nil
 	}
 	dias := filterValidDias(stringOption(options, "dias"))
 	if len(dias) == 0 {
-		return message("Los dias tienen que ser alguno de LU, MA, MI, JU, VI, SA."), nil
+		return card(cardWarning, "Los dias tienen que ser alguno de LU, MA, MI, JU, VI, SA."), nil
 	}
 	turno := stringOption(options, "turno")
 	ofrecimiento := stringOption(options, "ofrecimiento")
@@ -589,7 +588,7 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 		return InteractionResponse{}, err
 	}
 	if active >= 10 {
-		return message("Ya tenés 10 búsquedas activas o pausadas."), nil
+		return card(cardWarning, "Ya tenés 10 búsquedas activas o pausadas."), nil
 	}
 	if existing, err := d.findExistingJob(ctx, userID, guildID, code); err != nil {
 		return InteractionResponse{}, err
@@ -598,7 +597,7 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 	}
 	materiaName, resolveErr := d.resolveMateriaName(ctx, userID, code)
 	if resolveErr != nil {
-		return message("No pude validar esa materia en UADE. No creé la búsqueda; volvé a intentar."), nil
+		return card(cardDanger, "No pude validar esa materia en UADE. No creé la búsqueda; volvé a intentar."), nil
 	}
 	now := time.Now().UnixMilli()
 	tx, err := d.DB.BeginTx(ctx, nil)
@@ -630,7 +629,7 @@ func (d CommandDispatcher) buscar(ctx context.Context, userID, channelID, guildI
 		}
 	}
 	summary := filterSummaryBlock(label, code, materiaName, turno, ofrecimiento, dias, sedes)
-	return message(summary + "\n**Monitoreo:** activo"), nil
+	return card(cardSuccess, summary+"\n**Monitoreo:** activo"), nil
 }
 
 func (d CommandDispatcher) resolveMateriaName(ctx context.Context, userID, code string) (string, error) {
@@ -825,7 +824,7 @@ func (d CommandDispatcher) mutateJob(ctx context.Context, userID, action, idText
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
-		return message("No encontré esa búsqueda o no te pertenece."), nil
+		return card(cardDanger, "No encontré esa búsqueda o no te pertenece."), nil
 	}
 	if d.OnJobsChanged != nil {
 		d.OnJobsChanged()

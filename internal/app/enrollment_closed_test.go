@@ -10,6 +10,7 @@ import (
 	"time"
 
 	credentialcrypto "github.com/Ogstra/uade-bot/internal/crypto"
+	"github.com/Ogstra/uade-bot/internal/discordrest"
 	"github.com/Ogstra/uade-bot/internal/scheduler"
 	"github.com/Ogstra/uade-bot/internal/sso"
 )
@@ -196,5 +197,48 @@ func TestResumedNotificationAnnouncesSearchesAreLiveAgain(t *testing.T) {
 	// unsolicited DM this bot sends.
 	if strings.Contains(strings.ToLower(text), "vacante") {
 		t.Fatalf("reopening message looks like a vacancy alert: %s", text)
+	}
+}
+
+// The channel route pings the owner from the message body, not from inside
+// the embed: Discord does not fire a notification for a mention that only
+// exists in an embed, so a card-only message would look fine and silently
+// stop alerting.
+func TestChannelNotificationKeepsThePingOutsideTheCard(t *testing.T) {
+	fake := &fakeDiscordSender{}
+	notifier := outboundNotifier{discord: fake}
+
+	if err := notifier.Notify(context.Background(), vacancyNotificationEvent("channel-1")); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(fake.channelCalls) != 1 {
+		t.Fatalf("channel sends = %d, want 1", len(fake.channelCalls))
+	}
+	send := fake.channelCalls[0]
+	if send.mention != "<@user>" {
+		t.Fatalf("mention = %q, want <@user> outside the embed", send.mention)
+	}
+	if strings.Contains(send.content, "<@user>") {
+		t.Fatalf("mention stayed inside the card body: %q", send.content)
+	}
+}
+
+func TestCardColorMatchesWhatHappened(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		event scheduler.Event
+		want  discordrest.Card
+	}{
+		{"vacancy", scheduler.Event{Kind: "vacancy"}, discordrest.CardVacancy},
+		{"closed", scheduler.Event{Kind: "account_pause", Reason: "inscripciones_cerradas"}, discordrest.CardPaused},
+		{"needs the user", scheduler.Event{Kind: "account_pause", Reason: "needs_credentials"}, discordrest.CardAction},
+		{"reopened", scheduler.Event{Kind: "account_resumed"}, discordrest.CardResumed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := eventCard(tc.event); got != tc.want {
+				t.Fatalf("card = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
