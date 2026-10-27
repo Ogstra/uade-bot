@@ -1,7 +1,7 @@
 package sso
 
-// TestRelinkAgainstRealUADESite is the harness that executes the human
-// checkpoint of 03.3-17-PLAN.md against the real UADE/Microsoft sites. It
+// TestRelinkAgainstRealUADESite is the harness for a human checkpoint
+// against the real UADE/Microsoft sites. It
 // must NEVER run in CI -- it is skipped unless UADE_LIVE_SSO_TEST=true is
 // set explicitly, and even then it talks to real, non-test accounts.
 //
@@ -75,10 +75,7 @@ package sso
 // The fifth attempt returned inscribeteLinkCount=0 -- hypothesis A,
 // consistent with no enrollment window open at the time, not a bug. But
 // while reviewing that result, a REAL and separate bug surfaced: the
-// predecessor Node implementation (src/automation/sso-link.js, deleted by
-// commit 44c5e71 but recoverable via `git show 1d56530`) fixed live on
-// 2026-07-12 (commit 1d56530, confirmed in
-// src/automation/sso-relink-uat-checklist.md) that
+// earlier Node implementation had already fixed live on 2026-07-12 that
 // data-tipolink="InscripcionAsignatura" is NOT unique -- the MRI (Cursos
 // Regulares Intensivos) listing's link carries the exact same value and
 // sits earlier in the DOM, so an unscoped selector silently picks MRI's
@@ -116,7 +113,7 @@ func TestRelinkAgainstRealUADESite(t *testing.T) {
 	if os.Getenv("UADE_LIVE_SSO_TEST") != "true" {
 		t.Skip("set UADE_LIVE_SSO_TEST=true, UADE_USERNAME and UADE_PASSWORD " +
 			"(optionally UADE_SSO_PORTAL_URL, default https://inscripciones.uade.edu.ar/) " +
-			"to run this live checkpoint for 03.3-17-PLAN.md; skipped by default and never run in CI")
+			"to run this live checkpoint; skipped by default and never run in CI")
 	}
 
 	username := os.Getenv("UADE_USERNAME")

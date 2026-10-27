@@ -1,6 +1,6 @@
 //go:build windows
 
-package shadow
+package sysstats
 
 import (
 	"fmt"
@@ -9,11 +9,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// ProcessRSSBytes reads the working set size of an arbitrary process (not
-// necessarily the calling one), unlike residentBytes in rss_windows.go which
-// only ever calls GetProcessMemoryInfo against windows.CurrentProcess(). This
-// is the primitive cmd/rsscompare uses to measure two separately-spawned full
-// processes (the Go binary and node src/bot.js).
+// ProcessRSSBytes reads the working set size of an arbitrary process via
+// GetProcessMemoryInfo. Collect calls it for the bot's own pid.
 func ProcessRSSBytes(pid int) (uint64, error) {
 	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_VM_READ, false, uint32(pid))
 	if err != nil {

@@ -356,7 +356,7 @@ func escapeDiscordText(value string) string {
 	return replacer.Replace(value)
 }
 
-func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken, ssoPortalURL string, interval time.Duration, concurrency int, shadow bool) (*Runtime, error) {
+func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken, ssoPortalURL string, interval time.Duration, concurrency int) (*Runtime, error) {
 	if db == nil || masterKey == "" {
 		return nil, errors.New("runtime requires database and credentials master key")
 	}
@@ -365,8 +365,8 @@ func NewRuntime(parent context.Context, db *sql.DB, masterKey, discordToken, sso
 	}
 	ctx, cancel := context.WithCancel(parent)
 	store := scheduler.SQLStore{DB: db}
-	options := []scheduler.Option{scheduler.WithStore(store), scheduler.WithShadow(shadow)}
-	if discordToken != "" && !shadow {
+	options := []scheduler.Option{scheduler.WithStore(store)}
+	if discordToken != "" {
 		options = append(options, scheduler.WithNotifier(&scheduler.ThrottledNotifier{Next: outboundNotifier{discord: discordrest.New(discordToken), progress: store}, Delay: 250 * time.Millisecond}))
 	}
 	runtime := &Runtime{DB: db, MasterKey: masterKey, SSOPortalURL: ssoPortalURL, Scheduler: scheduler.New(concurrency, options...), ctx: ctx, cancel: cancel, interval: interval, relink: sso.Relink}
@@ -471,14 +471,6 @@ func (r *Runtime) JobCreated(id string) {
 	}()
 }
 
-func (r *Runtime) AccountReady(account string) {
-	go func() {
-		defer recoverGoroutine("runtime.AccountReady")
-		_ = r.PrepareAccount(r.ctx, account)
-		r.AccountActivated(account, "")
-	}()
-}
-
 // PrepareAccount completes the remote UADE relink before callers resolve a
 // pending materia. The caller owns a bounded context; shutdown is also folded
 // in so detached credential activation cannot outlive Runtime.Close.
@@ -512,13 +504,6 @@ func (r *Runtime) AccountActivated(account, excludeJobID string) {
 	r.pollAllActiveJobsExcept(r.ctx, account, excludeJobID)
 }
 
-// pollAllActiveJobs triggers an immediate poll for every active job of
-// account. Factored out of AccountReady so it can be reused unchanged after
-// attemptRelinkOnAccountReady runs first.
-func (r *Runtime) pollAllActiveJobs(ctx context.Context, account string) {
-	r.pollAllActiveJobsExcept(ctx, account, "")
-}
-
 func (r *Runtime) pollAllActiveJobsExcept(ctx context.Context, account, excludeJobID string) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT id FROM jobs WHERE discord_user_id=? AND status='active' ORDER BY id`, account)
 	if err != nil {
@@ -531,22 +516,6 @@ func (r *Runtime) pollAllActiveJobsExcept(ctx context.Context, account, excludeJ
 			r.Scheduler.PollNow(ctx, id)
 		}
 	}
-}
-
-// attemptRelinkOnAccountReady is a best-effort relink triggered right after
-// credentials are saved/rotated via the normal credentials modal. It always
-// runs inside the goroutine AccountReady already launches with
-// go func(){...}(), fully decoupled from the 2400ms interactionDeadline
-// enforced in internal/discordgateway/listeners.go for the Discord
-// interaction that triggered submitCredentials (see the response-deadline
-// race documented across 03.3-08/03.3-10). This is exactly why sso.Relink is
-// never called synchronously inside submitCredentials: an HTTP relink
-// against UADE/Microsoft can take several seconds, well past the
-// interaction's response deadline. If no credentials row exists yet, or
-// decryption fails, this is a silent no-op -- the first real poll's own
-// healStartURL call will retry.
-func (r *Runtime) attemptRelinkOnAccountReady(ctx context.Context, account string) {
-	_ = r.PrepareAccount(ctx, account)
 }
 
 func (r *Runtime) JobsChanged() {

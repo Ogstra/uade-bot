@@ -4,13 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/Ogstra/uade-bot/internal/shadow"
 )
 
 // TestCollectReflectsShadowPrimitivesForOwnProcess compares Collect's
-// output for the process's own pid against shadow.ProcessRSSBytes and
-// shadow.ProcessSwapBytes called directly, rather than against a
+// output for the process's own pid against ProcessRSSBytes and
+// ProcessSwapBytes called directly, rather than against a
 // hardcoded value, so this test is portable between Linux and Windows.
 // Byte-for-byte equality is not asserted: RSS/swap are live readings of a
 // running process, and the test process's own memory can shift by a few KB
@@ -20,8 +18,8 @@ import (
 // must be within a generous relative tolerance of each other.
 func TestCollectReflectsShadowPrimitivesForOwnProcess(t *testing.T) {
 	pid := os.Getpid()
-	wantRSS, wantRSSErr := shadow.ProcessRSSBytes(pid)
-	wantSwap, wantSwapErr := shadow.ProcessSwapBytes(pid)
+	wantRSS, wantRSSErr := ProcessRSSBytes(pid)
+	wantSwap, wantSwapErr := ProcessSwapBytes(pid)
 
 	got := Collect(pid, "")
 

@@ -1,81 +1,57 @@
-# Actualizar UADE Bot Go en una VM
+# Actualizar UADE Bot en un servidor
 
-El runtime operativo es un único binario/contenedor Go. Node permanece en el
-repositorio únicamente como oráculo histórico de contratos y no se instala,
-empaqueta ni usa para rollback.
+El bot es un único binario Go estático. Se puede correr en un contenedor (Docker
+Compose) o directo sobre el sistema con un supervisor (OpenRC en Alpine, systemd en
+el resto).
 
 ## Configuración persistente
 
-- Variables: `/etc/uade-bot/uade-bot.env` o `.env` fuera de la release.
-- SQLite: `/var/lib/uade-bot/uade-bot.db` o un volumen `./data` persistente.
-- Conservar sin cambios `CREDENTIALS_MASTER_KEY` y la base durante deploy y rollback.
-- `UADE_RUNTIME_MODE=shadow` abre SQLite read-only y no registra comandos ni envía notificaciones.
-- `UADE_RUNTIME_MODE=active` exige `UADE_CUTOVER_ENABLED=true` y todos los gates de shadow/live.
-- `./data` debe pertenecer al UID/GID `65532` del contenedor distroless nonroot.
-  `./scripts/deploy.sh` ahora lo intenta automáticamente después de crear el directorio; si
-  el chown falla (Docker rootless o deploy sin sudo) hay que corregir la propiedad
-  a mano, porque el proceso no puede escribir un `./data` creado por el usuario SSH.
+- Variables: `.env` fuera de la release, o `/etc/uade-bot/uade-bot.env`.
+- Datos: el directorio de `UADE_DB_PATH` (por defecto `./data`). Ahí viven la base
+  SQLite y, si está activo el inicio de sesión con Microsoft, `data/entra/` con un
+  archivo cifrado por usuario.
+- Conservar sin cambios `CREDENTIALS_MASTER_KEY` y `ENTRA_TOKEN_SECRET` durante deploy
+  y rollback. Sin la primera no se descifran las credenciales de UADE; sin la segunda
+  no se descifran las sesiones de Microsoft y cada usuario tiene que volver a entrar.
 
-### `UADE_RUNTIME_MODE` vacío no es neutro
+### `unable to open database file: out of memory (14)`
 
-`UADE_RUNTIME_MODE` vacío o ausente hace default a `shadow` (ver `cmd/uade-bot/main.go`).
-Esa es la trampa concreta que rompió un deploy real: la variable estaba presente en
-el `.env`, pero vacía.
+Es la forma en que `modernc.org/sqlite` reporta `SQLITE_CANTOPEN`. **No es falta de
+memoria**: el proceso no puede crear o escribir la base. Casi siempre es que el
+directorio de datos lo creó otro usuario.
 
-`shadow` exige una DB **preexistente** en `UADE_DB_PATH`, porque abre con `mode=ro` e
-`immutable=1` y por diseño no puede crear el archivo. Un deploy Go-only limpio, sin DB
-copiada, no puede arrancar en `shadow`.
+- Docker: `./data` tiene que pertenecer al UID/GID `65532` del contenedor distroless
+  nonroot. `./scripts/deploy.sh` lo intenta solo; si falla (Docker rootless, sin sudo),
+  `chown -R 65532:65532 data`.
+- OpenRC/systemd: `data/` tiene que pertenecer al usuario del servicio.
 
-Ese fallo se manifiesta como:
-
-```
-unable to open database file: out of memory (14)
-```
-
-Es la forma en que `modernc.org/sqlite` reporta `SQLITE_CANTOPEN`. **NO es falta de
-memoria, NO es un problema de permisos y NO es un problema de Docker** — no hay que
-gastar rondas de diagnóstico en RAM, UID, SELinux ni filesystem. El síntoma visible es
-restart loop del contenedor más `/healthz` inalcanzable.
-
-### Deploy Go-only (standalone)
-
-Un deploy sin Node corriendo y sin baseline de comparación necesita las tres variables
-seteadas juntas:
-
-```dotenv
-UADE_RUNTIME_MODE=active
-UADE_CUTOVER_ENABLED=true
-UADE_STANDALONE=true
-```
-
-`UADE_STANDALONE=true` saltea la verificación del reporte shadow contra la baseline Node
-(que en este deploy no existe). Es opt-in explícito: solo el valor exacto `true` lo
-activa, y cada arranque que lo usa deja una línea de log auditable que nombra
-`UADE_STANDALONE` y declara que esa verificación no se ejecutó.
-
-Los tres flags son necesarios: `UADE_STANDALONE` por sí solo no habilita `active`, que
-sigue exigiendo `UADE_CUTOVER_ENABLED=true`.
-
-## Deploy con Docker Compose
+## Docker Compose
 
 ```sh
-docker compose -f compose.yaml build uade-go
 ./scripts/deploy.sh
-docker compose -f compose.yaml ps
 ./scripts/smoke-test.sh
 ```
 
-Además del smoke HTTP, el corte requiere verificar manualmente presencia online,
-los 12 comandos globales, una interacción firmada y un poll UADE real. No habilitar
-active si falta cualquiera de esos checkpoints.
+### Rollback
 
-## Rollback Go-only
-
-Registrar antes del deploy el digest de la imagen Go activa. Para volver:
+Registrar antes del deploy el digest de la imagen activa. Para volver:
 
 ```sh
 PREVIOUS_GO_IMAGE=repo/uade-bot@sha256:... ./scripts/rollback.sh
 ```
 
-El script recrea únicamente `uade-go` con la imagen Go anterior y ejecuta el
-smoke. No reemplaza la DB ni recurre a Node.
+## Alpine sin Docker (OpenRC)
+
+El binario es estático (`CGO_ENABLED=0`, y el SQLite del proyecto es puro Go), así que
+se compila en otra máquina y se copia: el servidor no necesita toolchain.
+
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o uade-bot ./cmd/uade-bot
+```
+
+Instalar [uade-bot.openrc.example](uade-bot.openrc.example) como `/etc/init.d/uade-bot`
+y habilitarlo con `rc-update add uade-bot default`. Su `start_pre` mata cualquier
+instancia previa antes de arrancar: dos procesos abren dos sesiones de Gateway y
+responden cada comando dos veces.
+
+Para systemd hay un unit equivalente en [uade-bot.service.example](uade-bot.service.example).

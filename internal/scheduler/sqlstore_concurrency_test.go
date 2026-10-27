@@ -13,7 +13,7 @@ import (
 )
 
 // TestSQLStoreOpenPinsSingleConnection is a fast regression guard for the
-// nested-sqlite-tx-scheduler bug (see .planning/debug/resolved/): production
+// nested-transaction bug: production
 // hit "SQL logic error: cannot start a transaction within a transaction"
 // on every scheduler tick because store.Open used database/sql's default
 // unbounded connection pool. A concurrent reader holding a SHARED lock could

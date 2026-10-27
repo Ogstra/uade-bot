@@ -67,18 +67,14 @@ func GlobalCommands() []globalCommand {
 	}
 }
 
-func RegisterGlobal(ctx context.Context, client *http.Client, apiBase, token, applicationID string) error {
-	return convergeCommands(ctx, client, apiBase, token, applicationID, nil, false)
-}
-
 // ConvergeCommands atomically replaces the application's global command set,
 // then clears only this same application's guild-scoped sets. Guild IDs are
 // normalized so reconnect/retry calls are deterministic and idempotent.
 func ConvergeCommands(ctx context.Context, client *http.Client, apiBase, token, applicationID string, guildIDs []string) error {
-	return convergeCommands(ctx, client, apiBase, token, applicationID, guildIDs, true)
+	return convergeCommands(ctx, client, apiBase, token, applicationID, guildIDs)
 }
 
-func convergeCommands(ctx context.Context, client *http.Client, apiBase, token, applicationID string, guildIDs []string, cleanup bool) error {
+func convergeCommands(ctx context.Context, client *http.Client, apiBase, token, applicationID string, guildIDs []string) error {
 	if applicationID == "" || token == "" {
 		return fmt.Errorf("discord application id and bot token are required")
 	}
@@ -95,9 +91,6 @@ func convergeCommands(ctx context.Context, client *http.Client, apiBase, token, 
 	endpoint := apiBase + "/applications/" + applicationID + "/commands"
 	if err := putCommandSet(ctx, client, endpoint, token, body, "global"); err != nil {
 		return err
-	}
-	if !cleanup {
-		return nil
 	}
 	unique := make(map[string]struct{}, len(guildIDs))
 	for _, id := range guildIDs {

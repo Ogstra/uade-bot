@@ -1,6 +1,6 @@
 //go:build linux || windows
 
-package shadow
+package sysstats
 
 import (
 	"os"

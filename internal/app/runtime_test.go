@@ -643,9 +643,8 @@ func TestOutboundNotifierAccountPauseHasNoComponents(t *testing.T) {
 
 // TestRecoverGoroutineConvertsPanicToLogInsteadOfCrashing proves recoverGoroutine
 // contains a panic to the goroutine it runs in instead of crashing the process
-// (CR-01 in 03.3-REVIEW.md), AND that it never leaks the arbitrary panic value
-// into the log (T-03.3-13-01 / GO-02 / D-06). Start/JobCreated/AccountReady/
-// JobsChanged all defer recoverGoroutine as their first statement (safeTick for
+// AND that it never leaks the arbitrary panic value into the log.
+// Start/JobCreated/JobsChanged all defer recoverGoroutine as their first statement (safeTick for
 // Start's ticker case), so this isolated goroutine reproduces the same recover
 // pattern they rely on, with a sentinel that simulates a leaked UADE password,
 // Discord token, and start-URL query param.
@@ -862,7 +861,7 @@ func readFixture(t *testing.T, name string) []byte {
 const testHealedStartURL = "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx?param=eyJhbGciOiJI"
 
 // TestPollHealsStaleStartURLViaRelinkAndCompletesSearch covers the
-// auto-sanación behavior from 03.3-15-PLAN.md: a poll() whose stored start
+// auto-sanación behavior: a poll() whose stored start
 // URL is invalid, with Runtime.relink substituted by a fake returning a
 // valid sso.Result, persists the new (encrypted) start URL and completes the
 // search using that link instead of falling back to stale_start_url.
@@ -893,7 +892,7 @@ func TestPollPreservesMateriaAfterHealingStaleStartURL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
+	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -932,7 +931,7 @@ func TestPollPreservesMateriaAfterHealingStaleStartURL(t *testing.T) {
 }
 
 // TestPollMarksNeedsManualStartURLAndFallsBackToStaleOnMFA covers the second
-// auto-sanación edge from 03.3-15-PLAN.md: a poll() whose Runtime.relink fake
+// auto-sanación edge: a poll() whose Runtime.relink fake
 // returns sso.ErrMFARequired falls back to stale_start_url AND leaves
 // pause_reason='needs_new_start_url' on the users row (via
 // markNeedsManualStartURL), so the pause DM and /credenciales both reflect
@@ -943,7 +942,7 @@ func TestPollMarksNeedsManualStartURLAndFallsBackToStaleOnMFA(t *testing.T) {
 	seedRuntimeAccount(t, db, account, "u", "p", "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx")
 	jobID := seedRuntimeJob(t, db, account, `{"materiaCodigo":"3.1.050","ofrecimiento":"curricular","turno":"mañana","dias":["LU"]}`)
 
-	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
+	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -970,8 +969,7 @@ func TestPollMarksNeedsManualStartURLAndFallsBackToStaleOnMFA(t *testing.T) {
 }
 
 // TestPollMarksNeedsCredentialsAndReturnsInvalidCredentialsOnWrongPassword is
-// the regression test for
-// .planning/debug/resolved/relink-mfa-vs-wrong-password.md: a poll() whose
+// the regression test for telling MFA apart from a wrong password: a poll() whose
 // Runtime.relink fake returns sso.ErrInvalidCredentials (Microsoft rejected
 // the password outright, not MFA) must return
 // Outcome.Code="invalid_credentials" -- the SAME code the normal (non-relink)
@@ -988,7 +986,7 @@ func TestPollMarksNeedsCredentialsAndReturnsInvalidCredentialsOnWrongPassword(t 
 	seedRuntimeAccount(t, db, account, "u", "p", "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx")
 	jobID := seedRuntimeJob(t, db, account, `{"materiaCodigo":"3.1.050","ofrecimiento":"curricular","turno":"mañana","dias":["LU"]}`)
 
-	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
+	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1014,20 +1012,16 @@ func TestPollMarksNeedsCredentialsAndReturnsInvalidCredentialsOnWrongPassword(t 
 	}
 }
 
-// TestAttemptRelinkOnAccountReadyPersistsHealedStartURL calls
-// attemptRelinkOnAccountReady directly (synchronously, same goroutine as the
-// test) instead of through AccountReady's own launched goroutine, so the
-// persistence assertion below has a real happens-before guarantee instead of
-// racing a background goroutine's DB write from the test's goroutine.
-// TestAccountReadyRunsRelinkInBackgroundWithoutBlockingCaller (below) proves
-// the actual non-blocking/background-goroutine behavior of AccountReady
-// itself.
-func TestAttemptRelinkOnAccountReadyPersistsHealedStartURL(t *testing.T) {
+// TestPrepareAccountPersistsHealedStartURL covers the production
+// post-credential path: a successful relink must persist the fresh start URL
+// so the very next poll uses it. Called synchronously, so the persistence
+// assertion has a real happens-before guarantee.
+func TestPrepareAccountPersistsHealedStartURL(t *testing.T) {
 	db := newTestRuntimeDB(t)
 	const account = "user-ready-sync"
 	seedRuntimeAccount(t, db, account, "u", "p", "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx")
 
-	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
+	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1036,56 +1030,11 @@ func TestAttemptRelinkOnAccountReadyPersistsHealedStartURL(t *testing.T) {
 		return sso.Result{StartURL: testHealedStartURL}, nil
 	}
 
-	runtime.attemptRelinkOnAccountReady(context.Background(), account)
+	if err := runtime.PrepareAccount(context.Background(), account); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := decryptRuntimeCredentials(t, db, account).UADEStartURL; got != testHealedStartURL {
 		t.Fatalf("healed start url not persisted: got %q want %q", got, testHealedStartURL)
 	}
-}
-
-// TestAccountReadyRunsRelinkInBackgroundWithoutBlockingCaller proves
-// AccountReady never makes its caller (submitCredentials, inside the
-// interaction handler) wait for an SSO relink to finish: the fake relink
-// blocks on a channel the test controls, and AccountReady must still return
-// to its caller immediately. Synchronization uses only channels/select+
-// time.After (same pattern as TestRecoverGoroutineConvertsPanicToLogInsteadOfCrashing),
-// never a sleep.
-func TestAccountReadyRunsRelinkInBackgroundWithoutBlockingCaller(t *testing.T) {
-	db := newTestRuntimeDB(t)
-	const account = "user-ready-async"
-	seedRuntimeAccount(t, db, account, "u", "p", "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx")
-
-	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer runtime.Close()
-
-	invoked := make(chan struct{})
-	release := make(chan struct{})
-	runtime.relink = func(context.Context, *http.Client, string, string, string) (sso.Result, error) {
-		close(invoked) // signals the fake relink before returning, as instructed by the plan
-		<-release
-		return sso.Result{StartURL: testHealedStartURL}, nil
-	}
-
-	callerReturned := make(chan struct{})
-	go func() {
-		runtime.AccountReady(account)
-		close(callerReturned)
-	}()
-
-	select {
-	case <-callerReturned:
-	case <-time.After(1 * time.Second):
-		t.Fatal("AccountReady did not return to its caller within 1s")
-	}
-
-	select {
-	case <-invoked:
-	case <-time.After(1 * time.Second):
-		t.Fatal("relink fake was not invoked in the background goroutine within 1s")
-	}
-
-	close(release)
 }

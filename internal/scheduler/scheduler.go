@@ -113,7 +113,6 @@ func WithClock(clock Clock) Option {
 }
 func WithStore(store Store) Option          { return func(s *Scheduler) { s.store = store } }
 func WithNotifier(notifier Notifier) Option { return func(s *Scheduler) { s.notifier = notifier } }
-func WithShadow(shadow bool) Option         { return func(s *Scheduler) { s.shadow = shadow } }
 
 // Scheduler selects one job per account on each tick, serializes work within
 // an account, and applies one global concurrency cap across overlapping ticks.
@@ -129,7 +128,6 @@ type Scheduler struct {
 	clock     Clock
 	store     Store
 	notifier  Notifier
-	shadow    bool
 	memory    map[string]AccountState
 	notifyMem map[string]NotificationState
 	wg        sync.WaitGroup
@@ -169,32 +167,10 @@ func (s *Scheduler) Add(job Job) bool {
 func (s *Scheduler) Accounts() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.jobs) }
 func (s *Scheduler) Jobs() int     { s.mu.Lock(); defer s.mu.Unlock(); return len(s.byID) }
 
-// Reconstruct reads active jobs from durable storage and registers each once.
-func (s *Scheduler) Reconstruct(ctx context.Context, factory func(PersistedJob) (Job, error)) (int, error) {
-	if s.store == nil {
-		return 0, errors.New("scheduler: store is required for reconstruction")
-	}
-	records, err := s.store.ActiveJobs(ctx)
-	if err != nil {
-		return 0, err
-	}
-	added := 0
-	for _, record := range records {
-		job, buildErr := factory(record)
-		if buildErr != nil {
-			return added, fmt.Errorf("reconstruct job %s: %w", record.ID, buildErr)
-		}
-		if s.Add(job) {
-			added++
-		}
-	}
-	return added, nil
-}
-
-// Reconcile makes the in-memory schedule match durable active jobs. It is safe
-// to call before every tick: unchanged jobs are retained, new jobs are added,
-// and stopped/paused jobs are removed so they cannot keep polling after a
-// command changed their durable status.
+// Reconcile makes the in-memory schedule match durable storage: active jobs
+// not yet scheduled are added (each exactly once, so it is safe at startup and
+// on every later change), and scheduled jobs no longer active are dropped.
+// It returns how many jobs were added.
 func (s *Scheduler) Reconcile(ctx context.Context, factory func(PersistedJob) (Job, error)) (int, error) {
 	if s.store == nil {
 		return 0, errors.New("scheduler: store is required for reconciliation")
@@ -445,9 +421,6 @@ func (s *Scheduler) finishAccount(account string, discardQueued bool) {
 }
 
 func (s *Scheduler) handleOutcome(ctx context.Context, job Job, outcome Outcome) error {
-	if s.shadow {
-		return nil
-	}
 	now := s.clock.Now()
 	if s.store != nil {
 		if err := s.store.SaveOutcome(ctx, job.ID, outcome, now); err != nil {

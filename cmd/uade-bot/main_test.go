@@ -10,7 +10,7 @@ import (
 )
 
 // TestResolveSSOPortalURLDefaultsWhenUnset covers the "UADE_SSO_PORTAL_URL
-// unset -> default host, starts normally" behavior from 03.3-15-PLAN.md.
+// unset -> default host, starts normally" behavior.
 func TestResolveSSOPortalURLDefaultsWhenUnset(t *testing.T) {
 	got, err := resolveSSOPortalURL("")
 	if err != nil {
@@ -78,5 +78,20 @@ func TestDispatcherWiringUsesLiveGatewayProjection(t *testing.T) {
 	projection.Observe(snowflake.ID(7), &discord.ResolvedMember{Member: discord.Member{Nick: &late}}, user)
 	if got := dispatcher.IdentityResolver.ResolveIdentity("7", "9"); got != late {
 		t.Fatalf("resolver captured snapshot: %q", got)
+	}
+}
+
+// The documented trap was an empty UADE_RUNTIME_MODE silently meaning shadow.
+// Empty now means a normal run; shadow itself is refused by name.
+func TestRuntimeModeAcceptsWorkingValuesAndRefusesShadow(t *testing.T) {
+	for _, ok := range []string{"", "active", "ACTIVE", " development "} {
+		if err := checkRuntimeMode(ok); err != nil {
+			t.Fatalf("checkRuntimeMode(%q) = %v, want accepted", ok, err)
+		}
+	}
+	for _, bad := range []string{"shadow", "Shadow", "prod"} {
+		if err := checkRuntimeMode(bad); err == nil {
+			t.Fatalf("checkRuntimeMode(%q) accepted", bad)
+		}
 	}
 }

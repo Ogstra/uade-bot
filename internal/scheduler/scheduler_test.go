@@ -469,24 +469,27 @@ func TestBackoffAndPauseUseInjectedClock(t *testing.T) {
 	}
 }
 
-func TestReconstructIsIdempotent(t *testing.T) {
+// Restart safety on the path the runtime actually uses: reconciling the same
+// durable rows twice adds them once, and a fresh process reconciles every row
+// exactly once without duplicating anything in the store.
+func TestReconcileIsIdempotentAcrossRestart(t *testing.T) {
 	store := newMemoryStore()
 	store.active = []PersistedJob{{Account: "a", ID: "1"}, {Account: "a", ID: "2"}, {Account: "b", ID: "3"}}
 	factory := func(record PersistedJob) (Job, error) {
 		return Job{Account: record.Account, ID: record.ID, Run: outcomeRun("no_vacancies")}, nil
 	}
 	s := New(1, WithStore(store))
-	added, err := s.Reconstruct(context.Background(), factory)
+	added, err := s.Reconcile(context.Background(), factory)
 	if err != nil || added != 3 {
 		t.Fatalf("first added=%d err=%v", added, err)
 	}
-	added, err = s.Reconstruct(context.Background(), factory)
+	added, err = s.Reconcile(context.Background(), factory)
 	if err != nil || added != 0 || s.Jobs() != 3 {
 		t.Fatalf("repeat added=%d jobs=%d err=%v", added, s.Jobs(), err)
 	}
 	// A new process reconstructs the same durable rows once, without DB duplication.
 	restarted := New(1, WithStore(store))
-	added, err = restarted.Reconstruct(context.Background(), factory)
+	added, err = restarted.Reconcile(context.Background(), factory)
 	if err != nil || added != 3 || len(store.active) != 3 {
 		t.Fatalf("restart added=%d rows=%d err=%v", added, len(store.active), err)
 	}
@@ -638,21 +641,6 @@ func TestNotificationSuccessfulDeliveryCommitsOnce(t *testing.T) {
 	}
 	if notifier.count() != 1 || store.commits != 1 {
 		t.Fatalf("notify=%d commits=%d, want one each", notifier.count(), store.commits)
-	}
-}
-
-func TestShadowModeNeverWritesOrNotifies(t *testing.T) {
-	store := newMemoryStore()
-	notifier := &recordingNotifier{}
-	s := New(1, WithStore(store), WithNotifier(notifier), WithShadow(true))
-	s.Add(Job{Account: "a", ID: "1", Run: func(context.Context) (Outcome, error) {
-		return Outcome{Code: "found", Vacancies: []Vacancy{{Cupos: 1}}}, nil
-	}})
-	if err := s.RunOnce(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if store.writes != 0 || notifier.count() != 0 {
-		t.Fatalf("shadow writes=%d notifications=%d", store.writes, notifier.count())
 	}
 }
 

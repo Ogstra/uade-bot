@@ -26,7 +26,7 @@ func TestExtractAndPostback(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	body, e := c.Postback(context.Background(), "/", s, map[string]string{"go": "1"})
+	body, e := c.PostbackWithCredentials(context.Background(), "/", s, map[string]string{"go": "1"}, "", "")
 	if e != nil || body != "ok" {
 		t.Fatalf("%q %v", body, e)
 	}

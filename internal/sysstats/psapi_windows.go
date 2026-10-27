@@ -1,13 +1,11 @@
 //go:build windows
 
-package shadow
+package sysstats
 
-import (
-	"unsafe"
+import "golang.org/x/sys/windows"
 
-	"golang.org/x/sys/windows"
-)
-
+// processMemoryCounters mirrors PROCESS_MEMORY_COUNTERS from psapi.h, the
+// struct GetProcessMemoryInfo fills in for ProcessRSSBytes.
 type processMemoryCounters struct {
 	cb                         uint32
 	pageFaultCount             uint32
@@ -21,12 +19,3 @@ type processMemoryCounters struct {
 }
 
 var getProcessMemoryInfo = windows.NewLazySystemDLL("psapi.dll").NewProc("GetProcessMemoryInfo")
-
-func residentBytes() uint64 {
-	counters := processMemoryCounters{cb: uint32(unsafe.Sizeof(processMemoryCounters{}))}
-	ok, _, _ := getProcessMemoryInfo.Call(uintptr(windows.CurrentProcess()), uintptr(unsafe.Pointer(&counters)), uintptr(counters.cb))
-	if ok == 0 {
-		return 0
-	}
-	return uint64(counters.workingSet)
-}

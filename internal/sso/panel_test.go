@@ -1,8 +1,7 @@
 package sso
 
-// The 4 subtests below are the regression coverage for the real production
-// bug fixed live in Node (commit 1d56530, confirmed live 2026-07-12, see
-// src/automation/sso-relink-uat-checklist.md): data-tipolink=
+// The 4 subtests below are the regression coverage for a real production
+// bug, confirmed live on 2026-07-12: data-tipolink=
 // "InscripcionAsignatura" is NOT unique to the real Asignaturas listing --
 // UADE's MRI (Cursos Regulares Intensivos) listing carries the exact same
 // value and sits EARLIER in the DOM, so a search unscoped by panel silently
@@ -108,7 +107,7 @@ func TestExtractStartURL(t *testing.T) {
 			t.Fatalf("extractStartURL error: %v", err)
 		}
 		if got == mriDecoyLinkID {
-			t.Fatalf("got the MRI panel's link %q, want the Asignaturas panel's link %q -- regression of the real production bug (commit 1d56530)", got, asignaturasLinkID)
+			t.Fatalf("got the MRI panel's link %q, want the Asignaturas panel's link %q -- regression of the real MRI-panel production bug", got, asignaturasLinkID)
 		}
 		if got != asignaturasLinkID {
 			t.Fatalf("got %q, want %q", got, asignaturasLinkID)

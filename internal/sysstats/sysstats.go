@@ -8,8 +8,6 @@ package sysstats
 import (
 	"fmt"
 	"os"
-
-	"github.com/Ogstra/uade-bot/internal/shadow"
 )
 
 // Stats holds every metric Collect can produce, each with its own
@@ -25,17 +23,17 @@ type Stats struct {
 	DBSizeAvailable bool
 }
 
-// Collect reads pid's resident set size and swap usage via internal/shadow,
+// Collect reads pid's resident set size and swap usage via ProcessRSSBytes/ProcessSwapBytes,
 // and dbPath's file size via os.Stat when dbPath is non-empty. Each metric's
 // Available flag is only set to true when its underlying read succeeded --
 // a failure on one metric never prevents the others from being populated.
 func Collect(pid int, dbPath string) Stats {
 	var out Stats
-	if rss, err := shadow.ProcessRSSBytes(pid); err == nil {
+	if rss, err := ProcessRSSBytes(pid); err == nil {
 		out.RSSBytes = rss
 		out.RSSAvailable = true
 	}
-	if swap, err := shadow.ProcessSwapBytes(pid); err == nil {
+	if swap, err := ProcessSwapBytes(pid); err == nil {
 		out.SwapBytes = swap
 		out.SwapAvailable = true
 	}

@@ -1,6 +1,6 @@
 //go:build windows
 
-package shadow
+package sysstats
 
 import (
 	"os"

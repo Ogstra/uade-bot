@@ -113,7 +113,7 @@ func TestPendingReplacementDuringResolutionRetriesCurrentVersion(t *testing.T) {
 		return code, nil
 	}
 	done := make(chan error, 1)
-	go func() { _, err := d.materializePendingSearch(context.Background(), "pending-cas"); done <- err }()
+	go func() { _, err := d.materializePendingSearchResult(context.Background(), "pending-cas"); done <- err }()
 	<-started
 	if err := d.savePendingSearch(context.Background(), "pending-cas", "c", "g", "second", secondJSON); err != nil {
 		t.Fatal(err)
@@ -633,7 +633,7 @@ func TestRegisterGlobalUsesOnlyApplicationGlobalEndpointAndRetries429(t *testing
 		w.WriteHeader(200)
 	}))
 	defer server.Close()
-	if err := RegisterGlobal(context.Background(), server.Client(), server.URL, "token", "app"); err != nil {
+	if err := ConvergeCommands(context.Background(), server.Client(), server.URL, "token", "app", nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -1274,8 +1274,8 @@ func TestCredencialesShowsManualLinkModalWhenAccountNeedsNewStartURL(t *testing.
 }
 
 // TestCredencialesShowsNormalModalWhenAccountNeedsCredentials is the
-// confirmatory end-to-end regression test for
-// .planning/debug/resolved/relink-mfa-vs-wrong-password.md: a relink that
+// confirmatory end-to-end regression test for telling MFA apart from a
+// wrong password: a relink that
 // failed because Microsoft rejected the password (sso.ErrInvalidCredentials,
 // pause_reason='needs_credentials' via markNeedsCredentials in
 // internal/app/runtime.go) must make /credenciales open the NORMAL

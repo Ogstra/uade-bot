@@ -91,9 +91,9 @@ type IdentityResolver interface {
 // CommandDispatcher implements all global slash commands and modal submits.
 // It does not accept a guild allow-list: ownership is account based.
 //
-// Admin authorization deliberately REPLACES the decision recorded in
-// .planning/STATE.md under "[Phase 03 P04, live UAT]" (gating admin-*
-// centrally via Discord's own per-guild Administrator permission bit). That
+// Admin authorization deliberately REPLACES an earlier design that gated
+// admin-* centrally via Discord's own per-guild Administrator permission bit.
+// That
 // was a conscious, explicitly user-requested architecture change, not a bug
 // fix: admin access is now decoupled from a per-guild Discord permission and
 // instead comes from a fixed super-admin identity (SuperAdminID, sourced
@@ -106,9 +106,8 @@ type CommandDispatcher struct {
 	// SuperAdminID is the fixed operator identity (UADE_SUPER_ADMIN_ID) that
 	// always satisfies isAdmin and is the only identity allowed to mutate the
 	// admins table via /superadmin-agregar and /superadmin-eliminar.
-	SuperAdminID   string
-	OnJobCreated   func(string)
-	OnAccountReady func(string)
+	SuperAdminID string
+	OnJobCreated func(string)
 	// PrepareAccount is the production post-credential seam. When present,
 	// submitCredentials detaches a bounded activation from Discord's request
 	// deadline, waits for UADE relink, and only then materializes a pending job.
@@ -338,9 +337,6 @@ func (d CommandDispatcher) submitCredentials(ctx context.Context, userID, custom
 		go d.activateCredentials(userID)
 		return card(cardSuccess, "Credenciales guardadas de forma cifrada. La activación de tus búsquedas está en curso."), nil
 	}
-	if d.OnAccountReady != nil {
-		d.OnAccountReady(userID)
-	}
 	activation, jobErr := d.materializePendingSearchResult(ctx, userID)
 	if jobErr != nil {
 		return card(cardDanger, "Credenciales guardadas, pero no pude validar la materia pendiente en UADE. No creé la búsqueda; volvé a intentar."), nil
@@ -405,11 +401,6 @@ type jobCreation struct {
 // into an active job with the exact filters originally requested, then
 // deletes the pending row. Returns "" (no error) when there is nothing
 // pending -- that's the normal case, not a failure.
-func (d CommandDispatcher) materializePendingSearch(ctx context.Context, userID string) (string, error) {
-	result, err := d.materializePendingSearchResult(ctx, userID)
-	return result.id, err
-}
-
 func (d CommandDispatcher) materializePendingSearchResult(ctx context.Context, userID string) (jobCreation, error) {
 	for {
 		var filtersJSON, label string
@@ -498,11 +489,9 @@ func (d CommandDispatcher) readCredentials(ctx context.Context, userID string) (
 // submitManualStartURL validates and persists a manually-pasted enrollment
 // link submitted through manualLinkModal, then clears the account's
 // needs_new_start_url pause so the next scheduled poll uses the fresh link.
-// Deliberately does NOT call OnAccountReady: that would trigger another
-// background SSO relink attempt (03.3-15's attemptRelinkOnAccountReady),
-// which could immediately re-mark needs_new_start_url and undo the manual
-// reactivation the user just performed. OnJobsChanged reconciles the
-// scheduler instead.
+// Deliberately does NOT call PrepareAccount: its SSO relink could
+// immediately re-mark needs_new_start_url and undo the manual reactivation
+// the user just performed. OnJobsChanged reconciles the scheduler instead.
 func (d CommandDispatcher) submitManualStartURL(ctx context.Context, userID string, raw json.RawMessage) (InteractionResponse, error) {
 	values := modalValues(raw)
 	link := strings.TrimSpace(values["start_url"])

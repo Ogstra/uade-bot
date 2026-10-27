@@ -207,8 +207,7 @@ func truncateAdminList(lines []string) string {
 	return fmt.Sprintf("%s\n_...y %d mas (no entran en un solo mensaje)._", truncated.String(), len(lines)-shown)
 }
 
-// validDias is the fixed whitelist of day codes /buscar accepts, mirroring
-// Node's VALID_DIAS (src/discord/commands/buscar.js L19).
+// validDias is the fixed whitelist of day codes /buscar accepts.
 var validDias = map[string]bool{"LU": true, "MA": true, "MI": true, "JU": true, "VI": true, "SA": true}
 
 // filterValidDias reuses csvValues' upper+trim+non-empty normalization, then

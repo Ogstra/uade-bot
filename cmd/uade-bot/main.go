@@ -5,12 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/Ogstra/uade-bot/internal/app"
-	"github.com/Ogstra/uade-bot/internal/cutover"
 	"github.com/Ogstra/uade-bot/internal/dashboard"
 	"github.com/Ogstra/uade-bot/internal/discordgateway"
 	"github.com/Ogstra/uade-bot/internal/discordhttp"
 	"github.com/Ogstra/uade-bot/internal/discordrest"
-	"github.com/Ogstra/uade-bot/internal/shadow"
 	"github.com/Ogstra/uade-bot/internal/store"
 	"log"
 	"net/http"
@@ -46,43 +44,36 @@ func resolveSSOPortalURL(raw string) (string, error) {
 	return raw, nil
 }
 
+// checkRuntimeMode accepts the values a working deployment can carry and
+// rejects the one that no longer exists. Shadow mode (read-only database, no
+// Discord) only made sense next to the Node implementation it was compared
+// against; with that gone, a box still configured for shadow is refused
+// loudly instead of quietly coming up fully active against a database its
+// operator expected to stay untouched.
+func checkRuntimeMode(raw string) error {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "active", "development":
+		return nil
+	case "shadow":
+		return errors.New("UADE_RUNTIME_MODE=shadow ya no existe: el modo de comparación contra Node se eliminó. Sacá la variable o ponela en active")
+	default:
+		return errors.New("UADE_RUNTIME_MODE debe ser active (o quedar vacía)")
+	}
+}
+
 func main() {
-	cutoverConfig, err := cutover.FromEnv(os.Getenv)
-	if err != nil {
-		log.Fatal(err)
-	}
-	// Logged before the interlock so the audit line survives a later log.Fatal
-	// (runtime mode validation, short dashboard secret, DB open failure).
-	if notice := cutover.StandaloneNotice(cutoverConfig); notice != "" {
-		log.Print(notice)
-	}
-	if err = cutover.CheckIfEnabled(cutoverConfig); err != nil {
-		log.Fatal(err)
-	}
 	path := os.Getenv("UADE_DB_PATH")
 	if path == "" {
 		path = "data/uade.db"
 	}
-	mode := strings.ToLower(os.Getenv("UADE_RUNTIME_MODE"))
-	if mode == "" {
-		mode = "shadow"
-	}
-	if mode != "shadow" && mode != "active" && mode != "development" {
-		log.Fatal("UADE_RUNTIME_MODE must be shadow, active or development")
-	}
-	if mode == "active" && !cutoverConfig.Enabled {
-		log.Fatal("active runtime requires UADE_CUTOVER_ENABLED=true")
+	if err := checkRuntimeMode(os.Getenv("UADE_RUNTIME_MODE")); err != nil {
+		log.Fatal(err)
 	}
 	ssoPortalURL, ssoErr := resolveSSOPortalURL(os.Getenv("UADE_SSO_PORTAL_URL"))
 	if ssoErr != nil {
 		log.Fatal(ssoErr)
 	}
-	var db *sql.DB
-	if mode == "shadow" {
-		db, err = shadow.OpenReadOnly(path)
-	} else {
-		db, err = store.Open(path)
-	}
+	db, err := store.Open(path)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -113,7 +104,7 @@ func main() {
 	if seconds, parseErr := strconv.Atoi(os.Getenv("UADE_POLL_INTERVAL_SECONDS")); parseErr == nil && seconds > 0 {
 		interval = time.Duration(seconds) * time.Second
 	}
-	runtime, runtimeErr := app.NewRuntime(context.Background(), db, os.Getenv("CREDENTIALS_MASTER_KEY"), token, ssoPortalURL, interval, 2, mode == "shadow")
+	runtime, runtimeErr := app.NewRuntime(context.Background(), db, os.Getenv("CREDENTIALS_MASTER_KEY"), token, ssoPortalURL, interval, 2)
 	if runtimeErr != nil {
 		log.Fatal(runtimeErr)
 	}
@@ -135,7 +126,7 @@ func main() {
 		serverErr <- server.ListenAndServe()
 	}()
 
-	if token != "" && mode != "shadow" {
+	if token != "" {
 		applicationID := os.Getenv("DISCORD_CLIENT_ID")
 		if applicationID == "" {
 			log.Fatal("DISCORD_CLIENT_ID is required when DISCORD_BOT_TOKEN is configured")

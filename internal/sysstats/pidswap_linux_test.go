@@ -1,6 +1,6 @@
 //go:build linux
 
-package shadow
+package sysstats
 
 import (
 	"os"

@@ -31,7 +31,7 @@ func TestPollReportsClosedEnrollmentInsteadOfBlamingTheStartURL(t *testing.T) {
 	seedRuntimeAccount(t, db, account, "u", "p", "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx")
 	jobID := seedRuntimeJob(t, db, account, `{"materiaCodigo":"3.1.050","ofrecimiento":"curricular","turno":"mañana","dias":["LU"]}`)
 
-	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
+	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestPollStillReportsStaleStartURLForOtherRelinkFailures(t *testing.T) {
 	seedRuntimeAccount(t, db, account, "u", "p", "https://inscripcionespia.uade.edu.ar/InscripcionClaseBuscar.aspx")
 	jobID := seedRuntimeJob(t, db, account, `{"materiaCodigo":"3.1.050","ofrecimiento":"curricular","turno":"mañana","dias":["LU"]}`)
 
-	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
+	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestStaleSearchResultIsReclassifiedWhenThePortalSaysClosed(t *testing.T) {
 	const account = "user-valid-link-dead-page"
 	seedRuntimeAccount(t, db, account, "u", "p", validStartURL)
 
-	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
+	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestStaleSearchResultStaysStaleWhenRelinkCannotHelp(t *testing.T) {
 	const account = "user-genuinely-stale"
 	seedRuntimeAccount(t, db, account, "u", "p", validStartURL)
 
-	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
+	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestStaleSearchResultDowngradesToTransientWhenRelinkSucceeds(t *testing.T) 
 	const account = "user-healed"
 	seedRuntimeAccount(t, db, account, "u", "p", validStartURL)
 
-	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1, false)
+	runtime, err := NewRuntime(context.Background(), db, testMasterKey, "", "https://inscripciones.uade.edu.ar/", time.Minute, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -45,8 +45,6 @@ type Result struct {
 	Manual   bool
 }
 
-type Fallback func(context.Context, string, string) (Result, error)
-
 func MicrosoftEmail(username string) string {
 	if strings.Contains(username, "@") {
 		return username
@@ -109,8 +107,7 @@ func Relink(ctx context.Context, client *http.Client, portalURL, user, password 
 		// deciding which sentinel to return. A recognized invalid-credentials
 		// code means the correct recovery is a NEW PASSWORD, not the manual
 		// enrollment-link flow -- returning ErrMFARequired for that case is
-		// exactly the misclassification bug this branch fixes
-		// (.planning/debug/resolved/relink-mfa-vs-wrong-password.md).
+		// exactly the misclassification bug this branch fixes.
 		//
 		// Any other code (a real MFA code, or none at all -- e.g. a genuinely
 		// unrecognized interstitial) still falls through to ErrMFARequired:
@@ -129,8 +126,7 @@ func Relink(ctx context.Context, client *http.Client, portalURL, user, password 
 	}
 
 	// The final portal page's raw HTML is only a shell -- confirmed via the
-	// historical network trace captured live 2026-07-12 by spike 001
-	// (.planning/spikes/001-uade-sso-flow-mapping/network-log.json, see
+	// network trace of the live portal captured 2026-07-12 (see
 	// fetchInscripcionesPartial's header comment for the full evidence): a
 	// real browser fires two same-origin AJAX GETs unconditionally on page
 	// load (never gated behind the Bootstrap tab click), and only the second
@@ -166,10 +162,8 @@ func Relink(ctx context.Context, client *http.Client, portalURL, user, password 
 // real browser fires unconditionally on page load of the portal's landing
 // page -- never gated behind the Bootstrap tab click, and never visible to a
 // pure-HTTP client that doesn't execute JS. Confirmed via the historical
-// network trace captured live 2026-07-12 by spike 001
-// (.planning/spikes/001-uade-sso-flow-mapping/network-log.json, see
-// .planning/debug/resolved/sso-tab-ajax-not-fetched.md for the full
-// debugging trail): immediately after "/" finishes loading its own static
+// network trace of the live portal captured 2026-07-12: immediately after
+// "/" finishes loading its own static
 // resources, the browser issues GET /Home/ValidarUsuario, and -- only once
 // THAT responds -- GET /Home/ObtenerInscripciones (their request/response
 // timestamps are chained ~1ms apart, not parallel). Neither URL has a
@@ -219,17 +213,6 @@ func fetchInscripcionesPartial(ctx context.Context, fetcher boundedFetcher, page
 		return "", "", err
 	}
 	return fetcher.getAjax(ctx, obtenerURL)
-}
-
-// RelinkWithFallback keeps browser/manual work lazy: the fallback is invoked
-// only for an explicit MFA/additional-verification outcome, never for a
-// transport error or a malformed final URL.
-func RelinkWithFallback(ctx context.Context, client *http.Client, portalURL, user, password string, fallback Fallback) (Result, error) {
-	result, err := Relink(ctx, client, portalURL, user, password)
-	if !errors.Is(err, ErrMFARequired) || fallback == nil {
-		return result, err
-	}
-	return fallback(ctx, user, password)
 }
 
 // findLoginTrigger locates the portal's own "Iniciar sesión" element -- the
@@ -511,9 +494,8 @@ func continueMicrosoftChain(ctx context.Context, fetcher boundedFetcher, pageURL
 // exact same value and sits earlier in the DOM), so scoping by class and
 // data-tipolink without also scoping by panel silently picks MRI's link
 // instead of the correct one. This is a real production bug already fixed
-// live in the Node predecessor (commit 1d56530, confirmed 2026-07-12) that
-// this Go port had replicated -- see panel.go's header comment and
-// 03.3-22-PLAN.md for the full writeup. Fails closed (ErrInvalidStartURL)
+// in the earlier Node implementation (confirmed 2026-07-12) that this Go port
+// had replicated -- see panel.go's header comment. Fails closed (ErrInvalidStartURL)
 // when no Asignaturas panel exists at all, when that panel has no matching
 // link, or when the matching link has no non-empty data-linkid.
 func extractStartURL(html string) (string, error) {

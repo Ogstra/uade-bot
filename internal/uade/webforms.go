@@ -359,10 +359,6 @@ func contains(values []string, wanted string) bool {
 	}
 	return false
 }
-func (c *Client) Postback(ctx context.Context, path string, state FormState, fields map[string]string) (string, error) {
-	return c.PostbackWithCredentials(ctx, path, state, fields, "", "")
-}
-
 func (c *Client) PostbackWithCredentials(ctx context.Context, path string, state FormState, fields map[string]string, username, password string) (string, error) {
 	body := url.Values{}
 	for k, v := range state.Fields {

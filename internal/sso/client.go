@@ -96,8 +96,8 @@ func (f boundedFetcher) get(ctx context.Context, target string) (finalURL, body 
 
 // getAjax is identical to get except it also sets X-Requested-With:
 // XMLHttpRequest -- the standard header jQuery's own $.get()/$.ajax() send
-// by default (this site's own /bundles/jquery is loaded on every page, per
-// .planning/spikes/001-uade-sso-flow-mapping/network-log.json), and the
+// by default (this site's own /bundles/jquery is loaded on every page, as a
+// network capture of the live portal confirmed), and the
 // single most common signal classic ASP.NET MVC actions check via
 // Request.IsAjaxRequest() to decide whether to serve a partial view instead
 // of a full page or a login redirect. SPECULATIVE: never independently

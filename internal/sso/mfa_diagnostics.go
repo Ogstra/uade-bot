@@ -59,8 +59,7 @@ func extractAADSTSCode(html string) string {
 // without changing its observable contract for any existing caller: Error()
 // delegates to ErrMFARequired.Error() verbatim, and Unwrap() returns the
 // exact sentinel value (not a copy), so errors.Is(err, ErrMFARequired)
-// remains true for internal/app/runtime.go, RelinkWithFallback, and every
-// existing test.
+// remains true for internal/app/runtime.go and every existing test.
 type mfaRequiredError struct {
 	diag MFADiagnostics
 }

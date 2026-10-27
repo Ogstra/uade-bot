@@ -84,7 +84,7 @@ func Open(path string) (*sql.DB, error) {
 	// within a transaction". Pinning the pool to a single physical
 	// connection makes concurrent SQLite access from this process
 	// impossible, so that race -- and the poisoned-connection state it
-	// produces -- can never occur (see .planning/debug/resolved/nested-sqlite-tx-scheduler.md).
+	// produces -- can never occur.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	if _, err = db.Exec(schema); err != nil {

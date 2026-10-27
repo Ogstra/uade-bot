@@ -1,6 +1,6 @@
 //go:build linux
 
-package shadow
+package sysstats
 
 import (
 	"fmt"
@@ -9,20 +9,16 @@ import (
 	"strings"
 )
 
-// ProcessRSSBytes reads the resident set size of an arbitrary process (not
-// necessarily the calling one) via /proc/<pid>/status, unlike residentBytes
-// in rss_linux.go which only ever reads /proc/self/statm for this process's
-// own memory. This is the primitive cmd/rsscompare uses to measure two
-// separately-spawned full processes (the Go binary and node src/bot.js).
+// ProcessRSSBytes reads the resident set size of an arbitrary process via
+// /proc/<pid>/status. Collect calls it for the bot's own pid, feeding the
+// dashboard's "Resumen de salud" and Discord's /admin-stats.
 func ProcessRSSBytes(pid int) (uint64, error) {
 	return readProcStatusKB(pid, "VmRSS:")
 }
 
 // ProcessSwapBytes reads the swap usage of an arbitrary process via the same
 // /proc/<pid>/status file ProcessRSSBytes already reads, looking for the
-// VmSwap: line instead of VmRSS:. internal/sysstats.Collect is its only
-// caller in production, feeding both the dashboard's "Resumen de salud" and
-// Discord's /admin-stats.
+// VmSwap: line instead of VmRSS:. Same consumer as ProcessRSSBytes.
 func ProcessSwapBytes(pid int) (uint64, error) {
 	return readProcStatusKB(pid, "VmSwap:")
 }

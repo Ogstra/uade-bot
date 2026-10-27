@@ -229,7 +229,7 @@ func (s SnapshotSource) Build() (Snapshot, error) {
 	}
 	// Fully drain and close jobRows before running any nested queries
 	// (materiaName/loadHistory below). s.DB's pool is pinned to a single
-	// connection (store.Open -- see .planning/debug/resolved/nested-sqlite-tx-scheduler.md);
+	// connection (see store.Open);
 	// holding jobRows open while issuing further queries on the same
 	// *sql.DB would block forever waiting for a second connection that
 	// can never be granted.

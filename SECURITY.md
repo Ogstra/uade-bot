@@ -19,9 +19,10 @@ Interesa especialmente cualquier cosa que permita:
 - saltear la autenticación del dashboard, o su rate limiting
 - ejecutar comandos de admin sin estar en la tabla de admins ni ser el super-admin
 - que un usuario de Discord acceda a las búsquedas o credenciales de otro
+- leer o usar el refresh token de Microsoft de un usuario sin `ENTRA_TOKEN_SECRET`, o que la sesión de un usuario quede usable por otro
+- que un access token, refresh token o `device_code` llegue a un log, a una respuesta de Discord o al dashboard
 
 ## Fuera de alcance
 
 - Exponer el dashboard a Internet sin TLS ni firewall. Es HTTP plano por diseño y está documentado como tal: la topología segura es responsabilidad de quien lo despliega.
 - Que el operador del servidor pueda acceder a las credenciales. Quien tiene root en el host y la master key puede descifrarlas. El cifrado en reposo protege contra una filtración del disco o de la base, no contra el administrador. El código es abierto justamente para que cada usuario verifique qué hace el bot con sus datos antes de cargarlos.
-- `legacy-node/`, que se conserva solo como referencia de la implementación anterior y no corre en producción.

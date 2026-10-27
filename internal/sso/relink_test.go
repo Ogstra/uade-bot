@@ -8,8 +8,7 @@ package sso
 // Playwright role locators (getByRole('button'...).or(getByRole('link'...))),
 // not raw HTTP -- these fixtures cover our two best hypotheses for its HTTP
 // shape (a navigable <a href>, and a <button>/<form> self-post). Real
-// verification against UADE and Microsoft live is the checkpoint in
-// 03.3-17-PLAN.md.
+// verification against UADE and Microsoft live is TestRelinkAgainstRealUADESite.
 //
 // Every subtest below that needs to simulate "we're on a Microsoft page"
 // runs a SECOND httptest server addressed via the "localhost" hostname
@@ -156,8 +155,7 @@ func landingHTML(realStartURL string) string {
 }
 
 // landingHTMLMRIBeforeAsignaturas is the byte-accurate regression fixture
-// for the real production bug fixed live in Node (commit 1d56530, confirmed
-// 2026-07-12, see src/automation/sso-relink-uat-checklist.md): the MRI
+// for a real production bug, confirmed live on 2026-07-12: the MRI
 // panel -- sharing the EXACT SAME data-tipolink="InscripcionAsignatura" as
 // the real Asignaturas panel -- is served FIRST in the DOM, followed by the
 // real Asignaturas panel. Only the panel heading text distinguishes them.
@@ -186,9 +184,8 @@ func landingHTMLMRIBeforeAsignaturas(realStartURL string) string {
 // (network-log.json, spike 001): the Bootstrap tab toggle IS present in the
 // raw response to GET "/", but the tab's own content (the enrollment
 // panels) is not -- it only arrives via the two AJAX calls
-// fetchInscripcionesPartial replicates. Matches the real symptom this file's
-// debug session (.planning/debug/sso-tab-ajax-not-fetched.md) confirmed:
-// bootstrapTabPresent=true, inscribeteLinkCount=0.
+// fetchInscripcionesPartial replicates. Matches the real symptom observed
+// live: bootstrapTabPresent=true, inscribeteLinkCount=0.
 func landingHTMLShellOnly() string {
 	return `<html><body>
 <ul class="nav nav-tabs">
@@ -338,8 +335,8 @@ func TestRelinkFullFlow(t *testing.T) {
 }
 
 // TestRelinkExtractsAsignaturasLinkNotMRIPanel is the end-to-end regression
-// test for the real production bug fixed live in Node (commit 1d56530,
-// confirmed 2026-07-12): it drives the SAME httptest scaffolding as
+// test for the real MRI-panel production bug (confirmed live 2026-07-12):
+// it drives the SAME httptest scaffolding as
 // TestRelinkFullFlow's HrefTrigger_DirectLanding case (login trigger via
 // <a href>, msConfigHTML for the combined submit, direct redirect to
 // /landing with no interstitial) but serves
@@ -392,7 +389,7 @@ func TestRelinkExtractsAsignaturasLinkNotMRIPanel(t *testing.T) {
 		t.Fatalf("StartURL = %q, want %q (the Asignaturas panel's link)", result.StartURL, fixtureStartURL)
 	}
 	if result.StartURL == fixtureMRIDecoyLinkID {
-		t.Fatalf("StartURL = %q, the MRI panel's link -- regression of the real production bug fixed in Node (commit 1d56530), despite it appearing first in the DOM", result.StartURL)
+		t.Fatalf("StartURL = %q, the MRI panel's link -- regression of the real MRI-panel production bug, despite it appearing first in the DOM", result.StartURL)
 	}
 }
 
@@ -453,15 +450,15 @@ func TestRelinkMFAWhenNoFormAfterPassword(t *testing.T) {
 		t.Fatalf("diag.Host = %q, want %q", diag.Host, hostnameOf(msBase))
 	}
 	// No AADSTS code present at all must fail closed toward ErrMFARequired,
-	// never ErrInvalidCredentials -- regression guard for the classification
-	// added in .planning/debug/resolved/relink-mfa-vs-wrong-password.md.
+	// never ErrInvalidCredentials -- regression guard for the MFA vs wrong
+	// password classification.
 	if errors.Is(err, ErrInvalidCredentials) {
 		t.Fatal("err must NOT also be ErrInvalidCredentials when no AADSTS code is present")
 	}
 }
 
 // TestRelinkClassifiesAADSTSCodeForInvalidCredentialsVsMFA is the regression
-// test for .planning/debug/resolved/relink-mfa-vs-wrong-password.md: Relink
+// test for telling MFA apart from a wrong password: Relink
 // must distinguish Microsoft's own documented invalid-credentials AADSTS
 // codes (wrong/expired password, locked account -- learn.microsoft.com/entra/
 // identity-platform/reference-error-codes) from real MFA/additional-
@@ -855,8 +852,7 @@ func TestRelinkAttachesStartURLDiagnostics(t *testing.T) {
 }
 
 // TestRelinkFetchesInscripcionesPartialWhenShellIsEmpty is the regression
-// test for the root cause documented in
-// .planning/debug/resolved/sso-tab-ajax-not-fetched.md: the final portal
+// test for the empty-shell root cause: the final portal
 // page's raw HTML (/landing) is only the shell (Bootstrap tab present, no
 // enrollment panels -- landingHTMLShellOnly), and the real panel content
 // only exists behind the two AJAX GETs a real browser fires unconditionally

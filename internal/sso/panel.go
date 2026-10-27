@@ -1,14 +1,10 @@
 package sso
 
-// This file ports a real production bug fix from the Node predecessor
-// (src/automation/sso-link.js, commit 1d56530, "fix(03.1): scope the
-// InscripcionAsignatura link to the Asignaturas panel by heading text",
-// confirmed live 2026-07-12 -- see src/automation/sso-relink-uat-checklist.md,
-// matchedPanelLabel:"Asignaturas 2do Cuatrimestre 2026"). Note:
-// src/automation/sso-link.js no longer exists in the working tree (deleted
-// by commit 44c5e71, "refactor(runtime): remove browser-based relink") --
-// its exact selector/regex logic is ported here from that historical commit,
-// not reinvented.
+// This file ports a real production bug fix from the bot's earlier Node
+// implementation: scope the InscripcionAsignatura link to the Asignaturas
+// panel by its heading text, confirmed live on 2026-07-12 against a panel
+// labeled "Asignaturas 2do Cuatrimestre 2026". The selector and regex logic
+// are carried over from that fix, not reinvented.
 //
 // data-tipolink="InscripcionAsignatura" is NOT unique to the real
 // "Asignaturas" listing -- UADE's MRI (Cursos Regulares Intensivos) listing
@@ -22,7 +18,6 @@ package sso
 // form_drive_failed with unrelated checkboxes) while manually-copied links
 // always worked -- the Go port (03.3-14) replicated the exact same bug
 // because its reference source (explore-sso-flow.js) predates the Node fix.
-// See 03.3-22-PLAN.md for the full gap-closure writeup.
 
 import (
 	"regexp"
