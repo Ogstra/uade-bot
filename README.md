@@ -12,6 +12,7 @@ Incluye un dashboard web local de solo lectura para el operador.
 | `/buscar` | Crea una búsqueda por materia, turno, días y sedes |
 | `/estado` | Lista tus búsquedas activas |
 | `/pausar`, `/reanudar`, `/detener` | Controlan una búsqueda |
+| `/microsoft` | Iniciar sesión con tu cuenta de Microsoft por código, sin dar la contraseña |
 | `/admin-*`, `/superadmin-*` | Gestión de operadores y del servicio |
 
 ## Instalación

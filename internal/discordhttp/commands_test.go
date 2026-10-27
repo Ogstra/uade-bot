@@ -595,8 +595,8 @@ func TestNonBlockedAdminActsNormallyOnBlockedTargetAccount(t *testing.T) {
 	}
 }
 
-func TestGlobalCommandsContainsExactlySixteenRequiredCommands(t *testing.T) {
-	want := []string{"buscar", "estado", "detener", "pausar", "reanudar", "credenciales", "admin-estado", "admin-detener", "admin-pausar", "admin-reanudar", "admin-stats", "admin-user-stats", "admin-ban", "admin-unban", "superadmin-agregar", "superadmin-eliminar"}
+func TestGlobalCommandsContainsExactlySeventeenRequiredCommands(t *testing.T) {
+	want := []string{"buscar", "estado", "detener", "pausar", "reanudar", "credenciales", "admin-estado", "admin-detener", "admin-pausar", "admin-reanudar", "admin-stats", "admin-user-stats", "admin-ban", "admin-unban", "superadmin-agregar", "superadmin-eliminar", "microsoft"}
 	commands := GlobalCommands()
 	if len(commands) != len(want) {
 		t.Fatalf("got %d", len(commands))

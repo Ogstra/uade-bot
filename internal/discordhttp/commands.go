@@ -121,6 +121,9 @@ type CommandDispatcher struct {
 	// DBPath is the resolved UADE_DB_PATH (see cmd/uade-bot/main.go), used to
 	// measure the SQLite file's size for /admin-stats via sysStats.
 	DBPath string
+	// Microsoft backs /microsoft. Nil when Entra sign-in is not configured;
+	// the command then says so instead of failing.
+	Microsoft MicrosoftSessions
 	// SysStats is injectable for tests; the default (sysStats) calls
 	// sysstats.Collect(os.Getpid(), dbPath). Same pattern as
 	// dashboard.SnapshotSource.SysStats.
@@ -217,6 +220,8 @@ func (d CommandDispatcher) DispatchInteraction(ctx context.Context, in Interacti
 		return InteractionResponse{}, err
 	}
 	switch in.Data.Name {
+	case "microsoft":
+		return d.microsoft(ctx, userID, stringOption(in.Data.Options, "accion"))
 	case "credenciales":
 		return d.credencialesModal(ctx, userID)
 	case "buscar":

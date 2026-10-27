@@ -151,6 +151,14 @@ func main() {
 		dispatcher = wireGatewayIdentity(dispatcher, gatewayProjection)
 		notifier := discordrest.New(token)
 		dispatcher.SendChannel = func(channel, content string) error { return notifier.Send(channel, content) }
+		if microsoft := entraFromEnv(path, func(user string, card discordrest.Card, text string) {
+			if err := notifier.SendDMCard(user, card, text, ""); err != nil {
+				log.Printf("entra: could not deliver sign-in notification")
+			}
+		}); microsoft != nil {
+			dispatcher.Microsoft = microsoft
+			go microsoft.Run(context.Background())
+		}
 		client, clientErr := discordgateway.New(token, dispatcher, gatewayProjection)
 		if clientErr != nil {
 			log.Fatal(clientErr)
@@ -172,7 +180,7 @@ func main() {
 					log.Printf("discord command convergence failed: %v", err)
 					return
 				}
-				log.Printf("converged 16 global discord commands and cleared guild-scoped copies in %d guilds", len(guildIDs))
+				log.Printf("converged %d global discord commands and cleared guild-scoped copies in %d guilds", len(discordhttp.GlobalCommands()), len(guildIDs))
 			}()
 		}))
 		if clientErr = client.OpenGateway(context.Background()); clientErr != nil {

@@ -27,7 +27,7 @@ func opt(name, description string, required, autocomplete bool) commandOption {
 	return value
 }
 
-// GlobalCommands is the single registration source for all sixteen commands.
+// GlobalCommands is the single registration source for all seventeen commands.
 // Registration deliberately uses the application-global endpoint; there is no
 // guild ID argument or guild-specific fallback.
 func GlobalCommands() []globalCommand {
@@ -52,6 +52,8 @@ func GlobalCommands() []globalCommand {
 	discordUser := func() []commandOption {
 		return []commandOption{{"type": 6, "name": "usuario", "description": "Usuario de Discord", "required": true}}
 	}
+	microsoft := []commandOption{opt("accion", "Que hacer con tu sesion de Microsoft", false, false)}
+	microsoft[0]["choices"] = []map[string]string{{"name": "Iniciar sesion con codigo", "value": "iniciar"}, {"name": "Ver estado", "value": "estado"}, {"name": "Cerrar sesion", "value": "cerrar"}}
 	return []globalCommand{
 		{"buscar", "Crear una busqueda de vacantes en UADE", 1, buscar}, {"estado", "Ver tus busquedas activas o pausadas", 1, nil},
 		{"detener", "Detener una de tus busquedas", 1, job("Busqueda a detener")}, {"pausar", "Pausar una de tus busquedas", 1, job("Busqueda a pausar")},
@@ -61,6 +63,7 @@ func GlobalCommands() []globalCommand {
 		{"admin-stats", "[Admin] Estadisticas generales del bot", 1, nil}, {"admin-user-stats", "[Admin] Estadisticas de una cuenta", 1, user(true)},
 		{"admin-ban", "[Admin] Bloquear a un usuario (pausa sus busquedas sin borrarlas)", 1, discordUser()}, {"admin-unban", "[Admin] Desbloquear a un usuario previamente bloqueado", 1, discordUser()},
 		{"superadmin-agregar", "[Super-admin] Agregar un admin", 1, discordUser()}, {"superadmin-eliminar", "[Super-admin] Quitar un admin", 1, discordUser()},
+		{"microsoft", "Iniciar sesion con tu cuenta de Microsoft por codigo, sin contrasena", 1, microsoft},
 	}
 }
 
